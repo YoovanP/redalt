@@ -17,6 +17,7 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
   const [value, setValue] = useState(initialSubreddit);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
 
   const normalizedValue = useMemo(
     () => value.trim().replace(/^\/?r\//i, '').toLowerCase(),
@@ -28,15 +29,14 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
       const nextSuggestions = await fetchSubredditSuggestions(value);
       setSuggestions(nextSuggestions);
 
-      if (normalizedValue.length >= 2 && nextSuggestions.length > 0) {
-        setShowSuggestions(true);
-      }
+      const canShow = isFocused && normalizedValue.length >= 2 && nextSuggestions.length > 0;
+      setShowSuggestions(canShow);
     }, 220);
 
     return () => {
       window.clearTimeout(handle);
     };
-  }, [value, normalizedValue]);
+  }, [value, normalizedValue, isFocused]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -57,9 +57,23 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
       <div className="subreddit-input-wrap">
         <input
           value={value}
-          onChange={(event) => setValue(event.target.value)}
-          onFocus={() => setShowSuggestions(suggestions.length > 0 && normalizedValue.length >= 2)}
-          onBlur={() => window.setTimeout(() => setShowSuggestions(false), 120)}
+          onChange={(event) => {
+            const nextValue = event.target.value;
+            setValue(nextValue);
+
+            const normalizedNextValue = nextValue.trim().replace(/^\/?r\//i, '').toLowerCase();
+            setShowSuggestions(isFocused && suggestions.length > 0 && normalizedNextValue.length >= 2);
+          }}
+          onFocus={() => {
+            setIsFocused(true);
+            setShowSuggestions(suggestions.length > 0 && normalizedValue.length >= 2);
+          }}
+          onBlur={() =>
+            window.setTimeout(() => {
+              setIsFocused(false);
+              setShowSuggestions(false);
+            }, 120)
+          }
           placeholder="mildlyinfuriating"
           aria-label="Subreddit"
           aria-autocomplete="list"

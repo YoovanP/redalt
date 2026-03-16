@@ -18,7 +18,14 @@ function getValidatedSort(input: string | null): ListingSort {
 }
 
 function getValidatedTopTimeRange(input: string | null): TopTimeRange {
-  if (input === 'hour' || input === 'day' || input === 'week' || input === 'month') {
+  if (
+    input === 'hour' ||
+    input === 'day' ||
+    input === 'week' ||
+    input === 'month' ||
+    input === 'year' ||
+    input === 'all'
+  ) {
     return input;
   }
 

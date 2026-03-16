@@ -39,6 +39,8 @@ export function SortControls({
             <option value="day">day</option>
             <option value="week">week</option>
             <option value="month">month</option>
+            <option value="year">year</option>
+            <option value="all">all</option>
           </select>
         </label>
       )}

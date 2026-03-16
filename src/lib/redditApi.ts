@@ -12,7 +12,7 @@ const REDDIT_BASES = ['/api/reddit', 'https://www.reddit.com'];
 const PAGE_SIZE = 8;
 
 export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
-export type TopTimeRange = 'hour' | 'day' | 'week' | 'month';
+export type TopTimeRange = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
 
 type FlairTemplate = {
   text?: string;
