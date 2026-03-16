@@ -563,7 +563,17 @@ input:focus, select:focus {
 }
 
 .external-frame {
+  display: block;
   min-height: 320px;
+  aspect-ratio: 16 / 9;
+}
+
+.external-frame-vertical {
+  width: min(100%, 430px);
+  margin-inline: auto;
+  aspect-ratio: 9 / 16;
+  min-height: 460px;
+  max-height: 760px;
 }
 
 .gallery {
@@ -774,17 +784,42 @@ input:focus, select:focus {
 }
 
 @media (max-width: 900px) {
+  .app-shell {
+    padding: 0.7rem;
+  }
+
   .app-header {
     top: 0;
     border-radius: 0 0 12px 12px;
+    gap: 0.45rem;
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.7rem;
   }
 
   .header-top {
     align-items: flex-start;
+    gap: 0.45rem;
   }
 
   .app-brand h1 {
-    font-size: 1.15rem;
+    font-size: 1.05rem;
+  }
+
+  .header-controls {
+    gap: 0.4rem;
+  }
+
+  .theme-picker {
+    font-size: 0.86rem;
+  }
+
+  .theme-picker select,
+  .subreddit-form input,
+  .subreddit-form button,
+  .menu-toggle {
+    min-height: 34px;
+    padding: 0.34rem 0.55rem;
+    font-size: 0.9rem;
   }
 
   .subreddit-form {
@@ -833,6 +868,11 @@ input:focus, select:focus {
   .shorts-media-wrap .external-frame,
   .shorts-media-wrap .post-image {
     height: calc(100vh - 300px);
+  }
+
+  .external-frame-vertical {
+    width: min(100%, 360px);
+    min-height: 420px;
   }
 }
 

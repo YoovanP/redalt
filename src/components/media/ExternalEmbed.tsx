@@ -6,6 +6,19 @@ type ExternalEmbedProps = {
   showOutboundLink?: boolean;
 };
 
+function isLikelyVerticalEmbed(embedUrl?: string, outboundUrl?: string, provider?: string): boolean {
+  const value = `${embedUrl ?? ''} ${outboundUrl ?? ''} ${provider ?? ''}`.toLowerCase();
+
+  return (
+    value.includes('tiktok') ||
+    value.includes('instagram') ||
+    value.includes('instagr.am') ||
+    value.includes('/reel/') ||
+    value.includes('/shorts/') ||
+    value.includes('redgifs')
+  );
+}
+
 export function ExternalEmbed({
   embedUrl,
   thumbnailUrl,
@@ -13,11 +26,13 @@ export function ExternalEmbed({
   provider,
   showOutboundLink = true,
 }: ExternalEmbedProps) {
+  const vertical = isLikelyVerticalEmbed(embedUrl, outboundUrl, provider);
+
   return (
     <div className="media-block external-media">
       {embedUrl ? (
         <iframe
-          className="external-frame"
+          className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           src={embedUrl}
           title={provider ?? 'External embed'}
           loading="lazy"
