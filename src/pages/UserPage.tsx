@@ -225,13 +225,17 @@ export function UserPage() {
 
   return (
     <section>
-      <h2>/u/{username}</h2>
-      <SortControls
-        sort={sort}
-        topTimeRange={topTimeRange}
-        onSortChange={onSortChange}
-        onTopTimeRangeChange={onTopTimeRangeChange}
-      />
+      {!videoFeedMode && (
+        <>
+          <h2>/u/{username}</h2>
+          <SortControls
+            sort={sort}
+            topTimeRange={topTimeRange}
+            onSortChange={onSortChange}
+            onTopTimeRangeChange={onTopTimeRangeChange}
+          />
+        </>
+      )}
 
       {videoFeedMode ? (
         <ShortsFeed

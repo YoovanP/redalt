@@ -299,26 +299,30 @@ export function SubredditPage() {
 
   return (
     <section>
-      <h2>/r/{name}</h2>
-      <SortControls
-        sort={sort}
-        topTimeRange={topTimeRange}
-        onSortChange={onSortChange}
-        onTopTimeRangeChange={onTopTimeRangeChange}
-      />
-      <div className="sort-controls" role="group" aria-label="Flair filter">
-        <label>
-          Flair
-          <select value={selectedFlair} onChange={(event) => onFlairChange(event.target.value)}>
-            <option value="all">All flairs</option>
-            {availableFlairs.map((flair) => (
-              <option key={flair} value={flair}>
-                {flair}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {!videoFeedMode && (
+        <>
+          <h2>/r/{name}</h2>
+          <SortControls
+            sort={sort}
+            topTimeRange={topTimeRange}
+            onSortChange={onSortChange}
+            onTopTimeRangeChange={onTopTimeRangeChange}
+          />
+          <div className="sort-controls" role="group" aria-label="Flair filter">
+            <label>
+              Flair
+              <select value={selectedFlair} onChange={(event) => onFlairChange(event.target.value)}>
+                <option value="all">All flairs</option>
+                {availableFlairs.map((flair) => (
+                  <option key={flair} value={flair}>
+                    {flair}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </>
+      )}
       {videoFeedMode ? (
         <ShortsFeed
           posts={visiblePosts}
