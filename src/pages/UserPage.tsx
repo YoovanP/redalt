@@ -2,7 +2,6 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
-import { SortControls } from '../components/SortControls';
 import { StateView } from '../components/StateView';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchUserListing, type ListingSort, type TopTimeRange } from '../lib/redditApi';
@@ -41,7 +40,7 @@ export function UserPage() {
     settings: { columns, videoFeedMode, cardMode },
   } = useUiSettings();
   const { username = '' } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const sort = getValidatedSort(searchParams.get('sort'));
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const [posts, setPosts] = useState<RedditPostData[]>([]);
@@ -186,26 +185,6 @@ export function UserPage() {
 
   const triggerIndex = Math.max(0, visiblePosts.length - 3);
 
-  const onSortChange = (nextSort: ListingSort) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', nextSort);
-
-    if (nextSort !== 'top') {
-      nextParams.delete('t');
-    } else if (!nextParams.get('t')) {
-      nextParams.set('t', 'day');
-    }
-
-    setSearchParams(nextParams);
-  };
-
-  const onTopTimeRangeChange = (nextRange: TopTimeRange) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', 'top');
-    nextParams.set('t', nextRange);
-    setSearchParams(nextParams);
-  };
-
   if (loading) {
     return <StateView kind="loading" />;
   }
@@ -228,12 +207,6 @@ export function UserPage() {
       {!videoFeedMode && (
         <>
           <h2>/u/{username}</h2>
-          <SortControls
-            sort={sort}
-            topTimeRange={topTimeRange}
-            onSortChange={onSortChange}
-            onTopTimeRangeChange={onTopTimeRangeChange}
-          />
         </>
       )}
 

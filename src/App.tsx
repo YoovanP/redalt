@@ -2,7 +2,6 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { CustomFeedBuilder } from './components/CustomFeedBuilder';
 import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
-import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { PostDetailPage } from './pages/PostDetailPage';
 import { SubredditPage } from './pages/SubredditPage';
@@ -53,7 +52,6 @@ function AppLayout() {
               </div>
               <div className="header-controls">
                 <SubredditSwitcher initialSubreddit={subreddit} />
-                <ThemeSwitcher />
               </div>
             </div>
 

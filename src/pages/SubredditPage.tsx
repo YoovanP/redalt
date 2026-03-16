@@ -2,7 +2,6 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'react-router-dom';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
-import { SortControls } from '../components/SortControls';
 import { StateView } from '../components/StateView';
 import { normalizePost } from '../lib/normalizePost';
 import {
@@ -248,26 +247,6 @@ export function SubredditPage() {
 
   const triggerIndex = Math.max(0, visiblePosts.length - 3);
 
-  const onSortChange = (nextSort: ListingSort) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', nextSort);
-
-    if (nextSort !== 'top') {
-      nextParams.delete('t');
-    } else if (!nextParams.get('t')) {
-      nextParams.set('t', 'day');
-    }
-
-    setSearchParams(nextParams);
-  };
-
-  const onTopTimeRangeChange = (nextRange: TopTimeRange) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', 'top');
-    nextParams.set('t', nextRange);
-    setSearchParams(nextParams);
-  };
-
   const onFlairChange = (nextFlair: string) => {
     const nextParams = new URLSearchParams(searchParams);
 
@@ -302,12 +281,6 @@ export function SubredditPage() {
       {!videoFeedMode && (
         <>
           <h2>/r/{name}</h2>
-          <SortControls
-            sort={sort}
-            topTimeRange={topTimeRange}
-            onSortChange={onSortChange}
-            onTopTimeRangeChange={onTopTimeRangeChange}
-          />
           <div className="sort-controls" role="group" aria-label="Flair filter">
             <label>
               Flair

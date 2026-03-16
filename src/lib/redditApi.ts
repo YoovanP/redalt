@@ -30,6 +30,10 @@ type SubredditSearchResponse = {
   };
 };
 
+type SubredditTypeaheadResponse = {
+  names?: string[];
+};
+
 type FetchListingOptions = {
   after?: string | null;
   sort?: ListingSort;
@@ -170,15 +174,32 @@ export async function fetchSubredditFlairs(subredditInput: string): Promise<stri
 
 export async function fetchSubredditSuggestions(query: string): Promise<string[]> {
   const cleaned = query.trim().replace(/^\/?r\//i, '');
-  const cleanedLower = cleaned.toLowerCase();
 
   if (cleaned.length < 2) {
     return [];
   }
 
   try {
+    const typeahead = await fetchReddit<SubredditTypeaheadResponse>(
+      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+    );
+
+    const names = (typeahead.names ?? [])
+      .map((name) => name.trim())
+      .filter(Boolean);
+
+    if (names.length > 0) {
+      return names.slice(0, 8);
+    }
+  } catch {
+    // fallback handled below
+  }
+
+  const cleanedLower = cleaned.toLowerCase();
+
+  try {
     const response = await fetchReddit<SubredditSearchResponse>(
-      `/subreddits/search.json?raw_json=1&limit=25&q=${encodeURIComponent(cleaned)}`,
+      `/subreddits/search.json?raw_json=1&include_over_18=on&limit=25&q=${encodeURIComponent(cleaned)}`,
     );
 
     const entries: Array<{ name: string; subscribers: number }> = [];

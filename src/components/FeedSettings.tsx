@@ -1,9 +1,65 @@
 import { useState } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import type { ListingSort, TopTimeRange } from '../lib/redditApi';
+import { SortControls } from './SortControls';
+import { ThemeSwitcher } from './ThemeSwitcher';
 import { useUiSettings } from '../lib/uiSettings';
 
+function getValidatedSort(input: string | null): ListingSort {
+  if (input === 'hot' || input === 'new' || input === 'rising' || input === 'top') {
+    return input;
+  }
+
+  return 'hot';
+}
+
+function getValidatedTopTimeRange(input: string | null): TopTimeRange {
+  if (
+    input === 'hour' ||
+    input === 'day' ||
+    input === 'week' ||
+    input === 'month' ||
+    input === 'year' ||
+    input === 'all'
+  ) {
+    return input;
+  }
+
+  return 'day';
+}
+
+function supportsSortControls(pathname: string): boolean {
+  return /^\/r\/[^/]+\/?$/i.test(pathname) || /^\/(?:u|user)\/[^/]+\/?$/i.test(pathname);
+}
+
 export function FeedSettings() {
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { settings, updateSettings } = useUiSettings();
   const [open, setOpen] = useState(false);
+  const sort = getValidatedSort(searchParams.get('sort'));
+  const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
+  const canSort = supportsSortControls(location.pathname);
+
+  const onSortChange = (nextSort: ListingSort) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('sort', nextSort);
+
+    if (nextSort !== 'top') {
+      nextParams.delete('t');
+    } else if (!nextParams.get('t')) {
+      nextParams.set('t', 'day');
+    }
+
+    setSearchParams(nextParams);
+  };
+
+  const onTopTimeRangeChange = (nextRange: TopTimeRange) => {
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('sort', 'top');
+    nextParams.set('t', nextRange);
+    setSearchParams(nextParams);
+  };
 
   return (
     <section className="feed-settings-menu">
@@ -19,6 +75,17 @@ export function FeedSettings() {
 
       {open && (
         <div className="feed-settings-panel">
+          <ThemeSwitcher />
+
+          {canSort && (
+            <SortControls
+              sort={sort}
+              topTimeRange={topTimeRange}
+              onSortChange={onSortChange}
+              onTopTimeRangeChange={onTopTimeRangeChange}
+            />
+          )}
+
           <label>
             <input
               type="checkbox"
