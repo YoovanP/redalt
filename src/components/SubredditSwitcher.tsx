@@ -1,5 +1,6 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { fetchSubredditSuggestions } from '../lib/redditApi';
 
 type SubredditSwitcherProps = {
   initialSubreddit: string;
@@ -14,22 +15,69 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
   const navigate = useNavigate();
   const location = useLocation();
   const [value, setValue] = useState(initialSubreddit);
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const normalizedValue = useMemo(
+    () => value.trim().replace(/^\/?r\//i, '').toLowerCase(),
+    [value],
+  );
+
+  useEffect(() => {
+    const handle = window.setTimeout(async () => {
+      const nextSuggestions = await fetchSubredditSuggestions(value);
+      setSuggestions(nextSuggestions);
+
+      if (normalizedValue.length >= 2 && nextSuggestions.length > 0) {
+        setShowSuggestions(true);
+      }
+    }, 220);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [value, normalizedValue]);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const subreddit = sanitizeSubreddit(value);
     setValue(subreddit);
+    setShowSuggestions(false);
+    navigate(`/r/${subreddit}${location.search}`);
+  };
+
+  const onPickSuggestion = (subreddit: string) => {
+    setValue(subreddit);
+    setShowSuggestions(false);
     navigate(`/r/${subreddit}${location.search}`);
   };
 
   return (
     <form className="subreddit-form" onSubmit={onSubmit}>
-      <input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        placeholder="mildlyinfuriating"
-        aria-label="Subreddit"
-      />
+      <div className="subreddit-input-wrap">
+        <input
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onFocus={() => setShowSuggestions(suggestions.length > 0 && normalizedValue.length >= 2)}
+          onBlur={() => window.setTimeout(() => setShowSuggestions(false), 120)}
+          placeholder="mildlyinfuriating"
+          aria-label="Subreddit"
+          aria-autocomplete="list"
+          autoComplete="off"
+        />
+
+        {showSuggestions && (
+          <ul className="subreddit-suggestions" role="listbox" aria-label="Subreddit suggestions">
+            {suggestions.map((suggestion) => (
+              <li key={suggestion}>
+                <button type="button" onMouseDown={() => onPickSuggestion(suggestion)}>
+                  r/{suggestion}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
       <button type="submit">Go</button>
     </form>
   );

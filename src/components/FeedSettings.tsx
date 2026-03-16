@@ -72,6 +72,15 @@ export function FeedSettings() {
             />
             Media feed mode
           </label>
+
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.persistentHeader}
+              onChange={(event) => updateSettings({ persistentHeader: event.target.checked })}
+            />
+            Persistent header
+          </label>
         </div>
       )}
     </section>
