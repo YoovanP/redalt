@@ -49,6 +49,7 @@ export function SubredditPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -56,6 +57,7 @@ export function SubredditPage() {
 
     setLoading(true);
     setError(null);
+    setLoadMoreError(null);
     setPosts([]);
     setAfter(null);
 
@@ -159,6 +161,7 @@ export function SubredditPage() {
       return;
     }
 
+    setLoadMoreError(null);
     setLoadingMore(true);
 
     try {
@@ -201,7 +204,7 @@ export function SubredditPage() {
 
       setAfter(nextAfter);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load more posts.');
+      setLoadMoreError(err instanceof Error ? err.message : 'Unable to load more posts.');
     } finally {
       setLoadingMore(false);
     }
@@ -328,9 +331,12 @@ export function SubredditPage() {
       )}
 
       {after && (
-        <button className="load-more" onClick={loadMore} disabled={loadingMore}>
-          {loadingMore ? 'Loading…' : 'Load more'}
-        </button>
+        <div>
+          <button className="load-more" onClick={loadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+          {loadMoreError && <p className="meta">{loadMoreError}</p>}
+        </div>
       )}
     </section>
   );

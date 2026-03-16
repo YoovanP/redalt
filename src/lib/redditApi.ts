@@ -29,17 +29,45 @@ function normalizeSubredditName(input: string): string {
 }
 
 async function fetchReddit<T>(path: string): Promise<T> {
-  const response = await fetch(`${REDDIT_BASE}${path}`, {
-    headers: {
-      Accept: 'application/json',
-    },
-  });
+  let lastError: unknown;
 
-  if (!response.ok) {
-    throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
+
+      const response = await fetch(`${REDDIT_BASE}${path}`, {
+        signal: controller.signal,
+        headers: {
+          Accept: 'application/json',
+        },
+      });
+
+      globalThis.clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      lastError = error;
+
+      if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {
+        throw error;
+      }
+
+      if (attempt === 0) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
+      }
+    }
   }
 
-  return (await response.json()) as T;
+  if (lastError instanceof RedditApiError) {
+    throw lastError;
+  }
+
+  throw new RedditApiError('Network error while contacting Reddit.', 0);
 }
 
 export async function fetchSubredditListing(
