@@ -14,6 +14,28 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const nearEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    const feed = feedRef.current;
+
+    if (!feed || !hasMore || loadingMore) {
+      return;
+    }
+
+    const onScroll = () => {
+      const remaining = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+
+      if (remaining < 340) {
+        onNearEnd();
+      }
+    };
+
+    feed.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      feed.removeEventListener('scroll', onScroll);
+    };
+  }, [hasMore, loadingMore, onNearEnd, posts.length]);
+
+  useEffect(() => {
     const target = nearEndRef.current;
 
     if (!target || !hasMore || loadingMore) {

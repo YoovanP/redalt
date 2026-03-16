@@ -566,6 +566,10 @@ input:focus, select:focus {
   min-height: 320px;
 }
 
+.gallery {
+  position: relative;
+}
+
 .gallery-controls {
   position: absolute;
   inset: 0;
@@ -574,6 +578,7 @@ input:focus, select:focus {
   justify-content: space-between;
   padding: 0 0.6rem;
   z-index: 2;
+  pointer-events: none;
 }
 
 .gallery-nav {
@@ -584,6 +589,7 @@ input:focus, select:focus {
   padding: 0.35rem 0.7rem;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  pointer-events: auto;
 }
 
 .gallery-nav-prev {

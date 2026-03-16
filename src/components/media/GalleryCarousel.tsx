@@ -8,6 +8,9 @@ type GalleryCarouselProps = {
 
 export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   const [index, setIndex] = useState(0);
+  const isTouchDevice =
+    typeof window !== 'undefined' &&
+    (window.matchMedia?.('(hover: none)').matches || window.matchMedia?.('(pointer: coarse)').matches);
 
   const boundedIndex = useMemo(() => {
     if (items.length === 0) {
@@ -26,7 +29,7 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   return (
     <div className="media-block gallery">
       <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
-      {items.length > 1 && (
+      {items.length > 1 && !isTouchDevice && (
         <div className="gallery-controls">
           <button
             type="button"
