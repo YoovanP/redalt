@@ -1,0 +1,151 @@
+import { getApiErrorMessage, RedditApiError } from './errors';
+import type {
+  PostDetailResult,
+  PostListingResult,
+  RedditComment,
+  RedditCommentsResponse,
+  RedditListingResponse,
+  RedditPostData,
+} from '../types/reddit';
+
+const REDDIT_BASE = 'https://www.reddit.com';
+const PAGE_SIZE = 8;
+
+export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
+export type TopTimeRange = 'hour' | 'day' | 'week' | 'month';
+
+type FlairTemplate = {
+  text?: string;
+};
+
+type FetchListingOptions = {
+  after?: string | null;
+  sort?: ListingSort;
+  topTimeRange?: TopTimeRange;
+};
+
+function normalizeSubredditName(input: string): string {
+  return input.trim().replace(/^\/?r\//i, '').replace(/^\/+|\/+$/g, '');
+}
+
+async function fetchReddit<T>(path: string): Promise<T> {
+  const response = await fetch(`${REDDIT_BASE}${path}`, {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+  }
+
+  return (await response.json()) as T;
+}
+
+export async function fetchSubredditListing(
+  subredditInput: string,
+  options: FetchListingOptions = {},
+): Promise<PostListingResult> {
+  const after = options.after ?? null;
+  const sort = options.sort ?? 'hot';
+  const topTimeRange = options.topTimeRange ?? 'day';
+  const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
+  const queryParts = ['raw_json=1', `limit=${PAGE_SIZE}`];
+
+  if (after) {
+    queryParts.push(`after=${encodeURIComponent(after)}`);
+  }
+
+  if (sort === 'top') {
+    queryParts.push(`t=${encodeURIComponent(topTimeRange)}`);
+  }
+
+  const data = await fetchReddit<RedditListingResponse>(
+    `/r/${encodeURIComponent(subreddit)}/${sort}.json?${queryParts.join('&')}`,
+  );
+
+  return {
+    posts: data.data.children.map((item) => item.data),
+    after: data.data.after,
+  };
+}
+
+export async function fetchSubredditFlairs(subredditInput: string): Promise<string[]> {
+  const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
+
+  try {
+    const templates = await fetchReddit<FlairTemplate[]>(
+      `/r/${encodeURIComponent(subreddit)}/api/link_flair_v2.json?raw_json=1`,
+    );
+
+    const seen = new Set<string>();
+
+    for (const template of templates) {
+      const flair = template.text?.trim();
+
+      if (flair) {
+        seen.add(flair);
+      }
+    }
+
+    return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+function extractComments(listing: RedditListingResponse, parentAuthor?: string): RedditComment[] {
+  const comments: RedditComment[] = [];
+
+  for (const child of listing.data.children) {
+    if (child.kind !== 't1') {
+      continue;
+    }
+
+    const payload = child.data as RedditPostData & {
+      body?: string;
+      replies?: '' | RedditListingResponse;
+    };
+
+    if (!payload.body) {
+      continue;
+    }
+
+    const author = payload.author || '[deleted]';
+    const replies =
+      payload.replies && typeof payload.replies === 'object'
+        ? extractComments(payload.replies, author)
+        : [];
+
+    comments.push({
+      id: payload.id,
+      author,
+      body: payload.body,
+      parentAuthor,
+      replies,
+    });
+  }
+
+  return comments;
+}
+
+export async function fetchPostDetail(
+  subredditInput: string,
+  postId: string,
+): Promise<PostDetailResult> {
+  const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
+  const response = await fetchReddit<RedditCommentsResponse>(
+    `/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}.json?raw_json=1&limit=100`,
+  );
+
+  const post = response[0]?.data?.children?.[0]?.data;
+
+  if (!post) {
+    throw new RedditApiError('Post not found.', 404);
+  }
+
+  return {
+    post,
+    comments: response[1] ? extractComments(response[1]) : [],
+  };
+}
