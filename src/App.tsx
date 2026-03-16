@@ -25,29 +25,47 @@ function AppLayout() {
   const location = useLocation();
   const subreddit = currentSubreddit(location.pathname);
   const {
-    settings: { persistentHeader },
+    settings: { persistentHeader, videoFeedMode },
+    updateSettings,
   } = useUiSettings();
 
   return (
     <div className="app-shell">
-      <header className={`app-header${persistentHeader ? '' : ' app-header-static'}`}>
-        <div className="header-top">
-          <div className="app-brand">
-            <h1>RedAlt</h1>
-          </div>
-          <div className="header-controls">
-            <SubredditSwitcher initialSubreddit={subreddit} />
-            <ThemeSwitcher />
-          </div>
-        </div>
+      <header
+        className={`app-header${persistentHeader ? '' : ' app-header-static'}${
+          videoFeedMode ? ' app-header-media-only' : ''
+        }`}
+      >
+        {videoFeedMode ? (
+          <label className="media-mode-inline-toggle">
+            <input
+              type="checkbox"
+              checked={videoFeedMode}
+              onChange={(event) => updateSettings({ videoFeedMode: event.target.checked })}
+            />
+            Media feed mode
+          </label>
+        ) : (
+          <>
+            <div className="header-top">
+              <div className="app-brand">
+                <h1>RedAlt</h1>
+              </div>
+              <div className="header-controls">
+                <SubredditSwitcher initialSubreddit={subreddit} />
+                <ThemeSwitcher />
+              </div>
+            </div>
 
-        <div className="header-row">
-          <FeedSettings />
-        </div>
+            <div className="header-row">
+              <FeedSettings />
+            </div>
 
-        <div className="header-row">
-          <CustomFeedBuilder currentSubreddit={subreddit} />
-        </div>
+            <div className="header-row">
+              <CustomFeedBuilder currentSubreddit={subreddit} />
+            </div>
+          </>
+        )}
       </header>
 
       <main>

@@ -6,8 +6,83 @@ type SubredditSwitcherProps = {
   initialSubreddit: string;
 };
 
+function isRedditHost(hostname: string): boolean {
+  return hostname === 'reddit.com' || hostname.endsWith('.reddit.com');
+}
+
+function parseRedditTarget(input: string): string | null {
+  const trimmed = input.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  const maybeUrl = /^(?:https?:\/\/)?(?:www\.|old\.|m\.)?reddit\.com\//i.test(trimmed);
+  const maybePath = trimmed.startsWith('/');
+
+  let path = '';
+  let search = '';
+
+  if (maybeUrl) {
+    const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+    try {
+      const url = new URL(withProtocol);
+
+      if (!isRedditHost(url.hostname.toLowerCase())) {
+        return null;
+      }
+
+      path = url.pathname;
+      search = url.search;
+    } catch {
+      return null;
+    }
+  } else if (maybePath) {
+    path = trimmed;
+  } else {
+    return null;
+  }
+
+  const parts = path
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const section = parts[0].toLowerCase();
+
+  if (section === 'r') {
+    const subreddit = parts[1];
+
+    if (!subreddit) {
+      return null;
+    }
+
+    if (parts[2]?.toLowerCase() === 'comments' && parts[3]) {
+      return `/r/${subreddit}/comments/${parts[3]}`;
+    }
+
+    return `/r/${subreddit}${search}`;
+  }
+
+  if ((section === 'u' || section === 'user') && parts[1]) {
+    return `/u/${parts[1]}`;
+  }
+
+  return null;
+}
+
 function sanitizeSubreddit(input: string): string {
-  const cleaned = input.trim().replace(/^\/?r\//i, '').replace(/^\/+|\/+$/g, '');
+  const cleaned = input
+    .trim()
+    .replace(/^\/?r\//i, '')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')[0]
+    ?.replace(/[^A-Za-z0-9_]/g, '');
   return cleaned || 'mildlyinfuriating';
 }
 
@@ -20,7 +95,13 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
   const [isFocused, setIsFocused] = useState(false);
 
   const normalizedValue = useMemo(
-    () => value.trim().replace(/^\/?r\//i, '').toLowerCase(),
+    () => {
+      if (parseRedditTarget(value)) {
+        return '';
+      }
+
+      return value.trim().replace(/^\/?r\//i, '').toLowerCase();
+    },
     [value],
   );
 
@@ -40,6 +121,14 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const directTarget = parseRedditTarget(value);
+
+    if (directTarget) {
+      setShowSuggestions(false);
+      navigate(directTarget);
+      return;
+    }
+
     const subreddit = sanitizeSubreddit(value);
     setValue(subreddit);
     setShowSuggestions(false);

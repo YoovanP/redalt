@@ -251,7 +251,7 @@ export function UserPage() {
         </div>
       )}
 
-      {after && (
+      {after && !videoFeedMode && (
         <div>
           <button className="load-more" onClick={loadMore} disabled={loadingMore}>
             {loadingMore ? 'Loading…' : 'Load more'}

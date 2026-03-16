@@ -144,7 +144,9 @@ export function PostDetailPage() {
 
       <RenderMedia post={normalized} expanded />
 
-      {normalized.selfText.trim() && <p className="self-text">{normalized.selfText}</p>}
+      {normalized.media.type !== 'text' && normalized.selfText.trim() && (
+        <p className="self-text">{normalized.selfText}</p>
+      )}
 
       <p className="post-links">
         <a href={`https://www.reddit.com${normalized.permalink}`} target="_blank" rel="noreferrer">

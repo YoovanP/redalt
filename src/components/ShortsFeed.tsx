@@ -10,34 +10,36 @@ type ShortsFeedProps = {
 };
 
 export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFeedProps) {
+  const feedRef = useRef<HTMLDivElement | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!hasMore || loadingMore) {
+    const feed = feedRef.current;
+
+    if (!feed || !hasMore || loadingMore) {
       return;
     }
 
     const onScroll = () => {
-      const remaining =
-        document.documentElement.scrollHeight -
-        (window.scrollY + window.innerHeight);
+      const remaining = feed.scrollHeight - (feed.scrollTop + feed.clientHeight);
 
-      if (remaining < 520) {
+      if (remaining < 820) {
         onNearEnd();
       }
     };
 
-    window.addEventListener('scroll', onScroll, { passive: true });
+    feed.addEventListener('scroll', onScroll, { passive: true });
 
     return () => {
-      window.removeEventListener('scroll', onScroll);
+      feed.removeEventListener('scroll', onScroll);
     };
   }, [hasMore, loadingMore, onNearEnd, posts.length]);
 
   useEffect(() => {
+    const feed = feedRef.current;
     const target = nearEndRef.current;
 
-    if (!target || !hasMore || loadingMore) {
+    if (!feed || !target || !hasMore || loadingMore) {
       return;
     }
 
@@ -51,7 +53,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
         }
       },
       {
-        root: null,
+        root: feed,
         threshold: 0,
         rootMargin: '0px 0px 35% 0px',
       },
@@ -67,7 +69,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const triggerIndex = Math.max(0, posts.length - 3);
 
   return (
-    <div className="shorts-feed" aria-label="Media feed">
+    <div ref={feedRef} className="shorts-feed shorts-feed-fullscreen" aria-label="Media feed">
       {posts.map((post, index) => (
         <article key={post.name} className="shorts-item">
           {index === triggerIndex && hasMore && <div ref={nearEndRef} className="near-end-trigger" />}
