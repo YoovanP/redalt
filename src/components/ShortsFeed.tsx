@@ -10,28 +10,27 @@ type ShortsFeedProps = {
 };
 
 export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFeedProps) {
-  const feedRef = useRef<HTMLDivElement | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    const feed = feedRef.current;
-
-    if (!feed || !hasMore || loadingMore) {
+    if (!hasMore || loadingMore) {
       return;
     }
 
     const onScroll = () => {
-      const remaining = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+      const remaining =
+        document.documentElement.scrollHeight -
+        (window.scrollY + window.innerHeight);
 
-      if (remaining < 340) {
+      if (remaining < 520) {
         onNearEnd();
       }
     };
 
-    feed.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
 
     return () => {
-      feed.removeEventListener('scroll', onScroll);
+      window.removeEventListener('scroll', onScroll);
     };
   }, [hasMore, loadingMore, onNearEnd, posts.length]);
 
@@ -52,7 +51,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
         }
       },
       {
-        root: feedRef.current,
+        root: null,
         threshold: 0,
         rootMargin: '0px 0px 35% 0px',
       },
@@ -68,7 +67,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const triggerIndex = Math.max(0, posts.length - 3);
 
   return (
-    <div ref={feedRef} className="shorts-feed" aria-label="Media shorts feed">
+    <div className="shorts-feed" aria-label="Media feed">
       {posts.map((post, index) => (
         <article key={post.name} className="shorts-item">
           {index === triggerIndex && hasMore && <div ref={nearEndRef} className="near-end-trigger" />}

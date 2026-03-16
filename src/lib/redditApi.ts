@@ -24,6 +24,7 @@ type SubredditSearchResponse = {
     children: Array<{
       data: {
         display_name?: string;
+        subscribers?: number;
       };
     }>;
   };
@@ -169,6 +170,7 @@ export async function fetchSubredditFlairs(subredditInput: string): Promise<stri
 
 export async function fetchSubredditSuggestions(query: string): Promise<string[]> {
   const cleaned = query.trim().replace(/^\/?r\//i, '');
+  const cleanedLower = cleaned.toLowerCase();
 
   if (cleaned.length < 2) {
     return [];
@@ -176,20 +178,34 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
 
   try {
     const response = await fetchReddit<SubredditSearchResponse>(
-      `/subreddits/search.json?raw_json=1&limit=8&q=${encodeURIComponent(cleaned)}`,
+      `/subreddits/search.json?raw_json=1&limit=25&q=${encodeURIComponent(cleaned)}`,
     );
 
+    const entries: Array<{ name: string; subscribers: number }> = [];
     const seen = new Set<string>();
 
     for (const item of response.data.children) {
       const value = item.data.display_name?.trim();
+      const valueLower = value?.toLowerCase() ?? '';
 
-      if (value) {
-        seen.add(value);
+      if (!value || !valueLower.includes(cleanedLower)) {
+        continue;
       }
+
+      if (seen.has(valueLower)) {
+        continue;
+      }
+
+      seen.add(valueLower);
+      entries.push({
+        name: value,
+        subscribers: item.data.subscribers ?? 0,
+      });
     }
 
-    return Array.from(seen);
+    entries.sort((a, b) => b.subscribers - a.subscribers || a.name.localeCompare(b.name));
+
+    return entries.slice(0, 8).map((entry) => entry.name);
   } catch {
     return [];
   }
