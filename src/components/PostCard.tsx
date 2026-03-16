@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { RenderMedia } from './media/RenderMedia';
+import type { CardMode } from '../lib/uiSettings';
 import type { NormalizedPost } from '../types/reddit';
 
 type PostCardProps = {
   post: NormalizedPost;
+  cardMode?: CardMode;
 };
 
 const PREVIEW_TEXT_LIMIT = 320;
@@ -13,9 +15,12 @@ function formatTimestamp(seconds: number): string {
   return new Date(seconds * 1000).toLocaleString();
 }
 
-export function PostCard({ post }: PostCardProps) {
+export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [showFullText, setShowFullText] = useState(false);
+  const [showContentInfo, setShowContentInfo] = useState(false);
+  const isContentOnly = cardMode === 'content-only';
+  const showInfoBlock = !isContentOnly || showContentInfo;
 
   const trimmedSelfText = post.selfText.trim();
   const isLongText = trimmedSelfText.length > PREVIEW_TEXT_LIMIT;
@@ -46,20 +51,19 @@ export function PostCard({ post }: PostCardProps) {
   };
 
   return (
-    <article className="post-card">
-      <header>
-        <h2>
-          <Link to={`/r/${post.subreddit}/comments/${post.id}`}>{post.title}</Link>
-        </h2>
-        {post.flairText && <p className="post-flair">{post.flairText}</p>}
-        <p className="meta">
-          u/{post.author} · {post.score} points · {post.numComments} comments · {formatTimestamp(post.createdUtc)}
-          {post.isNsfw ? ' · NSFW' : ''}
-        </p>
-        <p className="post-links post-links-inline">
-          <Link to={`/r/${post.subreddit}/comments/${post.id}`}>View comments</Link>
-        </p>
-      </header>
+    <article className={`post-card post-card-${cardMode}`}>
+      {showInfoBlock && (
+        <header>
+          <h2>
+            <Link to={`/r/${post.subreddit}/comments/${post.id}`}>{post.title}</Link>
+          </h2>
+          {post.flairText && <p className="post-flair">{post.flairText}</p>}
+          <p className="meta">
+            u/{post.author} · {post.score} points · {post.numComments} comments · {formatTimestamp(post.createdUtc)}
+            {post.isNsfw ? ' · NSFW' : ''}
+          </p>
+        </header>
+      )}
 
       <RenderMedia post={post} />
 
@@ -78,17 +82,42 @@ export function PostCard({ post }: PostCardProps) {
         </div>
       )}
 
-      <footer className="post-links">
-        <a href={`https://www.reddit.com${post.permalink}`} target="_blank" rel="noreferrer">
-          Open on Reddit
-        </a>
-        <a href={post.outboundUrl} target="_blank" rel="noreferrer">
-          Open source
-        </a>
-        <button type="button" onClick={onShare}>
-          {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
+      {isContentOnly && !showContentInfo && (
+        <button
+          type="button"
+          className="content-info-toggle"
+          onClick={() => setShowContentInfo(true)}
+        >
+          Tap to show info
         </button>
-      </footer>
+      )}
+
+      {showInfoBlock && (
+        <footer className="post-actions">
+          <Link className="post-action-button" to={`/r/${post.subreddit}/comments/${post.id}`}>
+            Comments
+          </Link>
+          <button type="button" className="post-action-button" onClick={onShare}>
+            {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
+          </button>
+          <a className="post-action-button" href={`https://www.reddit.com${post.permalink}`} target="_blank" rel="noreferrer">
+            Open on Reddit
+          </a>
+          <a className="post-action-button" href={post.outboundUrl} target="_blank" rel="noreferrer">
+            Open source
+          </a>
+
+          {isContentOnly && (
+            <button
+              type="button"
+              className="post-action-button"
+              onClick={() => setShowContentInfo(false)}
+            >
+              Hide info
+            </button>
+          )}
+        </footer>
+      )}
     </article>
   );
 }

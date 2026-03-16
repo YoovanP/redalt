@@ -30,10 +30,14 @@ function getValidatedTopTimeRange(input: string | null): TopTimeRange {
   return 'day';
 }
 
+function isMediaPost(mediaType: string): boolean {
+  return mediaType === 'image' || mediaType === 'gallery' || mediaType === 'video' || mediaType === 'external';
+}
+
 export function SubredditPage() {
-    const {
-      settings: { columns, videoFeedMode },
-    } = useUiSettings();
+  const {
+    settings: { columns, videoFeedMode, cardMode },
+  } = useUiSettings();
   const { name = 'mildlyinfuriating' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const sort = getValidatedSort(searchParams.get('sort'));
@@ -147,9 +151,7 @@ export function SubredditPage() {
       return flairFilteredPosts;
     }
 
-    return flairFilteredPosts.filter(
-      (post) => post.media.type === 'video' || post.media.type === 'external',
-    );
+    return flairFilteredPosts.filter((post) => isMediaPost(post.media.type));
   }, [flairFilteredPosts, videoFeedMode]);
 
   const loadMore = async () => {
@@ -181,12 +183,12 @@ export function SubredditPage() {
           break;
         }
 
-        const chunkHasVideo = result.posts.some((post) => {
+        const chunkHasMedia = result.posts.some((post) => {
           const mediaType = normalizePost(post).media.type;
-          return mediaType === 'video' || mediaType === 'external';
+          return isMediaPost(mediaType);
         });
 
-        if (chunkHasVideo) {
+        if (chunkHasMedia) {
           break;
         }
 
@@ -280,7 +282,7 @@ export function SubredditPage() {
     return (
       <StateView
         kind="empty"
-        message={videoFeedMode ? 'No video posts found for this subreddit.' : 'This subreddit has no visible posts.'}
+        message={videoFeedMode ? 'No media posts found for this subreddit.' : 'This subreddit has no visible posts.'}
       />
     );
   }
@@ -319,7 +321,7 @@ export function SubredditPage() {
           {visiblePosts.map((post, index) => (
             <article key={post.name}>
               {index === triggerIndex && after && <div ref={nearEndRef} className="near-end-trigger" />}
-              <PostCard post={post} />
+              <PostCard post={post} cardMode={cardMode} />
             </article>
           ))}
         </div>

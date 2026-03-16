@@ -2,6 +2,30 @@
   box-sizing: border-box;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--panel-border) var(--bg);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--panel-border);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--link);
+}
+
 :root {
   --bg: #0f1115;
   --text: #e7ebf0;
@@ -402,6 +426,100 @@ input:focus, select:focus {
   border-color: color-mix(in srgb, var(--panel-border) 40%, var(--link) 60%);
 }
 
+.post-card-compact {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.post-card-compact h2 {
+  font-size: 1rem;
+  margin-bottom: 0.2rem;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.post-card-compact .meta {
+  font-size: 0.76rem;
+  margin-bottom: 0.4rem;
+  opacity: 0.72;
+}
+
+.post-card-compact .media-block {
+  margin: 0.25rem 0 0.45rem;
+}
+
+.post-card-compact .post-image,
+.post-card-compact .post-video,
+.post-card-compact .external-frame {
+  max-height: 340px;
+  border-radius: 6px;
+}
+
+.post-card-compact .post-actions {
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.post-card-compact .post-action-button,
+.post-card-compact .text-toggle,
+.post-card-compact .content-info-toggle {
+  min-height: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.post-card-compact .post-flair {
+  margin-bottom: 0.35rem;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  font-size: 0.75rem;
+  opacity: 0.78;
+}
+
+.post-card-compact:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--panel-border);
+}
+
+.post-card-content-only h2,
+.post-card-content-only .meta,
+.post-card-content-only .post-flair,
+.post-card-content-only .post-actions {
+  animation: fadeCardInfoIn 120ms ease-out;
+}
+
+@keyframes fadeCardInfoIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.content-info-toggle {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.82rem;
+}
+
 .post-card h2 {
   margin: 0 0 0.5rem;
   font-size: 1.2rem;
@@ -449,11 +567,45 @@ input:focus, select:focus {
 }
 
 .gallery-controls {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 0.65rem;
-  margin-top: 0.5rem;
+  justify-content: space-between;
+  padding: 0 0.6rem;
+  z-index: 2;
+}
+
+.gallery-nav {
+  border: 1px solid var(--input-border);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gallery-nav-prev {
+  margin-right: auto;
+}
+
+.gallery-nav-next {
+  margin-left: auto;
+}
+
+.gallery-progress {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  pointer-events: none;
+  border: 1px solid var(--input-border);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
 }
 
 .self-text {
@@ -542,6 +694,28 @@ input:focus, select:focus {
   gap: 1rem;
 }
 
+.post-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.5rem;
+}
+
+.post-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 8px;
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
 .post-card a,
 .post-links a,
 .post-links-inline a {
@@ -617,11 +791,22 @@ input:focus, select:focus {
   }
 
   .custom-feed-input-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .custom-feed-actions {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+
+  .custom-feed-input-row button,
+  .custom-feed-actions button {
+    width: auto;
+    min-height: 32px;
+    padding: 0.32rem 0.58rem;
+    font-size: 0.84rem;
+    white-space: nowrap;
   }
 
   .post-list {

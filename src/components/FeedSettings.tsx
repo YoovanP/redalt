@@ -51,12 +51,26 @@ export function FeedSettings() {
           </label>
 
           <label>
+            Card mode
+            <select
+              value={settings.cardMode}
+              onChange={(event) =>
+                updateSettings({ cardMode: event.target.value as 'default' | 'compact' | 'content-only' })
+              }
+            >
+              <option value="default">Default</option>
+              <option value="compact">Compact</option>
+              <option value="content-only">Content only</option>
+            </select>
+          </label>
+
+          <label>
             <input
               type="checkbox"
               checked={settings.videoFeedMode}
               onChange={(event) => updateSettings({ videoFeedMode: event.target.checked })}
             />
-            Video feed mode
+            Media feed mode
           </label>
         </div>
       )}

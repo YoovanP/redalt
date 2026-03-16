@@ -46,7 +46,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const triggerIndex = Math.max(0, posts.length - 3);
 
   return (
-    <div ref={feedRef} className="shorts-feed" aria-label="Video shorts feed">
+    <div ref={feedRef} className="shorts-feed" aria-label="Media shorts feed">
       {posts.map((post, index) => (
         <article key={post.name} className="shorts-item">
           {index === triggerIndex && hasMore && <div ref={nearEndRef} className="near-end-trigger" />}

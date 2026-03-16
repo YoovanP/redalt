@@ -12,12 +12,15 @@ export type ThemeName =
   | 'desert'
   | 'monochrome';
 
+export type CardMode = 'default' | 'compact' | 'content-only';
+
 type UiSettings = {
   theme: ThemeName;
   autoplayVideos: boolean;
   autoplayWithAudio: boolean;
   columns: number;
   videoFeedMode: boolean;
+  cardMode: CardMode;
 };
 
 type UiSettingsContextType = {
@@ -33,6 +36,7 @@ const defaultSettings: UiSettings = {
   autoplayWithAudio: false,
   columns: 1,
   videoFeedMode: false,
+  cardMode: 'default',
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
@@ -62,12 +66,18 @@ function normalizeSettings(input: unknown): UiSettings {
       ? Math.floor(value.columns)
       : defaultSettings.columns;
 
+  const cardMode =
+    value.cardMode === 'default' || value.cardMode === 'compact' || value.cardMode === 'content-only'
+      ? value.cardMode
+      : defaultSettings.cardMode;
+
   return {
     theme,
     autoplayVideos: Boolean(value.autoplayVideos),
     autoplayWithAudio: Boolean(value.autoplayWithAudio),
     columns,
     videoFeedMode: Boolean(value.videoFeedMode),
+    cardMode,
   };
 }
 

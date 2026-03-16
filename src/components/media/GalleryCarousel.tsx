@@ -28,14 +28,24 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
       <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
       {items.length > 1 && (
         <div className="gallery-controls">
-          <button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))}>
-            Prev
+          <button
+            type="button"
+            className="gallery-nav gallery-nav-prev"
+            aria-label="Previous image"
+            onClick={() => setIndex((value) => Math.max(0, value - 1))}
+          >
+            ←
           </button>
-          <span>
+          <span className="gallery-progress">
             {boundedIndex + 1} / {items.length}
           </span>
-          <button type="button" onClick={() => setIndex((value) => Math.min(items.length - 1, value + 1))}>
-            Next
+          <button
+            type="button"
+            className="gallery-nav gallery-nav-next"
+            aria-label="Next image"
+            onClick={() => setIndex((value) => Math.min(items.length - 1, value + 1))}
+          >
+            →
           </button>
         </div>
       )}
