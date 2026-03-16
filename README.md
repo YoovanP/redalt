@@ -46,3 +46,5 @@ npm run build
 - Uses `raw_json=1` Reddit endpoints for cleaner payload parsing.
 - API errors (such as 403/451) are mapped to friendly messages in UI.
 - External embeds depend on metadata availability from Reddit payloads.
+- In production on Cloudflare Pages, requests are proxied through `functions/api/reddit/[[path]].ts` (same-origin) for better Safari/iPhone reliability.
+- In local development, the app automatically falls back to direct `https://www.reddit.com` API requests when the proxy route is unavailable.

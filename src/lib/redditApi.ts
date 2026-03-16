@@ -8,7 +8,7 @@ import type {
   RedditPostData,
 } from '../types/reddit';
 
-const REDDIT_BASE = 'https://www.reddit.com';
+const REDDIT_BASES = ['/api/reddit', 'https://www.reddit.com'];
 const PAGE_SIZE = 8;
 
 export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
@@ -31,35 +31,37 @@ function normalizeSubredditName(input: string): string {
 async function fetchReddit<T>(path: string): Promise<T> {
   let lastError: unknown;
 
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    for (const base of REDDIT_BASES) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
 
-      const response = await fetch(`${REDDIT_BASE}${path}`, {
-        signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
+        const response = await fetch(`${base}${path}`, {
+          signal: controller.signal,
+          headers: {
+            Accept: 'application/json',
+          },
+        });
 
-      globalThis.clearTimeout(timeoutId);
+        globalThis.clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+        if (!response.ok) {
+          throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+        }
+
+        return (await response.json()) as T;
+      } catch (error) {
+        lastError = error;
+
+        if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {
+          continue;
+        }
       }
+    }
 
-      return (await response.json()) as T;
-    } catch (error) {
-      lastError = error;
-
-      if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {
-        throw error;
-      }
-
-      if (attempt === 0) {
-        await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
-      }
+    if (cycle === 0) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
     }
   }
 
