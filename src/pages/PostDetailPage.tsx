@@ -20,8 +20,14 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
   return (
     <li className={itemClassName}>
       <div className="comment-meta">
-        <strong>u/{comment.author}</strong>
-        {comment.parentAuthor && <span>replying to u/{comment.parentAuthor}</span>}
+        <strong>
+          <Link to={`/u/${comment.author}`}>u/{comment.author}</Link>
+        </strong>
+        {comment.parentAuthor && (
+          <span>
+            replying to <Link to={`/u/${comment.parentAuthor}`}>u/{comment.parentAuthor}</Link>
+          </span>
+        )}
       </div>
       <p className="comment-body">{comment.body}</p>
 
@@ -133,7 +139,7 @@ export function PostDetailPage() {
       </p>
       <h2>{normalized.title}</h2>
       <p className="meta">
-        u/{normalized.author} · {normalized.score} points · {normalized.numComments} comments
+        <Link to={`/u/${normalized.author}`}>u/{normalized.author}</Link> · {normalized.score} points · {normalized.numComments} comments
       </p>
 
       <RenderMedia post={normalized} expanded />

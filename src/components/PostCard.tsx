@@ -59,7 +59,7 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
           </h2>
           {post.flairText && <p className="post-flair">{post.flairText}</p>}
           <p className="meta">
-            u/{post.author} · {post.score} points · {post.numComments} comments · {formatTimestamp(post.createdUtc)}
+            <Link to={`/u/${post.author}`}>u/{post.author}</Link> · {post.score} points · {post.numComments} comments · {formatTimestamp(post.createdUtc)}
             {post.isNsfw ? ' · NSFW' : ''}
           </p>
         </header>

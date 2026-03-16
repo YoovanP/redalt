@@ -18,6 +18,17 @@ type FlairTemplate = {
   text?: string;
 };
 
+type SubredditSearchResponse = {
+  kind: 'Listing';
+  data: {
+    children: Array<{
+      data: {
+        display_name?: string;
+      };
+    }>;
+  };
+};
+
 type FetchListingOptions = {
   after?: string | null;
   sort?: ListingSort;
@@ -26,6 +37,10 @@ type FetchListingOptions = {
 
 function normalizeSubredditName(input: string): string {
   return input.trim().replace(/^\/?r\//i, '').replace(/^\/+|\/+$/g, '');
+}
+
+function normalizeUserName(input: string): string {
+  return input.trim().replace(/^\/?u(?:ser)?\//i, '').replace(/^\/+|\/+$/g, '');
 }
 
 async function fetchReddit<T>(path: string): Promise<T> {
@@ -100,6 +115,34 @@ export async function fetchSubredditListing(
   };
 }
 
+export async function fetchUserListing(
+  userInput: string,
+  options: FetchListingOptions = {},
+): Promise<PostListingResult> {
+  const after = options.after ?? null;
+  const sort = options.sort ?? 'hot';
+  const topTimeRange = options.topTimeRange ?? 'day';
+  const user = normalizeUserName(userInput);
+  const queryParts = ['raw_json=1', `limit=${PAGE_SIZE}`];
+
+  if (after) {
+    queryParts.push(`after=${encodeURIComponent(after)}`);
+  }
+
+  if (sort === 'top') {
+    queryParts.push(`t=${encodeURIComponent(topTimeRange)}`);
+  }
+
+  const data = await fetchReddit<RedditListingResponse>(
+    `/user/${encodeURIComponent(user)}/submitted.json?${queryParts.join('&')}&sort=${encodeURIComponent(sort)}`,
+  );
+
+  return {
+    posts: data.data.children.map((item) => item.data),
+    after: data.data.after,
+  };
+}
+
 export async function fetchSubredditFlairs(subredditInput: string): Promise<string[]> {
   const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
 
@@ -119,6 +162,34 @@ export async function fetchSubredditFlairs(subredditInput: string): Promise<stri
     }
 
     return Array.from(seen).sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchSubredditSuggestions(query: string): Promise<string[]> {
+  const cleaned = query.trim().replace(/^\/?r\//i, '');
+
+  if (cleaned.length < 2) {
+    return [];
+  }
+
+  try {
+    const response = await fetchReddit<SubredditSearchResponse>(
+      `/subreddits/search.json?raw_json=1&limit=8&q=${encodeURIComponent(cleaned)}`,
+    );
+
+    const seen = new Set<string>();
+
+    for (const item of response.data.children) {
+      const value = item.data.display_name?.trim();
+
+      if (value) {
+        seen.add(value);
+      }
+    }
+
+    return Array.from(seen);
   } catch {
     return [];
   }

@@ -6,6 +6,7 @@ import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UiSettingsProvider } from './lib/uiSettings';
 import { PostDetailPage } from './pages/PostDetailPage';
 import { SubredditPage } from './pages/SubredditPage';
+import { UserPage } from './pages/UserPage';
 
 function currentSubreddit(pathname: string): string {
   const match = pathname.match(/^\/r\/([^/]+)/i);
@@ -44,6 +45,8 @@ export default function App() {
             <Route path="/" element={<Navigate to="/r/mildlyinfuriating" replace />} />
             <Route path="/r/:name" element={<SubredditPage />} />
             <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
+            <Route path="/u/:username" element={<UserPage />} />
+            <Route path="/user/:username" element={<UserPage />} />
             <Route path="*" element={<Navigate to="/r/mildlyinfuriating" replace />} />
           </Routes>
         </main>
