@@ -103,12 +103,18 @@ function AppLayout() {
                 <h1>RedAlt</h1>
               </div>
               <div className="header-controls">
-                <SubredditSwitcher initialSubreddit={subreddit} wide={!headerExpanded} />
+                <SubredditSwitcher initialSubreddit={subreddit} wide />
                 <nav className="header-nav-links" aria-label="Quick links">
                   <Link to="/saved">Saved</Link>
                   <Link to="/history">History</Link>
-                  <button type="button" onClick={() => setHeaderExpanded((value) => !value)}>
-                    {headerExpanded ? 'Compact header' : 'Expand header'}
+                  <button
+                    type="button"
+                    className="header-expand-toggle"
+                    aria-label={headerExpanded ? 'Collapse header' : 'Expand header'}
+                    title={headerExpanded ? 'Collapse header' : 'Expand header'}
+                    onClick={() => setHeaderExpanded((value) => !value)}
+                  >
+                    {headerExpanded ? '^' : 'v'}
                   </button>
                 </nav>
               </div>
