@@ -4,6 +4,7 @@ import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { PostDetailPage } from './pages/PostDetailPage';
+import { SearchPage } from './pages/SearchPage';
 import { SubredditPage } from './pages/SubredditPage';
 import { UserPage } from './pages/UserPage';
 
@@ -73,6 +74,7 @@ function AppLayout() {
           <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
           <Route path="/u/:username" element={<UserPage />} />
           <Route path="/user/:username" element={<UserPage />} />
+          <Route path="/search" element={<SearchPage />} />
           <Route path="*" element={<Navigate to="/r/mildlyinfuriating" replace />} />
         </Routes>
       </main>

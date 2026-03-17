@@ -86,9 +86,20 @@ function sanitizeSubreddit(input: string): string {
   return cleaned || 'mildlyinfuriating';
 }
 
+function isExplicitSubredditInput(input: string): boolean {
+  const trimmed = input.trim();
+
+  if (!trimmed) {
+    return false;
+  }
+
+  return /^(?:\/?r\/|r\/)/i.test(trimmed);
+}
+
 export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const subredditQuerySuffix = location.pathname.startsWith('/r/') ? location.search : '';
   const [value, setValue] = useState(initialSubreddit);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -121,6 +132,7 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const keyword = value.trim();
     const directTarget = parseRedditTarget(value);
 
     if (directTarget) {
@@ -129,16 +141,26 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
       return;
     }
 
+    if (!keyword) {
+      return;
+    }
+
+    if (!isExplicitSubredditInput(keyword)) {
+      setShowSuggestions(false);
+      navigate(`/search?q=${encodeURIComponent(keyword)}`);
+      return;
+    }
+
     const subreddit = sanitizeSubreddit(value);
     setValue(subreddit);
     setShowSuggestions(false);
-    navigate(`/r/${subreddit}${location.search}`);
+    navigate(`/r/${subreddit}${subredditQuerySuffix}`);
   };
 
   const onPickSuggestion = (subreddit: string) => {
     setValue(subreddit);
     setShowSuggestions(false);
-    navigate(`/r/${subreddit}${location.search}`);
+    navigate(`/r/${subreddit}${subredditQuerySuffix}`);
   };
 
   return (
@@ -163,8 +185,8 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
               setShowSuggestions(false);
             }, 120)
           }
-          placeholder="mildlyinfuriating"
-          aria-label="Subreddit"
+          placeholder="Search posts, subreddits, users..."
+          aria-label="Search Reddit content"
           aria-autocomplete="list"
           autoComplete="off"
         />

@@ -24,10 +24,49 @@ type SubredditSearchResponse = {
     children: Array<{
       data: {
         display_name?: string;
+        title?: string;
+        public_description?: string;
+        over18?: boolean;
+        icon_img?: string;
+        community_icon?: string;
         subscribers?: number;
       };
     }>;
   };
+};
+
+type UserSearchResponse = {
+  kind: 'Listing';
+  data: {
+    children: Array<{
+      data: {
+        name?: string;
+        icon_img?: string;
+        total_karma?: number;
+      };
+    }>;
+  };
+};
+
+export type SearchSubredditResult = {
+  name: string;
+  title: string;
+  description: string;
+  subscribers: number;
+  isNsfw: boolean;
+  iconUrl?: string;
+};
+
+export type SearchUserResult = {
+  name: string;
+  totalKarma: number;
+  iconUrl?: string;
+};
+
+export type GlobalSearchResult = {
+  posts: RedditPostData[];
+  subreddits: SearchSubredditResult[];
+  users: SearchUserResult[];
 };
 
 type SubredditTypeaheadResponse = {
@@ -39,6 +78,10 @@ type FetchListingOptions = {
   sort?: ListingSort;
   topTimeRange?: TopTimeRange;
 };
+
+function normalizeApiUrl(input: string | undefined): string {
+  return (input ?? '').replace(/&amp;/g, '&');
+}
 
 function normalizeSubredditName(input: string): string {
   return input.trim().replace(/^\/?r\//i, '').replace(/^\/+|\/+$/g, '');
@@ -230,6 +273,77 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
   } catch {
     return [];
   }
+}
+
+export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResult> {
+  const cleaned = query.trim();
+
+  if (cleaned.length < 2) {
+    return {
+      posts: [],
+      subreddits: [],
+      users: [],
+    };
+  }
+
+  const [postListing, subredditListing, userListing] = await Promise.all([
+    fetchReddit<RedditListingResponse>(
+      `/search.json?raw_json=1&sort=relevance&type=link&limit=16&q=${encodeURIComponent(cleaned)}`,
+    ),
+    fetchReddit<SubredditSearchResponse>(
+      `/subreddits/search.json?raw_json=1&include_over_18=on&limit=12&q=${encodeURIComponent(cleaned)}`,
+    ),
+    fetchReddit<UserSearchResponse>(
+      `/users/search.json?raw_json=1&include_over_18=on&limit=12&q=${encodeURIComponent(cleaned)}`,
+    ),
+  ]);
+
+  const posts = postListing.data.children
+    .filter((item) => item.kind === 't3')
+    .map((item) => item.data);
+
+  const subreddits: SearchSubredditResult[] = [];
+
+  for (const item of subredditListing.data.children) {
+    const name = item.data.display_name?.trim();
+
+    if (!name) {
+      continue;
+    }
+
+    const iconCandidate = item.data.community_icon || item.data.icon_img;
+
+    subreddits.push({
+      name,
+      title: item.data.title?.trim() || `r/${name}`,
+      description: item.data.public_description?.trim() || '',
+      subscribers: item.data.subscribers ?? 0,
+      isNsfw: Boolean(item.data.over18),
+      iconUrl: iconCandidate ? normalizeApiUrl(iconCandidate) : undefined,
+    });
+  }
+
+  const users: SearchUserResult[] = [];
+
+  for (const item of userListing.data.children) {
+    const name = item.data.name?.trim();
+
+    if (!name) {
+      continue;
+    }
+
+    users.push({
+      name,
+      totalKarma: item.data.total_karma ?? 0,
+      iconUrl: item.data.icon_img ? normalizeApiUrl(item.data.icon_img) : undefined,
+    });
+  }
+
+  return {
+    posts,
+    subreddits,
+    users,
+  };
 }
 
 function extractComments(listing: RedditListingResponse, parentAuthor?: string): RedditComment[] {

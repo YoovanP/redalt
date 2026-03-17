@@ -450,6 +450,63 @@ input:focus, select:focus {
   font-size: 0.95rem;
 }
 
+.search-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.search-page h2 {
+  margin: 0;
+}
+
+.search-section {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.search-section h3 {
+  margin: 0;
+}
+
+.search-chip-list {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.search-chip-card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 0.55rem 0.65rem;
+  text-decoration: none;
+  color: inherit;
+}
+
+.search-chip-card:hover {
+  border-color: color-mix(in srgb, var(--panel-border) 50%, var(--link) 50%);
+}
+
+.search-chip-card img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--input-border);
+  background: var(--media-bg);
+  flex-shrink: 0;
+}
+
+.search-chip-card p,
+.search-chip-card span {
+  margin: 0;
+  opacity: 0.8;
+  font-size: 0.86rem;
+}
+
 .subreddit-form input,
 .subreddit-form button,
 .load-more,
