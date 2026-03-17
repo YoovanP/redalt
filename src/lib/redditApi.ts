@@ -69,6 +69,15 @@ export type GlobalSearchResult = {
   users: SearchUserResult[];
 };
 
+export type SearchSort = 'relevance' | 'hot' | 'new' | 'top' | 'comments';
+
+export type GlobalSearchOptions = {
+  sort?: SearchSort;
+  topTimeRange?: TopTimeRange;
+  subredditScope?: string;
+  includeNsfw?: boolean;
+};
+
 type SubredditTypeaheadResponse = {
   names?: string[];
 };
@@ -78,6 +87,21 @@ type FetchListingOptions = {
   sort?: ListingSort;
   topTimeRange?: TopTimeRange;
 };
+
+function notifyApiStatus(level: 'ok' | 'warn' | 'error', message: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(
+    new CustomEvent('redalt-api-status', {
+      detail: {
+        level,
+        message,
+      },
+    }),
+  );
+}
 
 function normalizeApiUrl(input: string | undefined): string {
   return (input ?? '').replace(/&amp;/g, '&');
@@ -110,12 +134,26 @@ async function fetchReddit<T>(path: string): Promise<T> {
         globalThis.clearTimeout(timeoutId);
 
         if (!response.ok) {
+          if (response.status === 429) {
+            notifyApiStatus('warn', 'Reddit is rate-limiting requests. Results may load slowly.');
+          }
+
           throw new RedditApiError(getApiErrorMessage(response.status), response.status);
         }
+
+        notifyApiStatus('ok', 'Connected to Reddit.');
 
         return (await response.json()) as T;
       } catch (error) {
         lastError = error;
+
+        if (error instanceof RedditApiError) {
+          if (error.status === 429) {
+            notifyApiStatus('warn', 'Reddit rate limit hit. Retrying with fallback...');
+          } else if (error.status >= 500 || error.status === 0) {
+            notifyApiStatus('error', 'Reddit connection issue. Trying fallback endpoint...');
+          }
+        }
 
         if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {
           continue;
@@ -131,6 +169,8 @@ async function fetchReddit<T>(path: string): Promise<T> {
   if (lastError instanceof RedditApiError) {
     throw lastError;
   }
+
+  notifyApiStatus('error', 'Network error while contacting Reddit.');
 
   throw new RedditApiError('Network error while contacting Reddit.', 0);
 }
@@ -275,8 +315,33 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
   }
 }
 
-export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResult> {
+export async function fetchGlobalSearch(
+  query: string,
+  options: GlobalSearchOptions = {},
+): Promise<GlobalSearchResult> {
   const cleaned = query.trim();
+  const sort = options.sort ?? 'relevance';
+  const topTimeRange = options.topTimeRange ?? 'day';
+  const includeNsfw = options.includeNsfw ?? true;
+  const subredditScope = normalizeSubredditName(options.subredditScope ?? '');
+
+  const postSearchPath = subredditScope
+    ? `/r/${encodeURIComponent(subredditScope)}/search.json?raw_json=1&restrict_sr=1`
+    : '/search.json?raw_json=1';
+  const postQueryParts = [
+    `sort=${encodeURIComponent(sort)}`,
+    `t=${encodeURIComponent(topTimeRange)}`,
+    `include_over_18=${includeNsfw ? 'on' : 'off'}`,
+    'type=link',
+    'limit=16',
+    `q=${encodeURIComponent(cleaned)}`,
+  ];
+  const communityQueryParts = [
+    `raw_json=1`,
+    `include_over_18=${includeNsfw ? 'on' : 'off'}`,
+    `limit=12`,
+    `q=${encodeURIComponent(cleaned)}`,
+  ];
 
   if (cleaned.length < 2) {
     return {
@@ -287,15 +352,9 @@ export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResu
   }
 
   const [postListing, subredditListing, userListing] = await Promise.allSettled([
-    fetchReddit<RedditListingResponse>(
-      `/search.json?raw_json=1&sort=relevance&type=link&limit=16&q=${encodeURIComponent(cleaned)}`,
-    ),
-    fetchReddit<SubredditSearchResponse>(
-      `/subreddits/search.json?raw_json=1&include_over_18=on&limit=12&q=${encodeURIComponent(cleaned)}`,
-    ),
-    fetchReddit<UserSearchResponse>(
-      `/users/search.json?raw_json=1&include_over_18=on&limit=12&q=${encodeURIComponent(cleaned)}`,
-    ),
+    fetchReddit<RedditListingResponse>(`${postSearchPath}&${postQueryParts.join('&')}`),
+    fetchReddit<SubredditSearchResponse>(`/subreddits/search.json?${communityQueryParts.join('&')}`),
+    fetchReddit<UserSearchResponse>(`/users/search.json?${communityQueryParts.join('&')}`),
   ]);
 
   const postsSource = postListing.status === 'fulfilled' ? postListing.value : null;

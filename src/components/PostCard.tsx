@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { RenderMedia } from './media/RenderMedia';
 import type { CardMode } from '../lib/uiSettings';
 import type { NormalizedPost } from '../types/reddit';
@@ -17,6 +18,7 @@ function formatTimestamp(seconds: number): string {
 
 export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
+  const [saved, setSaved] = useState(() => isPostSaved(post.id));
   const [showFullText, setShowFullText] = useState(false);
   const [showContentInfo, setShowContentInfo] = useState(false);
   const isContentOnly = cardMode === 'content-only';
@@ -99,6 +101,13 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
           </Link>
           <button type="button" className="post-action-button" onClick={onShare}>
             {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
+          </button>
+          <button
+            type="button"
+            className="post-action-button"
+            onClick={() => setSaved(toggleSavedPost(post))}
+          >
+            {saved ? 'Unsave' : 'Save'}
           </button>
           <a className="post-action-button" href={`https://www.reddit.com${post.permalink}`} target="_blank" rel="noreferrer">
             Open on Reddit

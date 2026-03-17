@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="RedAlt icon">
+  <rect width="512" height="512" rx="96" fill="#0f1115"/>
+  <circle cx="256" cy="256" r="170" fill="#161b24" stroke="#7bb4ff" stroke-width="24"/>
+  <path d="M167 322V190h90c38 0 65 22 65 54 0 27-18 47-49 53l63 25v22h-31l-72-29h-36v29h-30zm30-57h60c22 0 35-10 35-27s-13-27-35-27h-60v54z" fill="#e7ebf0"/>
+</svg>

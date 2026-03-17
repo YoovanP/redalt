@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { RenderMedia } from '../components/media/RenderMedia';
 import { StateView } from '../components/StateView';
+import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchPostDetail } from '../lib/redditApi';
 import type { PostDetailResult, RedditComment } from '../types/reddit';
@@ -60,6 +61,7 @@ export function PostDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
+  const [saved, setSaved] = useState(false);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
 
   useEffect(() => {
@@ -102,6 +104,15 @@ export function PostDetailPage() {
   const comments = data?.comments ?? [];
   const visibleComments = comments.slice(0, visibleTopLevelComments);
   const hasMoreComments = comments.length > visibleComments.length;
+
+  useEffect(() => {
+    if (!normalized) {
+      return;
+    }
+
+    addWatchHistory(normalized);
+    setSaved(isPostSaved(normalized.id));
+  }, [normalized]);
 
   if (loading) {
     return <StateView kind="loading" />;
@@ -152,6 +163,9 @@ export function PostDetailPage() {
         <a href={`https://www.reddit.com${normalized.permalink}`} target="_blank" rel="noreferrer">
           Open discussion on Reddit
         </a>
+        <button type="button" onClick={() => setSaved(toggleSavedPost(normalized))}>
+          {saved ? 'Unsave' : 'Save'}
+        </button>
         <button type="button" onClick={onShare}>
           {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
         </button>

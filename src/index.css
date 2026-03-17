@@ -192,6 +192,35 @@ input:focus, select:focus {
   padding: 1rem;
 }
 
+.api-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+  margin-bottom: 0.7rem;
+  font-size: 0.9rem;
+}
+
+.api-status-banner button {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.3rem 0.55rem;
+  font-size: 0.82rem;
+}
+
+.api-status-warn {
+  background: color-mix(in srgb, #d99b2a 22%, var(--panel));
+}
+
+.api-status-error {
+  background: color-mix(in srgb, #cc4747 20%, var(--panel));
+}
+
 .app-header {
   display: grid;
   gap: 0.7rem;
@@ -257,6 +286,22 @@ input:focus, select:focus {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.55rem;
+}
+
+.header-nav-links {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-nav-links a {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+  font-size: 0.88rem;
 }
 
 .theme-picker {
@@ -402,7 +447,8 @@ input:focus, select:focus {
 
 .custom-feed-form input,
 .custom-feed-form button,
-.sort-controls select {
+.sort-controls select,
+.sort-controls input {
   border: 1px solid var(--input-border);
   background: var(--input-bg);
   color: var(--text);
@@ -453,6 +499,38 @@ input:focus, select:focus {
 .search-page {
   display: grid;
   gap: 1rem;
+}
+
+.library-page {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.library-header h2 {
+  margin: 0;
+}
+
+.library-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.library-item {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 0.85rem;
+}
+
+.library-item h3 {
+  margin: 0 0 0.4rem;
 }
 
 .search-page h2 {
@@ -890,6 +968,37 @@ input:focus, select:focus {
   gap: 0;
 }
 
+.shorts-controls {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 4;
+  margin: 0.65rem 0.65rem 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--input-border);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  border-radius: 10px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.shorts-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+}
+
+.shorts-controls select {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.28rem 0.42rem;
+}
+
 .shorts-item {
   min-height: min(84vh, 920px);
   position: relative;
@@ -908,6 +1017,29 @@ input:focus, select:focus {
   padding: 0;
   scroll-snap-align: start;
   scroll-snap-stop: always;
+}
+
+.shorts-overlay {
+  position: absolute;
+  left: 0.8rem;
+  right: 0.8rem;
+  bottom: 0.8rem;
+  z-index: 3;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--input-border) 70%, transparent);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+}
+
+.shorts-overlay h3 {
+  margin: 0 0 0.3rem;
+  font-size: 0.95rem;
+}
+
+.shorts-overlay p {
+  margin: 0;
+  font-size: 0.82rem;
+  opacity: 0.85;
 }
 
 .shorts-media-wrap .media-block {
