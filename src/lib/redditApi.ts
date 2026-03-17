@@ -286,7 +286,7 @@ export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResu
     };
   }
 
-  const [postListing, subredditListing, userListing] = await Promise.all([
+  const [postListing, subredditListing, userListing] = await Promise.allSettled([
     fetchReddit<RedditListingResponse>(
       `/search.json?raw_json=1&sort=relevance&type=link&limit=16&q=${encodeURIComponent(cleaned)}`,
     ),
@@ -298,13 +298,21 @@ export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResu
     ),
   ]);
 
-  const posts = postListing.data.children
+  const postsSource = postListing.status === 'fulfilled' ? postListing.value : null;
+  const subredditsSource = subredditListing.status === 'fulfilled' ? subredditListing.value : null;
+  const usersSource = userListing.status === 'fulfilled' ? userListing.value : null;
+
+  if (!postsSource && !subredditsSource && !usersSource) {
+    throw new RedditApiError('Unable to search right now.', 0);
+  }
+
+  const posts = (postsSource?.data.children ?? [])
     .filter((item) => item.kind === 't3')
     .map((item) => item.data);
 
   const subreddits: SearchSubredditResult[] = [];
 
-  for (const item of subredditListing.data.children) {
+  for (const item of subredditsSource?.data.children ?? []) {
     const name = item.data.display_name?.trim();
 
     if (!name) {
@@ -325,7 +333,7 @@ export async function fetchGlobalSearch(query: string): Promise<GlobalSearchResu
 
   const users: SearchUserResult[] = [];
 
-  for (const item of userListing.data.children) {
+  for (const item of usersSource?.data.children ?? []) {
     const name = item.data.name?.trim();
 
     if (!name) {

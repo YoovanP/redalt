@@ -16,8 +16,17 @@ function buildUpstreamPath(paramsPath: string | string[] | undefined, url: URL):
 export async function onRequest(context: PagesFunctionContext): Promise<Response> {
   const incomingUrl = new URL(context.request.url);
   const upstreamPath = buildUpstreamPath(context.params.path, incomingUrl);
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
 
-  if (!upstreamPath.startsWith('/r/')) {
+  const allowedPrefix =
+    normalizedPath.startsWith('/r/') ||
+    normalizedPath.startsWith('/user/') ||
+    normalizedPath.startsWith('/search.json') ||
+    normalizedPath.startsWith('/subreddits/') ||
+    normalizedPath.startsWith('/users/') ||
+    normalizedPath.startsWith('/api/search_reddit_names.json');
+
+  if (!allowedPrefix) {
     return new Response('Invalid Reddit path', { status: 400 });
   }
 
