@@ -285,6 +285,7 @@ input:focus, select:focus {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  width: 100%;
   gap: 0.55rem;
 }
 
@@ -355,12 +356,13 @@ input:focus, select:focus {
 }
 
 .subreddit-form-wide {
-  flex: 1;
-  width: min(980px, 100%);
+  flex: 1 1 640px;
+  width: auto;
+  min-width: 0;
 }
 
 .subreddit-form-wide .subreddit-input-wrap {
-  min-width: min(760px, 100%);
+  min-width: 0;
 }
 
 .search-submit-button-mobile {
@@ -414,9 +416,10 @@ input:focus, select:focus {
 }
 
 .custom-feed {
-  width: min(560px, 100%);
+  width: min(460px, 100%);
   display: grid;
   gap: 0.35rem;
+  justify-self: start;
 }
 
 .feed-settings-menu {
@@ -541,6 +544,66 @@ input:focus, select:focus {
 .search-page {
   display: grid;
   gap: 1rem;
+}
+
+.home-page {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.home-hero,
+.home-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  padding: 0.95rem;
+}
+
+.home-hero h2,
+.home-card h3 {
+  margin: 0 0 0.4rem;
+}
+
+.home-hero p {
+  margin: 0;
+  opacity: 0.88;
+}
+
+.home-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.home-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.45rem;
+}
+
+.home-form input,
+.home-form button {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.42rem 0.6rem;
+}
+
+.home-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.home-chip {
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.26rem 0.58rem;
+  text-decoration: none;
+  font-size: 0.9rem;
 }
 
 .library-page {
@@ -1205,6 +1268,10 @@ input:focus, select:focus {
   }
 
   .post-list {
+    grid-template-columns: 1fr;
+  }
+
+  .home-form {
     grid-template-columns: 1fr;
   }
 

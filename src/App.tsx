@@ -4,6 +4,7 @@ import { CustomFeedBuilder } from './components/CustomFeedBuilder';
 import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
+import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { PostDetailPage } from './pages/PostDetailPage';
 import { SearchPage } from './pages/SearchPage';
@@ -135,7 +136,7 @@ function AppLayout() {
 
       <main>
         <Routes>
-          <Route path="/" element={<Navigate to="/r/mildlyinfuriating" replace />} />
+          <Route path="/" element={<HomePage />} />
           <Route path="/r/:name" element={<SubredditPage />} />
           <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
           <Route path="/u/:username" element={<UserPage />} />
@@ -143,7 +144,7 @@ function AppLayout() {
           <Route path="/search" element={<SearchPage />} />
           <Route path="/saved" element={<LibraryPage mode="saved" />} />
           <Route path="/history" element={<LibraryPage mode="history" />} />
-          <Route path="*" element={<Navigate to="/r/mildlyinfuriating" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>
