@@ -13,7 +13,7 @@ import { UserPage } from './pages/UserPage';
 
 function currentSubreddit(pathname: string): string {
   const match = pathname.match(/^\/r\/([^/]+)/i);
-  return match?.[1] ?? 'mildlyinfuriating';
+  return match?.[1] ?? '';
 }
 
 export default function App() {
@@ -27,6 +27,7 @@ export default function App() {
 function AppLayout() {
   const location = useLocation();
   const subreddit = currentSubreddit(location.pathname);
+  const isHome = location.pathname === '/';
   const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string } | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(() => {
     try {
@@ -82,57 +83,59 @@ function AppLayout() {
         </div>
       )}
 
-      <header
-        className={`app-header${persistentHeader ? '' : ' app-header-static'}${
-          videoFeedMode ? ' app-header-media-only' : ''
-        }${!videoFeedMode && !headerExpanded ? ' app-header-compact' : ''
-        }`}
-      >
-        {videoFeedMode ? (
-          <label className="media-mode-inline-toggle">
-            <input
-              type="checkbox"
-              checked={videoFeedMode}
-              onChange={(event) => updateSettings({ videoFeedMode: event.target.checked })}
-            />
-            Media feed mode
-          </label>
-        ) : (
-          <>
-            <div className="header-top">
-              <div className="app-brand">
-                <h1>RedAlt</h1>
+      {!isHome && (
+        <header
+          className={`app-header${persistentHeader ? '' : ' app-header-static'}${
+            videoFeedMode ? ' app-header-media-only' : ''
+          }${!videoFeedMode && !headerExpanded ? ' app-header-compact' : ''
+          }`}
+        >
+          {videoFeedMode ? (
+            <label className="media-mode-inline-toggle">
+              <input
+                type="checkbox"
+                checked={videoFeedMode}
+                onChange={(event) => updateSettings({ videoFeedMode: event.target.checked })}
+              />
+              Media feed mode
+            </label>
+          ) : (
+            <>
+              <div className="header-top">
+                <div className="app-brand">
+                  <h1>RedAlt</h1>
+                </div>
+                <div className="header-controls">
+                  <SubredditSwitcher initialSubreddit={subreddit} wide />
+                  <nav className="header-nav-links" aria-label="Quick links">
+                    <Link to="/saved">Saved</Link>
+                    <Link to="/history">History</Link>
+                    <button
+                      type="button"
+                      className="header-expand-toggle"
+                      aria-label={headerExpanded ? 'Collapse header' : 'Expand header'}
+                      title={headerExpanded ? 'Collapse header' : 'Expand header'}
+                      onClick={() => setHeaderExpanded((value) => !value)}
+                    >
+                      {headerExpanded ? '^' : 'v'}
+                    </button>
+                  </nav>
+                </div>
               </div>
-              <div className="header-controls">
-                <SubredditSwitcher initialSubreddit={subreddit} wide />
-                <nav className="header-nav-links" aria-label="Quick links">
-                  <Link to="/saved">Saved</Link>
-                  <Link to="/history">History</Link>
-                  <button
-                    type="button"
-                    className="header-expand-toggle"
-                    aria-label={headerExpanded ? 'Collapse header' : 'Expand header'}
-                    title={headerExpanded ? 'Collapse header' : 'Expand header'}
-                    onClick={() => setHeaderExpanded((value) => !value)}
-                  >
-                    {headerExpanded ? '^' : 'v'}
-                  </button>
-                </nav>
-              </div>
-            </div>
 
-            <div className="header-row">
-              <FeedSettings />
-            </div>
-
-            {headerExpanded && (
               <div className="header-row">
-                <CustomFeedBuilder currentSubreddit={subreddit} />
+                <FeedSettings />
               </div>
-            )}
-          </>
-        )}
-      </header>
+
+              {headerExpanded && (
+                <div className="header-row">
+                  <CustomFeedBuilder currentSubreddit={subreddit} />
+                </div>
+              )}
+            </>
+          )}
+        </header>
+      )}
 
       <main>
         <Routes>
