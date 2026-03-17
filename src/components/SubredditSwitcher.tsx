@@ -4,6 +4,7 @@ import { fetchSubredditSuggestions } from '../lib/redditApi';
 
 type SubredditSwitcherProps = {
   initialSubreddit: string;
+  wide?: boolean;
 };
 
 function isRedditHost(hostname: string): boolean {
@@ -96,7 +97,7 @@ function isExplicitSubredditInput(input: string): boolean {
   return /^(?:\/?r\/|r\/)/i.test(trimmed);
 }
 
-export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) {
+export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditSwitcherProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const subredditQuerySuffix = location.pathname.startsWith('/r/') ? location.search : '';
@@ -164,7 +165,7 @@ export function SubredditSwitcher({ initialSubreddit }: SubredditSwitcherProps) 
   };
 
   return (
-    <form className="subreddit-form" onSubmit={onSubmit}>
+    <form className={`subreddit-form${wide ? ' subreddit-form-wide' : ''}`} onSubmit={onSubmit}>
       <div className="subreddit-input-wrap">
         <input
           value={value}

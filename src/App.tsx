@@ -27,10 +27,22 @@ function AppLayout() {
   const location = useLocation();
   const subreddit = currentSubreddit(location.pathname);
   const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string } | null>(null);
+  const [headerExpanded, setHeaderExpanded] = useState(() => {
+    try {
+      const raw = localStorage.getItem('redalt.headerExpanded');
+      return raw === null ? true : raw === 'true';
+    } catch {
+      return true;
+    }
+  });
   const {
     settings: { persistentHeader, videoFeedMode },
     updateSettings,
   } = useUiSettings();
+
+  useEffect(() => {
+    localStorage.setItem('redalt.headerExpanded', String(headerExpanded));
+  }, [headerExpanded]);
 
   useEffect(() => {
     const onApiStatus = (event: Event) => {
@@ -72,6 +84,7 @@ function AppLayout() {
       <header
         className={`app-header${persistentHeader ? '' : ' app-header-static'}${
           videoFeedMode ? ' app-header-media-only' : ''
+        }${!videoFeedMode && !headerExpanded ? ' app-header-compact' : ''
         }`}
       >
         {videoFeedMode ? (
@@ -90,10 +103,13 @@ function AppLayout() {
                 <h1>RedAlt</h1>
               </div>
               <div className="header-controls">
-                <SubredditSwitcher initialSubreddit={subreddit} />
+                <SubredditSwitcher initialSubreddit={subreddit} wide={!headerExpanded} />
                 <nav className="header-nav-links" aria-label="Quick links">
                   <Link to="/saved">Saved</Link>
                   <Link to="/history">History</Link>
+                  <button type="button" onClick={() => setHeaderExpanded((value) => !value)}>
+                    {headerExpanded ? 'Compact header' : 'Expand header'}
+                  </button>
                 </nav>
               </div>
             </div>
@@ -102,9 +118,11 @@ function AppLayout() {
               <FeedSettings />
             </div>
 
-            <div className="header-row">
-              <CustomFeedBuilder currentSubreddit={subreddit} />
-            </div>
+            {headerExpanded && (
+              <div className="header-row">
+                <CustomFeedBuilder currentSubreddit={subreddit} />
+              </div>
+            )}
           </>
         )}
       </header>
