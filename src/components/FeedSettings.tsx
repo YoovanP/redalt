@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import type { ListingSort, TopTimeRange } from '../lib/redditApi';
 import { SortControls } from './SortControls';
@@ -37,6 +37,7 @@ export function FeedSettings() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { settings, updateSettings } = useUiSettings();
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLElement | null>(null);
   const sort = getValidatedSort(searchParams.get('sort'));
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const canSort = supportsSortControls(location.pathname);
@@ -61,8 +62,30 @@ export function FeedSettings() {
     setSearchParams(nextParams);
   };
 
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node | null;
+
+      if (target && rootRef.current && !rootRef.current.contains(target)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown, { passive: true });
+
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+    };
+  }, [open]);
+
   return (
-    <section className="feed-settings-menu">
+    <section ref={rootRef} className="feed-settings-menu">
       <button
         type="button"
         className="menu-toggle"
