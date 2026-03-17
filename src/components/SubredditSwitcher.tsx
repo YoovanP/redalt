@@ -204,7 +204,10 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
           </ul>
         )}
       </div>
-      <button type="submit">Go</button>
+      <button type="submit" className="search-submit-button">Go</button>
+      <button type="submit" className="search-submit-button-mobile" aria-label="Search">
+        Search
+      </button>
     </form>
   );
 }
