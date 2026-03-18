@@ -8,7 +8,7 @@ import type {
   RedditPostData,
 } from '../types/reddit';
 
-const REDDIT_BASES = ['/api/reddit', 'https://www.reddit.com'];
+const REDDIT_BASES = ['/api/reddit'];
 const PAGE_SIZE = 8;
 
 export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
@@ -124,6 +124,7 @@ function normalizeUserName(input: string): string {
 
 async function fetchReddit<T>(path: string): Promise<T> {
   let lastError: unknown;
+  let lastApiError: RedditApiError | null = null;
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
     for (const base of REDDIT_BASES) {
@@ -148,6 +149,12 @@ async function fetchReddit<T>(path: string): Promise<T> {
           throw new RedditApiError(getApiErrorMessage(response.status), response.status);
         }
 
+        const contentType = response.headers.get('Content-Type') ?? '';
+
+        if (!contentType.toLowerCase().includes('application/json')) {
+          throw new RedditApiError('Reddit returned an unexpected response format.', 502);
+        }
+
         notifyApiStatus('ok', 'Connected to Reddit.');
 
         return (await response.json()) as T;
@@ -155,10 +162,14 @@ async function fetchReddit<T>(path: string): Promise<T> {
         lastError = error;
 
         if (error instanceof RedditApiError) {
+          lastApiError = error;
+        }
+
+        if (error instanceof RedditApiError) {
           if (error.status === 429) {
-            notifyApiStatus('warn', 'Reddit rate limit hit. Retrying with fallback...');
+            notifyApiStatus('warn', 'Reddit rate limit hit. Retrying...');
           } else if (error.status >= 500 || error.status === 0) {
-            notifyApiStatus('error', 'Reddit connection issue. Trying fallback endpoint...');
+            notifyApiStatus('error', 'Reddit connection issue. Retrying...');
           }
         }
 
@@ -171,6 +182,10 @@ async function fetchReddit<T>(path: string): Promise<T> {
     if (cycle === 0) {
       await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
     }
+  }
+
+  if (lastApiError) {
+    throw lastApiError;
   }
 
   if (lastError instanceof RedditApiError) {

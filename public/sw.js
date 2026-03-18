@@ -48,7 +48,8 @@ self.addEventListener('fetch', (event) => {
             return cached;
           }
 
-          return caches.match('/index.html') || new Response('Offline', { status: 503 });
+          const fallback = await caches.match('/index.html');
+          return fallback ?? new Response('Offline', { status: 503 });
         }),
     );
     return;
@@ -82,7 +83,10 @@ self.addEventListener('fetch', (event) => {
           caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, cloned));
           return response;
         })
-        .catch(() => caches.match('/index.html'));
+        .catch(async () => {
+          const fallback = await caches.match('/index.html');
+          return fallback ?? new Response('Offline', { status: 503 });
+        });
     }),
   );
 });
