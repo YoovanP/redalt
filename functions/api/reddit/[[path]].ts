@@ -5,7 +5,7 @@ type PagesFunctionContext = {
   };
 };
 
-const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://old.reddit.com'];
+const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 
 function isJsonContentType(contentType: string | null): boolean {
   return (contentType ?? '').toLowerCase().includes('application/json');
@@ -26,6 +26,18 @@ async function isBlockedHtmlResponse(response: Response): Promise<boolean> {
   const normalized = body.toLowerCase();
 
   return normalized.includes("you've been blocked by network security") || normalized.includes('blocked by network security');
+}
+
+async function fetchViaAllOrigins(upstreamPath: string): Promise<Response> {
+  const redditUrl = `https://www.reddit.com${upstreamPath}`;
+  const mirrorUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(redditUrl)}`;
+
+  return fetch(mirrorUrl, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'RedAlt/1.0 (Cloudflare Pages proxy)',
+    },
+  });
 }
 
 function buildUpstreamPath(paramsPath: string | string[] | undefined, url: URL): string {
@@ -106,6 +118,20 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
         headers,
       });
     }
+  }
+
+  const mirrorResponse = await fetchViaAllOrigins(upstreamPath);
+
+  if (mirrorResponse.ok && isJsonContentType(mirrorResponse.headers.get('Content-Type'))) {
+    const headers = new Headers();
+    headers.set('Content-Type', mirrorResponse.headers.get('Content-Type') ?? 'application/json');
+    headers.set('Cache-Control', 'public, max-age=30, s-maxage=120');
+
+    return new Response(mirrorResponse.body, {
+      status: mirrorResponse.status,
+      statusText: mirrorResponse.statusText,
+      headers,
+    });
   }
 
   return (

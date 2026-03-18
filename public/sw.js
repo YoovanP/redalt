@@ -1,7 +1,7 @@
-const CACHE_VERSION = 'redalt-v2';
+const CACHE_VERSION = 'redalt-v3';
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
-const APP_SHELL_FILES = ['/manifest.webmanifest', '/icon-192.svg', '/icon-512.svg'];
+const APP_SHELL_FILES = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.svg', '/icon-512.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -48,7 +48,7 @@ self.addEventListener('fetch', (event) => {
             return cached;
           }
 
-          const fallback = await caches.match('/index.html');
+          const fallback = (await caches.match('/index.html')) ?? (await caches.match('/'));
           return fallback ?? new Response('Offline', { status: 503 });
         }),
     );
@@ -84,7 +84,7 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(async () => {
-          const fallback = await caches.match('/index.html');
+          const fallback = (await caches.match('/index.html')) ?? (await caches.match('/'));
           return fallback ?? new Response('Offline', { status: 503 });
         });
     }),
