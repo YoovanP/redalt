@@ -880,33 +880,6 @@ input:focus, select:focus {
   margin: 0.5rem 0 0.75rem;
 }
 
-.redgifs-mode-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  margin: 0 0 0.5rem;
-}
-
-.redgifs-mode-button {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 0.24rem 0.58rem;
-  font-size: 0.78rem;
-  font-weight: 600;
-}
-
-.redgifs-mode-button.is-active {
-  border-color: color-mix(in srgb, var(--link) 65%, var(--input-border));
-  background: color-mix(in srgb, var(--input-bg) 75%, var(--link) 25%);
-}
-
-.redgifs-mode-button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
 .post-image,
 .post-video,
 .external-frame {
