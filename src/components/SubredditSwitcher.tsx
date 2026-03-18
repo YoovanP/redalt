@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { fetchSubredditSuggestions } from '../lib/redditApi';
+import { fetchMixedSearchSuggestions, type MixedSearchSuggestion } from '../lib/redditApi';
 
 type SubredditSwitcherProps = {
   initialSubreddit: string;
@@ -102,9 +102,15 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
   const location = useLocation();
   const subredditQuerySuffix = location.pathname.startsWith('/r/') ? location.search : '';
   const [value, setValue] = useState(initialSubreddit);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [suggestions, setSuggestions] = useState<MixedSearchSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+
+  useEffect(() => {
+    if (!isFocused) {
+      setValue(initialSubreddit);
+    }
+  }, [initialSubreddit, isFocused]);
 
   const normalizedValue = useMemo(
     () => {
@@ -119,7 +125,7 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
 
   useEffect(() => {
     const handle = window.setTimeout(async () => {
-      const nextSuggestions = await fetchSubredditSuggestions(value);
+      const nextSuggestions = await fetchMixedSearchSuggestions(value);
       setSuggestions(nextSuggestions);
 
       const canShow = isFocused && normalizedValue.length >= 2 && nextSuggestions.length > 0;
@@ -158,10 +164,16 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
     navigate(`/r/${subreddit}${subredditQuerySuffix}`);
   };
 
-  const onPickSuggestion = (subreddit: string) => {
-    setValue(subreddit);
+  const onPickSuggestion = (suggestion: MixedSearchSuggestion) => {
+    setValue(suggestion.label);
     setShowSuggestions(false);
-    navigate(`/r/${subreddit}${subredditQuerySuffix}`);
+    if (suggestion.kind === 'subreddit') {
+      const subreddit = suggestion.label.replace(/^r\//i, '');
+      navigate(`/r/${subreddit}${subredditQuerySuffix}`);
+      return;
+    }
+
+    navigate(suggestion.route);
   };
 
   return (
@@ -193,11 +205,17 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
         />
 
         {showSuggestions && (
-          <ul className="subreddit-suggestions" role="listbox" aria-label="Subreddit suggestions">
+          <ul className="subreddit-suggestions" role="listbox" aria-label="Search suggestions">
             {suggestions.map((suggestion) => (
-              <li key={suggestion}>
+              <li key={`${suggestion.kind}:${suggestion.route}`}>
                 <button type="button" onMouseDown={() => onPickSuggestion(suggestion)}>
-                  r/{suggestion}
+                  <span className={`subreddit-suggestion-type suggestion-${suggestion.kind}`}>
+                    {suggestion.kind}
+                  </span>
+                  <span className="subreddit-suggestion-main">{suggestion.label}</span>
+                  {suggestion.subtitle && (
+                    <span className="subreddit-suggestion-subtitle">{suggestion.subtitle}</span>
+                  )}
                 </button>
               </li>
             ))}

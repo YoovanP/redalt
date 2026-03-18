@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
-import { addWatchHistory } from '../lib/localLibrary';
+import { useNavigate } from 'react-router-dom';
+import { addWatchHistory, toggleSavedPost } from '../lib/localLibrary';
 import { RenderMedia } from './media/RenderMedia';
 import type { NormalizedPost } from '../types/reddit';
 
@@ -11,10 +12,29 @@ type ShortsFeedProps = {
 };
 
 export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFeedProps) {
+  const navigate = useNavigate();
   const feedRef = useRef<HTMLDivElement | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLElement | null>>([]);
+  const gestureRef = useRef<{
+    index: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+    longPressTriggered: boolean;
+    lastTapAt: number;
+    longPressTimer?: number;
+  }>({
+    index: -1,
+    startX: 0,
+    startY: 0,
+    moved: false,
+    longPressTriggered: false,
+    lastTapAt: 0,
+  });
   const [activeIndex, setActiveIndex] = useState(0);
+  const [quickMenuIndex, setQuickMenuIndex] = useState<number | null>(null);
+  const [gestureMessage, setGestureMessage] = useState<string | null>(null);
   const [shortsMuted, setShortsMuted] = useState(() => {
     const raw = localStorage.getItem('redalt.shortsMuted');
     return raw === null ? true : raw === 'true';
@@ -189,6 +209,126 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
 
   const triggerIndex = Math.max(0, posts.length - 3);
 
+  const scrollToIndex = (index: number) => {
+    const clamped = Math.max(0, Math.min(posts.length - 1, index));
+    const target = itemRefs.current[clamped];
+
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const openComments = (index: number) => {
+    const post = posts[index];
+
+    if (!post) {
+      return;
+    }
+
+    navigate(`/r/${post.subreddit}/comments/${post.id}`);
+  };
+
+  const onTouchPointerDown = (index: number, event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+
+    const gesture = gestureRef.current;
+    gesture.index = index;
+    gesture.startX = event.clientX;
+    gesture.startY = event.clientY;
+    gesture.moved = false;
+    gesture.longPressTriggered = false;
+
+    if (gesture.longPressTimer) {
+      window.clearTimeout(gesture.longPressTimer);
+    }
+
+    gesture.longPressTimer = window.setTimeout(() => {
+      if (!gesture.moved) {
+        setQuickMenuIndex(index);
+        gesture.longPressTriggered = true;
+      }
+    }, 520);
+  };
+
+  const onTouchPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+
+    const gesture = gestureRef.current;
+    const deltaX = Math.abs(event.clientX - gesture.startX);
+    const deltaY = Math.abs(event.clientY - gesture.startY);
+
+    if (deltaX > 12 || deltaY > 12) {
+      gesture.moved = true;
+
+      if (gesture.longPressTimer) {
+        window.clearTimeout(gesture.longPressTimer);
+        gesture.longPressTimer = undefined;
+      }
+    }
+  };
+
+  const onTouchPointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    if (event.pointerType !== 'touch') {
+      return;
+    }
+
+    const gesture = gestureRef.current;
+
+    if (gesture.longPressTimer) {
+      window.clearTimeout(gesture.longPressTimer);
+      gesture.longPressTimer = undefined;
+    }
+
+    const dx = event.clientX - gesture.startX;
+    const dy = event.clientY - gesture.startY;
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+
+    if (gesture.longPressTriggered) {
+      return;
+    }
+
+    if (absDx > 64 && absDx > absDy) {
+      if (dx < 0) {
+        scrollToIndex(gesture.index + 1);
+      } else {
+        openComments(gesture.index);
+      }
+      return;
+    }
+
+    if (absDx < 12 && absDy < 12) {
+      const now = Date.now();
+
+      if (now - gesture.lastTapAt < 280) {
+        const post = posts[gesture.index];
+
+        if (post) {
+          const saved = toggleSavedPost(post);
+          setGestureMessage(saved ? 'Saved' : 'Unsaved');
+          window.setTimeout(() => setGestureMessage(null), 1200);
+        }
+
+        gesture.lastTapAt = 0;
+      } else {
+        gesture.lastTapAt = now;
+      }
+    }
+  };
+
+  const onTouchPointerCancel = () => {
+    const gesture = gestureRef.current;
+
+    if (gesture.longPressTimer) {
+      window.clearTimeout(gesture.longPressTimer);
+      gesture.longPressTimer = undefined;
+    }
+  };
+
   return (
     <div
       ref={feedRef}
@@ -231,6 +371,10 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
             itemRefs.current[index] = element;
           }}
           data-index={index}
+          onPointerDown={(event) => onTouchPointerDown(index, event)}
+          onPointerMove={onTouchPointerMove}
+          onPointerUp={onTouchPointerUp}
+          onPointerCancel={onTouchPointerCancel}
         >
           {index === triggerIndex && hasMore && <div ref={nearEndRef} className="near-end-trigger" />}
           <div className="shorts-media-wrap">
@@ -244,8 +388,50 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
               </p>
             </div>
           )}
+
+          {quickMenuIndex === index && (
+            <div className="shorts-quick-menu" role="menu" aria-label="Quick actions">
+              <button type="button" onClick={() => openComments(index)}>
+                Comments
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const saved = toggleSavedPost(post);
+                  setGestureMessage(saved ? 'Saved' : 'Unsaved');
+                  setQuickMenuIndex(null);
+                  window.setTimeout(() => setGestureMessage(null), 1200);
+                }}
+              >
+                Save / Unsave
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(`https://www.reddit.com${post.permalink}`, '_blank', 'noopener,noreferrer');
+                  setQuickMenuIndex(null);
+                }}
+              >
+                Open on Reddit
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(post.outboundUrl, '_blank', 'noopener,noreferrer');
+                  setQuickMenuIndex(null);
+                }}
+              >
+                Open source
+              </button>
+              <button type="button" onClick={() => setQuickMenuIndex(null)}>
+                Close
+              </button>
+            </div>
+          )}
         </article>
       ))}
+
+      {gestureMessage && <div className="shorts-gesture-message">{gestureMessage}</div>}
     </div>
   );
 }

@@ -69,6 +69,13 @@ export type GlobalSearchResult = {
   users: SearchUserResult[];
 };
 
+export type MixedSearchSuggestion = {
+  kind: 'post' | 'subreddit' | 'user';
+  label: string;
+  route: string;
+  subtitle?: string;
+};
+
 export type SearchSort = 'relevance' | 'hot' | 'new' | 'top' | 'comments';
 
 export type GlobalSearchOptions = {
@@ -313,6 +320,101 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
   } catch {
     return [];
   }
+}
+
+export async function fetchMixedSearchSuggestions(query: string): Promise<MixedSearchSuggestion[]> {
+  const cleaned = query.trim();
+
+  if (cleaned.length < 2) {
+    return [];
+  }
+
+  const [subredditTypeahead, userListing, postListing] = await Promise.allSettled([
+    fetchReddit<SubredditTypeaheadResponse>(
+      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+    ),
+    fetchReddit<UserSearchResponse>(
+      `/users/search.json?raw_json=1&include_over_18=on&limit=5&q=${encodeURIComponent(cleaned)}`,
+    ),
+    fetchReddit<RedditListingResponse>(
+      `/search.json?raw_json=1&sort=relevance&type=link&limit=6&q=${encodeURIComponent(cleaned)}`,
+    ),
+  ]);
+
+  const suggestions: MixedSearchSuggestion[] = [];
+  const seen = new Set<string>();
+
+  if (postListing.status === 'fulfilled') {
+    for (const item of postListing.value.data.children) {
+      if (item.kind !== 't3') {
+        continue;
+      }
+
+      const post = item.data;
+      const key = `post:${post.id}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      suggestions.push({
+        kind: 'post',
+        label: post.title,
+        route: `/r/${post.subreddit}/comments/${post.id}`,
+        subtitle: `r/${post.subreddit} · u/${post.author}`,
+      });
+    }
+  }
+
+  if (subredditTypeahead.status === 'fulfilled') {
+    for (const name of subredditTypeahead.value.names ?? []) {
+      const trimmed = name.trim();
+
+      if (!trimmed) {
+        continue;
+      }
+
+      const key = `subreddit:${trimmed.toLowerCase()}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      suggestions.push({
+        kind: 'subreddit',
+        label: `r/${trimmed}`,
+        route: `/r/${trimmed}`,
+      });
+    }
+  }
+
+  if (userListing.status === 'fulfilled') {
+    for (const item of userListing.value.data.children) {
+      const name = item.data.name?.trim();
+
+      if (!name) {
+        continue;
+      }
+
+      const key = `user:${name.toLowerCase()}`;
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      suggestions.push({
+        kind: 'user',
+        label: `u/${name}`,
+        route: `/u/${name}`,
+        subtitle: `${(item.data.total_karma ?? 0).toLocaleString()} karma`,
+      });
+    }
+  }
+
+  return suggestions.slice(0, 12);
 }
 
 export async function fetchGlobalSearch(
