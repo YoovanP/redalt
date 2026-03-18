@@ -173,6 +173,10 @@ async function fetchReddit<T>(path: string): Promise<T> {
           }
         }
 
+        if (error instanceof RedditApiError && error.status >= 400 && error.status < 500 && error.status !== 429) {
+          throw error;
+        }
+
         if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {
           continue;
         }

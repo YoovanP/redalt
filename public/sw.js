@@ -1,7 +1,34 @@
-const CACHE_VERSION = 'redalt-v3';
+const CACHE_VERSION = 'redalt-v4';
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const APP_SHELL_FILES = ['/', '/index.html', '/manifest.webmanifest', '/icon-192.svg', '/icon-512.svg'];
+
+function isCacheableRequest(request) {
+  if (!request || request.method !== 'GET') {
+    return false;
+  }
+
+  const protocol = new URL(request.url).protocol;
+  return protocol === 'http:' || protocol === 'https:';
+}
+
+function isCacheableResponse(response) {
+  return response && response.ok;
+}
+
+function storeInRuntimeCache(request, response) {
+  if (!isCacheableRequest(request) || !isCacheableResponse(response)) {
+    return;
+  }
+
+  const cloned = response.clone();
+  caches
+    .open(RUNTIME_CACHE)
+    .then((cache) => cache.put(request, cloned))
+    .catch(() => {
+      // Ignore cache write errors to avoid crashing fetch handling.
+    });
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -33,12 +60,15 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return;
+  }
+
    if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const cloned = response.clone();
-          caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, cloned));
+          storeInRuntimeCache(request, response);
           return response;
         })
         .catch(async () => {
@@ -59,8 +89,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const cloned = response.clone();
-          caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, cloned));
+          storeInRuntimeCache(request, response);
           return response;
         })
         .catch(async () => {
@@ -79,8 +108,7 @@ self.addEventListener('fetch', (event) => {
 
       return fetch(request)
         .then((response) => {
-          const cloned = response.clone();
-          caches.open(RUNTIME_CACHE).then((cache) => cache.put(request, cloned));
+          storeInRuntimeCache(request, response);
           return response;
         })
         .catch(async () => {
