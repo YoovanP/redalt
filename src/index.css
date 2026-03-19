@@ -1424,10 +1424,21 @@ input:focus, select:focus {
 
 .comment-body {
   margin: 0.35rem 0 0;
-  white-space: pre-wrap;
-  line-height: 1.35;
+  line-height: 1.4;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.comment-body p,
+.comment-body ul,
+.comment-body ol,
+.comment-body pre,
+.comment-body blockquote {
+  margin-bottom: 0.6rem;
+}
+
+.comment-body > :last-child {
+  margin-bottom: 0;
 }
 
 .comment-toggle {
@@ -1460,7 +1471,7 @@ input:focus, select:focus {
   }
 
   .comment-body {
-    font-size: 0.93rem;
+    font-size: 0.9rem;
     line-height: 1.4;
   }
 }

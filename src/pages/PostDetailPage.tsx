@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { MarkdownText } from '../components/MarkdownText';
 import { RenderMedia } from '../components/media/RenderMedia';
 import { StateView } from '../components/StateView';
 import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
@@ -30,7 +31,7 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
           </span>
         )}
       </div>
-      <p className="comment-body">{comment.body}</p>
+      <MarkdownText text={comment.body} className="self-text-markdown comment-body" />
 
       {comment.replies.length > 0 && (
         <>
@@ -156,7 +157,7 @@ export function PostDetailPage() {
       <RenderMedia post={normalized} expanded />
 
       {normalized.media.type !== 'text' && normalized.selfText.trim() && (
-        <p className="self-text">{normalized.selfText}</p>
+        <MarkdownText text={normalized.selfText} className="self-text-markdown self-text" />
       )}
 
       <p className="post-links">

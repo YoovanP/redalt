@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { isPostSaved, toggleSavedPost } from '../lib/localLibrary';
+import { MarkdownText } from './MarkdownText';
 import { RenderMedia } from './media/RenderMedia';
 import type { CardMode } from '../lib/uiSettings';
 import type { NormalizedPost } from '../types/reddit';
@@ -26,10 +27,10 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
 
   const trimmedSelfText = post.selfText.trim();
   const isLongText = trimmedSelfText.length > PREVIEW_TEXT_LIMIT;
-  const shownText =
+  const textClassName =
     isLongText && !showFullText
-      ? `${trimmedSelfText.slice(0, PREVIEW_TEXT_LIMIT).trimEnd()}…`
-      : trimmedSelfText;
+      ? 'self-text-markdown self-text-collapsed self-text-preview'
+      : 'self-text-markdown self-text-preview';
 
   const onShare = async () => {
     const shareUrl = `https://www.reddit.com${post.permalink}`;
@@ -71,7 +72,7 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
 
       {trimmedSelfText && post.media.type !== 'text' && (
         <div>
-          <p className="self-text self-text-preview">{shownText}</p>
+          <MarkdownText text={trimmedSelfText} className={textClassName} />
           {isLongText && (
             <button
               type="button"
