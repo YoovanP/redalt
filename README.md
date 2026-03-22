@@ -41,6 +41,35 @@ Open http://localhost:5173
 npm run build
 ```
 
+## Deployment (Vercel)
+
+1. Install and login to Vercel CLI.
+2. Deploy production from project root.
+
+```bash
+npm i -g vercel
+vercel login
+vercel --prod
+```
+
+### API Proxy Base Configuration
+
+The frontend reads Reddit proxy bases from `VITE_REDDIT_API_BASES`.
+
+- Default: `/api/reddit`
+- Multiple bases are supported as a comma-separated list.
+- Useful for switching proxy providers without code changes.
+
+Examples:
+
+```bash
+VITE_REDDIT_API_BASES=/api/reddit
+VITE_REDDIT_API_BASES=https://my-proxy.example.com/api/reddit
+VITE_REDDIT_API_BASES=https://proxy-a.example.com/api/reddit,https://proxy-b.example.com/api/reddit
+```
+
+For Vercel, set this in Project Settings -> Environment Variables.
+
 ## Project Notes
 
 - Uses `raw_json=1` Reddit endpoints for cleaner payload parsing.

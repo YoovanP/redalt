@@ -8,8 +8,32 @@ import type {
   RedditPostData,
 } from '../types/reddit';
 
-const REDDIT_BASES = ['/api/reddit'];
+const DEFAULT_REDDIT_BASE = '/api/reddit';
+const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const PAGE_SIZE = 8;
+
+function normalizeBase(base: string): string {
+  const trimmed = base.trim();
+
+  if (!trimmed) {
+    return '';
+  }
+
+  return trimmed.replace(/\/+$/g, '');
+}
+
+function resolveRedditBases(rawBases: string | undefined): string[] {
+  const configuredBases = (rawBases ?? '')
+    .split(',')
+    .map((base) => normalizeBase(base))
+    .filter((base) => base.length > 0);
+
+  if (configuredBases.length === 0) {
+    return [DEFAULT_REDDIT_BASE];
+  }
+
+  return configuredBases;
+}
 
 export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
 export type TopTimeRange = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
