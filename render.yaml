@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: redalt-reddit-proxy
+    runtime: docker
+    rootDir: fly-proxy
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: ENABLE_MIRROR_FALLBACK
+        value: "true"

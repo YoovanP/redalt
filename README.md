@@ -70,6 +70,36 @@ VITE_REDDIT_API_BASES=https://proxy-a.example.com/api/reddit,https://proxy-b.exa
 
 For Vercel, set this in Project Settings -> Environment Variables.
 
+## Render Proxy Backend (Cloudflare-Independent)
+
+This repository includes a standalone Reddit proxy service at [fly-proxy/server.mjs](fly-proxy/server.mjs) that can be deployed on Render.
+
+### Deploy to Render (Web Dashboard)
+
+1. Push this repo to GitHub.
+2. In Render Dashboard, click New + -> Blueprint.
+3. Connect your GitHub repo and select it.
+4. Render will detect [render.yaml](render.yaml) and create a web service automatically.
+5. Click Apply, then wait for deploy to finish.
+
+### Health Check
+
+- `GET /healthz` returns JSON `{ "ok": true }`
+
+### Configure Vercel Frontend to Use Render First
+
+Set `VITE_REDDIT_API_BASES` in Vercel:
+
+```bash
+https://<your-render-service>.onrender.com/api/reddit,https://redalt.pages.dev/api/reddit,/api/reddit
+```
+
+This order gives:
+
+1. Render primary backend
+2. Cloudflare backup
+3. Same-origin Vercel API fallback
+
 ## Project Notes
 
 - Uses `raw_json=1` Reddit endpoints for cleaner payload parsing.
