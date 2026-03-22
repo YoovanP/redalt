@@ -1,4 +1,5 @@
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
+const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
 
 function isJsonContentType(contentType: string | null): boolean {
   return (contentType ?? '').toLowerCase().includes('application/json');
@@ -61,6 +62,25 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   if (!allowedPrefix) {
     res.status(400).setHeader('Content-Type', 'text/plain; charset=utf-8').send('Invalid Reddit path');
+    return;
+  }
+
+  // Prefer a known-working Cloudflare proxy to bypass Vercel egress blocks.
+  const cloudflareResponse = await fetch(`${CLOUDFLARE_PROXY_BASE}${upstreamPath}`, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'RedAlt/1.0 (Vercel proxy)',
+    },
+  });
+
+  if (cloudflareResponse.ok && isJsonContentType(cloudflareResponse.headers.get('content-type'))) {
+    const body = await cloudflareResponse.text();
+
+    res
+      .status(cloudflareResponse.status)
+      .setHeader('Content-Type', cloudflareResponse.headers.get('content-type') ?? 'application/json')
+      .setHeader('Cache-Control', 'public, max-age=30, s-maxage=120')
+      .send(body);
     return;
   }
 

@@ -6,6 +6,10 @@
     {
       "source": "/api/reddit/:path*",
       "destination": "/api/reddit?path=:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }
