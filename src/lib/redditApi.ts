@@ -22,8 +22,12 @@ function normalizeBase(base: string): string {
   return trimmed.replace(/\/+$/g, '');
 }
 
+function isCloudflarePagesHost(): boolean {
+  return typeof window !== 'undefined' && window.location.hostname.endsWith('.pages.dev');
+}
+
 function resolveRedditBases(rawBases: string | undefined): string[] {
-  if (typeof window !== 'undefined' && window.location.hostname.endsWith('.pages.dev')) {
+  if (isCloudflarePagesHost()) {
     return [DEFAULT_REDDIT_BASE];
   }
 
@@ -316,20 +320,22 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
     return [];
   }
 
-  try {
-    const typeahead = await fetchReddit<SubredditTypeaheadResponse>(
-      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
-    );
+  if (!isCloudflarePagesHost()) {
+    try {
+      const typeahead = await fetchReddit<SubredditTypeaheadResponse>(
+        `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+      );
 
-    const names = (typeahead.names ?? [])
-      .map((name) => name.trim())
-      .filter(Boolean);
+      const names = (typeahead.names ?? [])
+        .map((name) => name.trim())
+        .filter(Boolean);
 
-    if (names.length > 0) {
-      return names.slice(0, 8);
+      if (names.length > 0) {
+        return names.slice(0, 8);
+      }
+    } catch {
+      // fallback handled below
     }
-  } catch {
-    // fallback handled below
   }
 
   const cleanedLower = cleaned.toLowerCase();
@@ -376,13 +382,19 @@ export async function fetchMixedSearchSuggestions(query: string): Promise<MixedS
     return [];
   }
 
+  const blockProneSearchEndpoints = isCloudflarePagesHost();
+
   const [subredditTypeahead, userListing, postListing] = await Promise.allSettled([
-    fetchReddit<SubredditTypeaheadResponse>(
-      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
-    ),
-    fetchReddit<UserSearchResponse>(
-      `/users/search.json?raw_json=1&include_over_18=on&limit=5&q=${encodeURIComponent(cleaned)}`,
-    ),
+    blockProneSearchEndpoints
+      ? Promise.resolve<SubredditTypeaheadResponse>({ names: [] })
+      : fetchReddit<SubredditTypeaheadResponse>(
+          `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+        ),
+    blockProneSearchEndpoints
+      ? Promise.resolve<UserSearchResponse>({ kind: 'Listing', data: { children: [] } })
+      : fetchReddit<UserSearchResponse>(
+          `/users/search.json?raw_json=1&include_over_18=on&limit=5&q=${encodeURIComponent(cleaned)}`,
+        ),
     fetchReddit<RedditListingResponse>(
       `/search.json?raw_json=1&sort=relevance&type=link&limit=6&q=${encodeURIComponent(cleaned)}`,
     ),
@@ -500,10 +512,14 @@ export async function fetchGlobalSearch(
     };
   }
 
+  const blockProneSearchEndpoints = isCloudflarePagesHost();
+
   const [postListing, subredditListing, userListing] = await Promise.allSettled([
     fetchReddit<RedditListingResponse>(`${postSearchPath}&${postQueryParts.join('&')}`),
     fetchReddit<SubredditSearchResponse>(`/subreddits/search.json?${communityQueryParts.join('&')}`),
-    fetchReddit<UserSearchResponse>(`/users/search.json?${communityQueryParts.join('&')}`),
+    blockProneSearchEndpoints
+      ? Promise.resolve<UserSearchResponse>({ kind: 'Listing', data: { children: [] } })
+      : fetchReddit<UserSearchResponse>(`/users/search.json?${communityQueryParts.join('&')}`),
   ]);
 
   const postsSource = postListing.status === 'fulfilled' ? postListing.value : null;
