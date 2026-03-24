@@ -23,6 +23,10 @@ function normalizeBase(base: string): string {
 }
 
 function resolveRedditBases(rawBases: string | undefined): string[] {
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('.pages.dev')) {
+    return [DEFAULT_REDDIT_BASE];
+  }
+
   const configuredBases = (rawBases ?? '')
     .split(',')
     .map((base) => normalizeBase(base))

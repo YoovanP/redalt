@@ -74,13 +74,23 @@ For Vercel, set this in Project Settings -> Environment Variables.
 
 This repository includes a standalone Reddit proxy service at [fly-proxy/server.mjs](fly-proxy/server.mjs) that can be deployed on Render.
 
+Render uses [fly-proxy/package.json](fly-proxy/package.json) to run this as a native Node Web Service (no Docker required).
+
 ### Deploy to Render (Web Dashboard)
 
 1. Push this repo to GitHub.
-2. In Render Dashboard, click New + -> Blueprint.
-3. Connect your GitHub repo and select it.
-4. Render will detect [render.yaml](render.yaml) and create a web service automatically.
-5. Click Apply, then wait for deploy to finish.
+2. In Render Dashboard, click New + -> Web Service.
+3. Connect your GitHub repo.
+4. Configure these values:
+  - Root Directory: `fly-proxy`
+  - Runtime: `Node`
+  - Build Command: `npm ci --omit=dev`
+  - Start Command: `npm run start`
+  - Health Check Path: `/healthz`
+5. Add environment variable: `ENABLE_MIRROR_FALLBACK=true`.
+6. Create Web Service and wait for deploy.
+
+If you prefer one-click provisioning, Render can also read [render.yaml](render.yaml) via New + -> Blueprint.
 
 ### Health Check
 

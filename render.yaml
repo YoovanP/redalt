@@ -1,11 +1,15 @@
 services:
   - type: web
     name: redalt-reddit-proxy
-    runtime: docker
+    runtime: node
     rootDir: fly-proxy
-    dockerfilePath: ./Dockerfile
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm run start
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
+      - key: NODE_VERSION
+        value: "22"
       - key: ENABLE_MIRROR_FALLBACK
         value: "true"
