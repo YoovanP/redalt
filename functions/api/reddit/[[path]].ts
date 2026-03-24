@@ -7,6 +7,22 @@ type PagesFunctionContext = {
 
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Accept',
+};
+
+function withCors(headers: HeadersInit = {}): Headers {
+  const merged = new Headers(headers);
+
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    merged.set(key, value);
+  }
+
+  return merged;
+}
+
 function isJsonContentType(contentType: string | null): boolean {
   return (contentType ?? '').toLowerCase().includes('application/json');
 }
@@ -49,6 +65,13 @@ function buildUpstreamPath(paramsPath: string | string[] | undefined, url: URL):
 }
 
 export async function onRequest(context: PagesFunctionContext): Promise<Response> {
+  if (context.request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: withCors(),
+    });
+  }
+
   const incomingUrl = new URL(context.request.url);
   const upstreamPath = buildUpstreamPath(context.params.path, incomingUrl);
   const normalizedPath = upstreamPath.split('?')[0] || '/';
@@ -62,7 +85,12 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     normalizedPath.startsWith('/api/search_reddit_names.json');
 
   if (!allowedPrefix) {
-    return new Response('Invalid Reddit path', { status: 400 });
+    return new Response('Invalid Reddit path', {
+      status: 400,
+      headers: withCors({
+        'Cache-Control': 'no-store',
+      }),
+    });
   }
 
   let fallbackResponse: Response | null = null;
@@ -86,7 +114,7 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
       return new Response(upstreamResponse.body, {
         status: upstreamResponse.status,
         statusText: upstreamResponse.statusText,
-        headers,
+        headers: withCors(headers),
       });
     }
 
@@ -98,10 +126,10 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
         }),
         {
           status: 403,
-          headers: {
+          headers: withCors({
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'public, max-age=15, s-maxage=30',
-          },
+          }),
         },
       );
       continue;
@@ -130,7 +158,7 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     return new Response(mirrorResponse.body, {
       status: mirrorResponse.status,
       statusText: mirrorResponse.statusText,
-      headers,
+        headers: withCors(headers),
     });
   }
 
@@ -138,10 +166,10 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     fallbackResponse ??
     new Response(JSON.stringify({ error: 'upstream_unavailable' }), {
       status: 502,
-      headers: {
+      headers: withCors({
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
-      },
+      }),
     })
   );
 }
