@@ -84,7 +84,7 @@ Render uses [fly-proxy/package.json](fly-proxy/package.json) to run this as a na
 4. Configure these values:
   - Root Directory: `fly-proxy`
   - Runtime: `Node`
-  - Build Command: `npm ci --omit=dev`
+  - Build Command: `npm install --omit=dev`
   - Start Command: `npm run start`
   - Health Check Path: `/healthz`
 5. Add environment variable: `ENABLE_MIRROR_FALLBACK=true`.

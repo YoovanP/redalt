@@ -4,7 +4,7 @@ services:
     runtime: node
     rootDir: fly-proxy
     plan: free
-    buildCommand: npm ci --omit=dev
+    buildCommand: npm install --omit=dev
     startCommand: npm run start
     healthCheckPath: /healthz
     autoDeploy: true
