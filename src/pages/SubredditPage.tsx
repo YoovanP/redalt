@@ -5,7 +5,6 @@ import { ShortsFeed } from '../components/ShortsFeed';
 import { StateView } from '../components/StateView';
 import { normalizePost } from '../lib/normalizePost';
 import {
-  fetchSubredditFlairs,
   fetchSubredditListing,
   type ListingSort,
   type TopTimeRange,
@@ -50,7 +49,6 @@ export function SubredditPage() {
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const selectedFlair = searchParams.get('flair') ?? 'all';
   const [posts, setPosts] = useState<RedditPostData[]>([]);
-  const [fetchedFlairs, setFetchedFlairs] = useState<string[]>([]);
   const [after, setAfter] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -97,22 +95,6 @@ export function SubredditPage() {
     };
   }, [name, sort, topTimeRange]);
 
-  useEffect(() => {
-    let ignore = false;
-
-    setFetchedFlairs([]);
-
-    fetchSubredditFlairs(name).then((flairs) => {
-      if (!ignore) {
-        setFetchedFlairs(flairs);
-      }
-    });
-
-    return () => {
-      ignore = true;
-    };
-  }, [name]);
-
   const normalizedPosts = useMemo(() => posts.map(normalizePost), [posts]);
   const discoveredFlairs = useMemo(() => {
     const seen = new Set<string>();
@@ -131,10 +113,6 @@ export function SubredditPage() {
   const availableFlairs = useMemo(() => {
     const seen = new Set<string>();
 
-    for (const flair of fetchedFlairs) {
-      seen.add(flair);
-    }
-
     for (const flair of discoveredFlairs) {
       seen.add(flair);
     }
@@ -144,7 +122,7 @@ export function SubredditPage() {
     }
 
     return Array.from(seen).sort((a, b) => a.localeCompare(b));
-  }, [fetchedFlairs, discoveredFlairs, selectedFlair]);
+  }, [discoveredFlairs, selectedFlair]);
 
   const flairFilteredPosts = useMemo(() => {
     if (selectedFlair === 'all') {
