@@ -10,7 +10,8 @@ export type ThemeName =
   | 'ocean'
   | 'grape'
   | 'desert'
-  | 'monochrome';
+  | 'monochrome'
+  | 'true-black';
 
 export type CardMode = 'default' | 'compact' | 'content-only';
 
@@ -59,7 +60,8 @@ function normalizeSettings(input: unknown): UiSettings {
     value.theme === 'ocean' ||
     value.theme === 'grape' ||
     value.theme === 'desert' ||
-    value.theme === 'monochrome'
+    value.theme === 'monochrome' ||
+    value.theme === 'true-black'
       ? value.theme
       : defaultSettings.theme;
 

@@ -117,7 +117,7 @@ function AppLayout() {
                       title={headerExpanded ? 'Collapse header' : 'Expand header'}
                       onClick={() => setHeaderExpanded((value) => !value)}
                     >
-                      {headerExpanded ? '^' : 'v'}
+                      {headerExpanded ? '↑' : '↓'}
                     </button>
                   </nav>
                 </div>

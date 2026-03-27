@@ -20,6 +20,7 @@ export function ThemeSwitcher() {
         <option value="grape">Grape</option>
         <option value="desert">Desert</option>
         <option value="monochrome">Monochrome</option>
+        <option value="true-black">True Black</option>
       </select>
     </label>
   );

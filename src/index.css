@@ -18,7 +18,7 @@
 
 *::-webkit-scrollbar-thumb {
   background: var(--panel-border);
-  border-radius: 999px;
+  border-radius: 2px;
   border: 2px solid var(--bg);
 }
 
@@ -136,60 +136,154 @@ body[data-theme='monochrome'] {
   --media-bg: #0f0f0f;
 }
 
+body[data-theme='true-black'] {
+  --bg: #000000;
+  --text: #ffffff;
+  --link: #64b5f6;
+  --panel: #0a0a0a;
+  --panel-border: #1a1a1a;
+  --input-bg: #0f0f0f;
+  --input-border: #2a2a2a;
+  --media-bg: #050505;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg);
   color: var(--text);
-  line-height: 1.5;
+  line-height: 1.6;
   transition: background 0.3s ease, color 0.3s ease;
+  letter-spacing: -0.015em;
+  position: relative;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 2px,
+      color-mix(in srgb, var(--link) 2%, transparent) 2px,
+      color-mix(in srgb, var(--link) 2%, transparent) 4px
+    );
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.2;
 }
 
 a {
   color: var(--link);
-  transition: color 0.15s ease;
+  transition: color 0.25s ease, text-shadow 0.25s ease;
+  text-decoration: none;
+  position: relative;
+}
+
+a::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 0;
+  height: 2px;
+  background: var(--link);
+  transition: width 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 a:hover {
-  text-decoration: underline;
-  color: color-mix(in srgb, var(--link) 80%, #fff);
+  color: color-mix(in srgb, var(--link) 88%, #fff);
+  text-shadow: 0 0 8px color-mix(in srgb, var(--link) 25%, transparent);
+}
+
+a:hover::after {
+  width: 100%;
 }
 
 button {
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.95rem;
   font-family: inherit;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 20%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+  pointer-events: none;
 }
 
 button:hover {
   border-color: var(--link);
-  background: color-mix(in srgb, var(--input-bg) 85%, var(--text) 15%);
+  background: color-mix(in srgb, var(--input-bg) 80%, var(--link) 15%);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 20%, transparent), inset 0 0 16px color-mix(in srgb, var(--link) 8%, transparent);
+  transform: translateY(-2px);
+}
+
+button:hover::before {
+  width: 100px;
+  height: 100px;
 }
 
 button:active {
-  transform: translateY(1px);
+  transform: translateY(0);
 }
 
 input, select {
   font-family: inherit;
   font-size: 0.95rem;
   outline: none;
-  transition: all 0.2s ease;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-weight: 500;
+  letter-spacing: 0.2px;
+}
+
+select {
+  color: var(--text);
+  background-color: var(--input-bg);
+}
+
+/* Keep native dropdown item text readable across all themes. */
+select option {
+  color: var(--text);
+  background-color: var(--panel);
+}
+
+select option:checked {
+  background-color: color-mix(in srgb, var(--link) 28%, var(--panel));
+  color: var(--text);
 }
 
 input:focus, select:focus {
   border-color: var(--link) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 20%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 25%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
+  background: color-mix(in srgb, var(--input-bg) 98%, var(--link) 2%);
 }
 
 .app-shell {
   max-width: min(1600px, 96vw);
   margin: 0 auto;
   padding: 1rem;
+  position: relative;
+  z-index: 2;
 }
 
 .api-status-banner {
@@ -228,13 +322,25 @@ input:focus, select:focus {
   position: sticky;
   top: 0.75rem;
   z-index: 20;
-  background: color-mix(in srgb, var(--bg) 80%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid color-mix(in srgb, var(--panel-border) 60%, transparent);
-  border-radius: 16px;
-  padding: 1rem 1.25rem;
-  box-shadow: 0 4px 20px -6px color-mix(in srgb, var(--panel-border) 40%, transparent);
+  background: color-mix(in srgb, var(--bg) 92%, var(--panel) 8%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 2px solid color-mix(in srgb, var(--panel-border) 70%, transparent);
+  border-radius: 0;
+  padding: 1.1rem 1.25rem;
+  box-shadow: 0 12px 32px -8px color-mix(in srgb, var(--link) 15%, transparent);
+  animation: headerSlideDown 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes headerSlideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .app-header-static {
@@ -281,8 +387,15 @@ input:focus, select:focus {
 
 .app-brand h1 {
   margin: 0;
-  font-size: 1.25rem;
-  line-height: 1.1;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, var(--text) 0%, color-mix(in srgb, var(--text) 70%, var(--link)));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .header-controls {
@@ -308,34 +421,95 @@ input:focus, select:focus {
   gap: 0.5rem;
 }
 
-.header-nav-links a {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+.header-nav-links a,
+.header-nav-links button {
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 8px;
-  padding: 0.4rem 0.6rem;
+  border-radius: 3px;
+  padding: 0.5rem 0.75rem;
   text-decoration: none;
   font-size: 0.88rem;
+  font-weight: 700;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
 }
 
-.header-nav-links button {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 0.4rem 0.6rem;
-  font-size: 0.88rem;
+.header-nav-links a::before,
+.header-nav-links button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 15%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+  z-index: 0;
+}
+
+.header-nav-links a:hover,
+.header-nav-links button:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 18%, transparent);
+  color: color-mix(in srgb, var(--text), var(--link) 0%);
+  transform: translateY(-2px);
+}
+
+.header-nav-links a:hover::before,
+.header-nav-links button:hover::before {
+  width: 60px;
+  height: 60px;
 }
 
 .header-expand-toggle {
-  min-width: 2.1rem;
-  min-height: 2.1rem;
+  min-width: 2.4rem;
+  min-height: 2.4rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1rem;
+  font-size: 1.1rem;
   line-height: 1;
   padding: 0;
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
+  border-radius: 4px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+  color: var(--link);
+}
+
+.header-expand-toggle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 15%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+  z-index: 0;
+}
+
+.header-expand-toggle:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 20%, transparent);
+  transform: scale(1.1);
+}
+
+.header-expand-toggle:hover::before {
+  width: 70px;
+  height: 70px;
 }
 
 .theme-picker {
@@ -392,12 +566,14 @@ input:focus, select:focus {
   z-index: 40;
   list-style: none;
   margin: 0;
-  padding: 0.3rem;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 10px;
-  max-height: 220px;
+  padding: 0.4rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 97%, var(--link) 3%));
+  border: 2px solid var(--panel-border);
+  border-radius: 2px;
+  max-height: 240px;
   overflow-y: auto;
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--link) 15%, transparent);
+  animation: slideDown 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .subreddit-suggestions li {
@@ -423,13 +599,14 @@ input:focus, select:focus {
 
 .subreddit-suggestion-type {
   justify-self: start;
-  font-size: 0.68rem;
+  font-size: 0.65rem;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   border: 1px solid var(--input-border);
-  border-radius: 999px;
-  padding: 0.08rem 0.4rem;
-  opacity: 0.86;
+  border-radius: 2px;
+  padding: 0.25rem 0.5rem;
+  opacity: 0.88;
+  font-weight: 700;
 }
 
 .subreddit-suggestion-main {
@@ -468,11 +645,46 @@ input:focus, select:focus {
 }
 
 .menu-toggle {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 10px;
-  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  padding: 0.6rem 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.menu-toggle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 18%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+  z-index: 0;
+}
+
+.menu-toggle:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  color: color-mix(in srgb, var(--text), var(--link) 0%);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 22%, transparent);
+  transform: translateY(-2px);
+}
+
+.menu-toggle:hover::before {
+  width: 80px;
+  height: 80px;
 }
 
 .feed-settings-panel {
@@ -482,13 +694,25 @@ input:focus, select:focus {
   z-index: 80;
   width: min(380px, 94vw);
   display: grid;
-  gap: 0.6rem;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 0.75rem;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+  gap: 0.8rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 96%, var(--link) 4%));
+  border: 2px solid var(--panel-border);
+  border-radius: 2px;
+  padding: 1rem;
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--link) 20%, transparent);
   isolation: isolate;
+  animation: slideDown 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .feed-settings-panel label {
@@ -497,9 +721,17 @@ input:focus, select:focus {
   justify-content: space-between;
   gap: 0.6rem;
   font-size: 0.92rem;
-  padding: 0.28rem 0.45rem;
-  border: 1px solid var(--panel-border);
-  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+  border: 2px solid var(--input-border);
+  border-radius: 4px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 85%, #000 15%) 0%, color-mix(in srgb, var(--input-bg) 90%, var(--link) 2%));
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.feed-settings-panel label:hover {
+  border-color: color-mix(in srgb, var(--input-border) 60%, var(--link) 40%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 80%, var(--link) 10%) 0%, color-mix(in srgb, var(--input-bg) 85%, var(--link) 5%));
 }
 
 .feed-settings-panel input[type='checkbox'] {
@@ -507,11 +739,24 @@ input:focus, select:focus {
 }
 
 .feed-settings-panel select {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 8px;
-  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  padding: 0.5rem 0.65rem;
+  font-weight: 600;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.feed-settings-panel select:hover {
+  border-color: color-mix(in srgb, var(--input-border) 50%, var(--link) 50%);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 12%, transparent);
+}
+
+.feed-settings-panel select:focus {
+  border-color: var(--link);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 18%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 94%, var(--link) 6%), color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%));
 }
 
 .custom-feed-form {
@@ -531,15 +776,89 @@ input:focus, select:focus {
   gap: 0.4rem;
 }
 
-.custom-feed-form input,
-.custom-feed-form button,
+.custom-feed-form input {
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 98%, var(--link) 2%));
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.55rem 0.75rem;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  font-weight: 500;
+}
+
+.custom-feed-form input::placeholder {
+  color: color-mix(in srgb, var(--text) 50%, transparent);
+  font-style: italic;
+}
+
+.custom-feed-form input:focus {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%), color-mix(in srgb, var(--input-bg) 94%, var(--link) 6%));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 18%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
+}
+
+.custom-feed-form button {
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.55rem 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.custom-feed-form button::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 18%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+  z-index: 0;
+}
+
+.custom-feed-form button:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  color: color-mix(in srgb, var(--text), var(--link) 0%);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 20%, transparent);
+  transform: translateY(-2px);
+}
+
+.custom-feed-form button:hover::before {
+  width: 70px;
+  height: 70px;
+}
+
 .sort-controls select,
 .sort-controls input {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 8px;
-  padding: 0.36rem 0.58rem;
+  border-radius: 4px;
+  padding: 0.55rem 0.75rem;
+  font-weight: 600;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.sort-controls select:hover,
+.sort-controls input:hover {
+  border-color: color-mix(in srgb, var(--input-border) 50%, var(--link) 50%);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 12%, transparent);
+}
+
+.sort-controls select:focus,
+.sort-controls input:focus {
+  border-color: var(--link);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 18%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 94%, var(--link) 6%), color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%));
 }
 
 .custom-feed-list {
@@ -551,11 +870,22 @@ input:focus, select:focus {
 .subreddit-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
-  border-radius: 999px;
-  padding: 0.2rem 0.45rem 0.2rem 0.6rem;
+  gap: 0.5rem;
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
+  border-radius: 3px;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.9rem;
+  font-weight: 700;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.subreddit-chip:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 20%, transparent);
+  transform: scale(1.05);
 }
 
 .subreddit-chip button {
@@ -571,8 +901,10 @@ input:focus, select:focus {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.65rem;
-  margin-bottom: 0.9rem;
+  gap: 0.75rem;
+  margin-bottom: 1.2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid color-mix(in srgb, var(--panel-border) 40%, transparent);
 }
 
 .sort-controls label {
@@ -594,15 +926,36 @@ input:focus, select:focus {
 
 .home-hero,
 .home-card {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 14px;
-  padding: 0.8rem 0.9rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 96%, var(--link) 4%));
+  border: 2px solid var(--panel-border);
+  border-radius: 0;
+  padding: 1.4rem;
+  position: relative;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.home-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--link) 35%, transparent), transparent);
+}
+
+.home-card:hover {
+  border-color: color-mix(in srgb, var(--panel-border) 50%, var(--link) 50%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 98%, var(--link) 2%), color-mix(in srgb, var(--panel) 93%, var(--link) 7%));
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--link) 15%, transparent);
 }
 
 .home-hero h2,
 .home-card h3 {
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.6rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 .home-hero p {
@@ -613,17 +966,59 @@ input:focus, select:focus {
 .home-chip-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.6rem;
+  animation: fadeInUp 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 }
 
+.home-chip-list .home-chip:nth-child(1) { animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: 0.05s; }
+.home-chip-list .home-chip:nth-child(2) { animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: 0.1s; }
+.home-chip-list .home-chip:nth-child(3) { animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: 0.15s; }
+.home-chip-list .home-chip:nth-child(4) { animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: 0.2s; }
+.home-chip-list .home-chip:nth-child(n+5) { animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards; animation-delay: 0.25s; }
+
 .home-chip {
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 999px;
-  padding: 0.26rem 0.58rem;
+  border-radius: 4px;
+  padding: 0.6rem 1.1rem;
   text-decoration: none;
-  font-size: 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.home-chip::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 18%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+  z-index: 0;
+}
+
+.home-chip:hover {
+  border-color: var(--link);
+  color: color-mix(in srgb, var(--text) 100%, var(--link) 0%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 22%, transparent);
+  transform: translateY(-3px);
+}
+
+.home-chip:hover::before {
+  width: 100px;
+  height: 100px;
 }
 
 .library-page {
@@ -648,10 +1043,29 @@ input:focus, select:focus {
 }
 
 .library-item {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 0.85rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 96%, var(--link) 4%));
+  border: 2px solid var(--panel-border);
+  border-radius: 2px;
+  padding: 1rem 1.15rem;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+}
+
+.library-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--link) 25%, transparent), transparent);
+}
+
+.library-item:hover {
+  border-color: color-mix(in srgb, var(--panel-border) 50%, var(--link) 50%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 95%, var(--link) 5%), color-mix(in srgb, var(--panel) 92%, var(--link) 8%));
+  transform: translateX(3px);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--link) 15%, transparent);
 }
 
 .library-item h3 {
@@ -680,17 +1094,38 @@ input:focus, select:focus {
 .search-chip-card {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 0.55rem 0.65rem;
+  gap: 0.75rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 97%, var(--link) 3%));
+  border: 2px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 0.85rem 1rem;
   text-decoration: none;
   color: inherit;
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.search-chip-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  right: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--link) 8%, transparent), transparent);
+  transition: left 0.6s ease;
 }
 
 .search-chip-card:hover {
-  border-color: color-mix(in srgb, var(--panel-border) 50%, var(--link) 50%);
+  border-color: color-mix(in srgb, var(--panel-border) 30%, var(--link) 70%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 96%, var(--link) 4%), color-mix(in srgb, var(--panel) 92%, var(--link) 8%));
+  transform: translateY(-4px);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--link) 18%, transparent), inset 0 0 16px color-mix(in srgb, var(--link) 5%, transparent);
+}
+
+.search-chip-card:hover::before {
+  left: 100%;
 }
 
 .search-chip-card img {
@@ -732,27 +1167,56 @@ input:focus, select:focus {
 
 .post-list {
   display: grid;
-  gap: 1.25rem;
+  gap: 1.4rem;
   grid-template-columns: repeat(var(--post-columns, 1), minmax(0, 1fr));
+  animation: fadeInUp 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .post-card,
 .detail-page,
 .state-view {
-  background: var(--panel);
-  border: 1px solid var(--panel-border);
-  border-radius: 16px;
-  padding: 1.25rem;
+  background: linear-gradient(135deg, var(--panel) 0%, color-mix(in srgb, var(--panel) 95%, var(--link) 5%));
+  border: 2px solid var(--panel-border);
+  border-radius: 0;
+  padding: 1.35rem;
+  position: relative;
+}
+
+.post-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--link) 30%, transparent), transparent);
 }
 
 .post-card {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s;
+  transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.35s ease, border-color 0.3s ease, background 0.3s ease;
+  animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+
+.post-card:nth-child(1) { animation-delay: 0.05s; }
+.post-card:nth-child(2) { animation-delay: 0.1s; }
+.post-card:nth-child(3) { animation-delay: 0.15s; }
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .post-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--panel-border) 60%, transparent);
-  border-color: color-mix(in srgb, var(--panel-border) 40%, var(--link) 60%);
+  transform: translateY(-6px) scale(1.01);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--link) 25%, transparent), inset 0 0 20px color-mix(in srgb, var(--link) 5%, transparent);
+  border-color: color-mix(in srgb, var(--panel-border) 20%, var(--link) 80%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 98%, var(--link) 2%), color-mix(in srgb, var(--panel) 93%, var(--link) 7%));
 }
 
 .post-card-compact {
@@ -785,7 +1249,7 @@ input:focus, select:focus {
 .post-card-compact .post-video,
 .post-card-compact .external-frame {
   max-height: 340px;
-  border-radius: 6px;
+  border-radius: 2px;
 }
 
 .post-card-compact .post-actions {
@@ -850,30 +1314,54 @@ input:focus, select:focus {
 }
 
 .post-card h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.2rem;
+  margin: 0 0 0.75rem;
+  font-size: 1.4rem;
   line-height: 1.35;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font-weight: 850;
+  letter-spacing: -0.028em;
+  color: var(--text);
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+
+.post-card:hover h2 {
+  color: color-mix(in srgb, var(--text) 100%, var(--link) 0%);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--link) 18%, transparent);
 }
 
 .post-flair {
-  margin: 0 0 0.55rem;
+  margin: 0 0 0.75rem;
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--input-border);
-  border-radius: 999px;
-  padding: 0.15rem 0.55rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  opacity: 0.9;
+  border: 2px solid var(--link);
+  border-radius: 3px;
+  padding: 0.45rem 1rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.95;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--link) 12%, transparent) 0%, color-mix(in srgb, var(--link) 6%, transparent));
+  position: relative;
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--link) 10%, transparent);
+  transition: all 0.3s ease;
+}
+
+.post-flair:hover {
+  border-color: color-mix(in srgb, var(--link) 100%, white);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--link) 20%, transparent) 0%, color-mix(in srgb, var(--link) 12%, transparent));
+  text-shadow: 0 0 8px color-mix(in srgb, var(--link) 25%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 18%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 15%, transparent);
 }
 
 .meta {
-  opacity: 0.7;
-  font-size: 0.85rem;
-  font-weight: 500;
+  opacity: 0.72;
+  font-size: 0.86rem;
+  font-weight: 600;
   margin: 0 0 1rem;
+  padding-top: 1rem;
+  border-top: 2px solid;
+  border-image: linear-gradient(90deg, color-mix(in srgb, var(--link) 30%, transparent), color-mix(in srgb, var(--panel-border) 40%, transparent)) 1;
+  letter-spacing: 0.3px;
 }
 
 .media-block {
@@ -885,10 +1373,20 @@ input:focus, select:focus {
 .external-frame {
   width: 100%;
   max-height: 520px;
-  border-radius: 10px;
-  border: 1px solid var(--input-border);
+  border-radius: 3px;
+  border: 2px solid var(--input-border);
   object-fit: contain;
   background: var(--media-bg);
+  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--link) 5%, transparent);
+}
+
+.post-image:hover,
+.post-video:hover,
+.external-frame:hover {
+  border-color: color-mix(in srgb, var(--input-border) 50%, var(--link) 50%);
+  box-shadow: inset 0 0 16px color-mix(in srgb, var(--link) 8%, transparent), 0 0 20px color-mix(in srgb, var(--link) 12%, transparent);
+  transform: scale(1.01);
 }
 
 .external-frame {
@@ -921,14 +1419,46 @@ input:focus, select:focus {
 }
 
 .gallery-nav {
-  border: 1px solid var(--input-border);
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--bg) 85%, transparent), color-mix(in srgb, var(--bg) 80%, var(--link) 5%));
   color: var(--text);
-  border-radius: 999px;
-  padding: 0.35rem 0.7rem;
+  border-radius: 3px;
+  padding: 0.55rem 1.1rem;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
   pointer-events: auto;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.gallery-nav::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 15%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+  z-index: 0;
+}
+
+.gallery-nav:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--bg) 80%, var(--link) 10%), color-mix(in srgb, var(--bg) 75%, var(--link) 15%));
+  color: color-mix(in srgb, var(--text), var(--link) 0%);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 18%, transparent);
+  transform: scale(1.08);
+}
+
+.gallery-nav:hover::before {
+  width: 70px;
+  height: 70px;
 }
 
 .gallery-nav-prev {
@@ -947,10 +1477,12 @@ input:focus, select:focus {
   border: 1px solid var(--input-border);
   background: color-mix(in srgb, var(--bg) 80%, transparent);
   color: var(--text);
-  border-radius: 999px;
-  padding: 0.2rem 0.5rem;
-  font-size: 0.78rem;
-  font-weight: 600;
+  border-radius: 2px;
+  padding: 0.4rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 .self-text {
@@ -1050,30 +1582,81 @@ input:focus, select:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 36px;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  min-height: 38px;
+  padding: 0.45rem 1rem;
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 95%, var(--link) 5%));
   color: var(--text);
-  border-radius: 8px;
+  border-radius: 4px;
   text-decoration: none;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.9rem;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
 }
 
-.post-card a,
-.post-links a,
-.post-links-inline a {
-  text-decoration: none;
+.post-action-button::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--link) 15%, transparent);
+  transform: translate(-50%, -50%);
+  transition: width 0.5s, height 0.5s;
+}
+
+.post-action-button:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 90%, var(--link) 10%), color-mix(in srgb, var(--input-bg) 85%, var(--link) 15%));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--link) 20%, transparent);
+  color: color-mix(in srgb, var(--text) 100%, var(--link) 0%);
+  transform: translateY(-2px);
+}
+
+.post-action-button:hover::after {
+  width: 80px;
+  height: 80px;
+}
+
+.post-card header {
+  position: relative;
+}
+
+.post-card header::after {
+  content: '';
+  position: absolute;
+  bottom: -0.75rem;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--link) 30%, transparent), transparent);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+.post-card:hover header::after {
+  opacity: 1;
 }
 
 .post-links-inline {
   margin: 0 0 0.65rem;
 }
 
-.near-end-trigger {
-  width: 100%;
-  height: 2px;
+.posts-container {
+  animation: fadeIn 0.6s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .shorts-feed {
@@ -1130,7 +1713,7 @@ input:focus, select:focus {
   display: block;
   padding: 0.45rem;
   border: 1px solid var(--panel-border);
-  border-radius: 14px;
+  border-radius: 0;
   background: var(--panel);
   overflow: hidden;
 }
@@ -1152,8 +1735,8 @@ input:focus, select:focus {
   z-index: 3;
   background: color-mix(in srgb, var(--bg) 72%, transparent);
   border: 1px solid color-mix(in srgb, var(--input-border) 70%, transparent);
-  border-radius: 12px;
-  padding: 0.65rem 0.75rem;
+  border-radius: 0;
+  padding: 0.75rem 1rem;
 }
 
 .shorts-overlay h3 {
@@ -1177,8 +1760,8 @@ input:focus, select:focus {
   min-width: 180px;
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   border: 1px solid var(--input-border);
-  border-radius: 10px;
-  padding: 0.45rem;
+  border-radius: 0;
+  padding: 0.6rem;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
@@ -1199,10 +1782,12 @@ input:focus, select:focus {
   justify-self: center;
   border: 1px solid var(--input-border);
   background: color-mix(in srgb, var(--bg) 85%, transparent);
-  border-radius: 999px;
-  padding: 0.35rem 0.7rem;
-  font-size: 0.82rem;
-  font-weight: 600;
+  border-radius: 2px;
+  padding: 0.6rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .shorts-media-wrap .media-block {
@@ -1226,7 +1811,7 @@ input:focus, select:focus {
 .shorts-media-wrap .post-image {
   width: 100%;
   max-height: min(84vh, 920px);
-  border-radius: 12px;
+  border-radius: 2px;
   border: none;
 }
 
@@ -1244,14 +1829,14 @@ input:focus, select:focus {
 
   .app-header {
     top: 0;
-    border-radius: 0 0 12px 12px;
+    border-radius: 0;
     gap: 0.45rem;
     margin-bottom: 0.75rem;
     padding: 0.6rem 0.7rem;
   }
 
   .app-header-media-only {
-    border-radius: 0 0 10px 10px;
+    border-radius: 0;
     margin-bottom: 0.45rem;
     padding: 0.45rem 0.65rem;
   }
@@ -1374,7 +1959,8 @@ input:focus, select:focus {
 
 .comments-root {
   display: grid;
-  gap: 0.85rem;
+  gap: 1rem;
+  animation: fadeInUp 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) 0.2s backwards;
 }
 
 .comments-children {
@@ -1392,17 +1978,30 @@ input:focus, select:focus {
 }
 
 .comment-item-root {
-  border: 1px solid var(--panel-border);
-  border-radius: 12px;
-  padding: 0.8rem 1rem;
-  background: color-mix(in srgb, var(--panel) 88%, var(--media-bg) 12%);
-  transition: background 0.2s ease, border-color 0.2s ease;
+  border: 2px solid var(--panel-border);
+  border-radius: 3px;
+  padding: 0.95rem 1.15rem;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 92%, var(--media-bg) 8%), color-mix(in srgb, var(--panel) 90%, var(--link) 5%));
+  transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
   min-width: 0;
+  position: relative;
+}
+
+.comment-item-root::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--link) 40%, transparent) 0%, transparent);
 }
 
 .comment-item-root:hover {
-  background: color-mix(in srgb, var(--panel) 75%, var(--media-bg) 25%);
-  border-color: color-mix(in srgb, var(--panel-border) 80%, var(--link) 20%);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 88%, var(--media-bg) 12%), color-mix(in srgb, var(--panel) 85%, var(--link) 10%));
+  border-color: color-mix(in srgb, var(--panel-border) 60%, var(--link) 40%);
+  transform: translateX(4px);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--link) 12%, transparent), inset 0 0 16px color-mix(in srgb, var(--link) 4%, transparent);
 }
 
 .comment-item-child {
@@ -1442,13 +2041,22 @@ input:focus, select:focus {
 }
 
 .comment-toggle {
-  margin-top: 0.45rem;
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
+  margin-top: 0.6rem;
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
   color: var(--text);
-  border-radius: 8px;
-  padding: 0.3rem 0.55rem;
+  border-radius: 3px;
+  padding: 0.4rem 0.75rem;
   font-size: 0.82rem;
+  font-weight: 700;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.comment-toggle:hover {
+  border-color: var(--link);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%), color-mix(in srgb, var(--input-bg) 88%, var(--link) 12%));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--link) 18%, transparent);
+  transform: translateY(-2px);
 }
 
 @media (max-width: 900px) {
