@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { StateView } from '../components/StateView';
+import { useUiSettings } from '../lib/uiSettings';
 import {
   clearSavedPosts,
   clearWatchHistory,
@@ -29,6 +30,9 @@ function formatRecordedAt(item: LibraryItem, mode: 'saved' | 'history'): string 
 }
 
 export function LibraryPage({ mode }: LibraryPageProps) {
+  const {
+    settings: { openInNewTab },
+  } = useUiSettings();
   const [items, setItems] = useState<LibraryItem[]>([]);
 
   const refresh = useCallback(() => {
@@ -78,7 +82,13 @@ export function LibraryPage({ mode }: LibraryPageProps) {
         {items.map((item) => (
           <article key={item.id} className="library-item">
             <h3>
-              <Link to={`/r/${item.subreddit}/comments/${item.id}`}>{item.title}</Link>
+              <Link
+                to={`/r/${item.subreddit}/comments/${item.id}`}
+                target={openInNewTab ? '_blank' : undefined}
+                rel={openInNewTab ? 'noopener noreferrer' : undefined}
+              >
+                {item.title}
+              </Link>
             </h3>
             <p className="meta">
               <Link to={`/u/${item.author}`}>u/{item.author}</Link> · r/{item.subreddit} · {item.score} points ·{' '}
@@ -88,7 +98,12 @@ export function LibraryPage({ mode }: LibraryPageProps) {
             <p className="meta">{mode === 'saved' ? 'Saved' : 'Viewed'}: {formatRecordedAt(item, mode)}</p>
 
             <div className="post-actions">
-              <Link className="post-action-button" to={`/r/${item.subreddit}/comments/${item.id}`}>
+              <Link
+                className="post-action-button"
+                to={`/r/${item.subreddit}/comments/${item.id}`}
+                target={openInNewTab ? '_blank' : undefined}
+                rel={openInNewTab ? 'noopener noreferrer' : undefined}
+              >
                 Open in RedAlt
               </Link>
               <a className="post-action-button" href={`https://www.reddit.com${item.permalink}`} target="_blank" rel="noreferrer">

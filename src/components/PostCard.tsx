@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { MarkdownText } from './MarkdownText';
 import { RenderMedia } from './media/RenderMedia';
-import type { CardMode } from '../lib/uiSettings';
+import { useUiSettings, type CardMode } from '../lib/uiSettings';
 import type { NormalizedPost } from '../types/reddit';
 
 type PostCardProps = {
@@ -18,6 +18,9 @@ function formatTimestamp(seconds: number): string {
 }
 
 export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
+  const {
+    settings: { openInNewTab },
+  } = useUiSettings();
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [saved, setSaved] = useState(() => isPostSaved(post.id));
   const [showFullText, setShowFullText] = useState(false);
@@ -31,6 +34,20 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
     isLongText && !showFullText
       ? 'self-text-markdown self-text-collapsed self-text-preview'
       : 'self-text-markdown self-text-preview';
+  const postDetailPath = `/r/${post.subreddit}/comments/${post.id}`;
+
+  const rememberSubredditScroll = () => {
+    if (openInNewTab) {
+      return;
+    }
+
+    try {
+      sessionStorage.setItem(`redalt.subreddit.scroll.${post.subreddit}`, String(window.scrollY));
+      sessionStorage.setItem(`redalt.subreddit.restore.${post.subreddit}`, '1');
+    } catch {
+      // Ignore storage failures.
+    }
+  };
 
   const onShare = async () => {
     const shareUrl = `https://www.reddit.com${post.permalink}`;
@@ -58,7 +75,15 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
       {showInfoBlock && (
         <header>
           <h2>
-            <Link to={`/r/${post.subreddit}/comments/${post.id}`}>{post.title}</Link>
+            <Link
+              to={postDetailPath}
+              state={{ fromSubreddit: post.subreddit }}
+              onClick={rememberSubredditScroll}
+              target={openInNewTab ? '_blank' : undefined}
+              rel={openInNewTab ? 'noopener noreferrer' : undefined}
+            >
+              {post.title}
+            </Link>
           </h2>
           {post.flairText && <p className="post-flair">{post.flairText}</p>}
           <p className="meta">
@@ -97,7 +122,14 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
 
       {showInfoBlock && (
         <footer className="post-actions">
-          <Link className="post-action-button" to={`/r/${post.subreddit}/comments/${post.id}`}>
+          <Link
+            className="post-action-button"
+            to={postDetailPath}
+            state={{ fromSubreddit: post.subreddit }}
+            onClick={rememberSubredditScroll}
+            target={openInNewTab ? '_blank' : undefined}
+            rel={openInNewTab ? 'noopener noreferrer' : undefined}
+          >
             Comments
           </Link>
           <button type="button" className="post-action-button" onClick={onShare}>

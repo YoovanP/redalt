@@ -39,6 +39,14 @@ function isMediaPost(mediaType: string): boolean {
   return mediaType === 'image' || mediaType === 'gallery' || mediaType === 'video' || mediaType === 'external';
 }
 
+function getSubredditScrollKey(name: string): string {
+  return `redalt.subreddit.scroll.${name}`;
+}
+
+function getSubredditRestoreFlagKey(name: string): string {
+  return `redalt.subreddit.restore.${name}`;
+}
+
 export function SubredditPage() {
   const {
     settings: { columns, videoFeedMode, cardMode },
@@ -55,6 +63,11 @@ export function SubredditPage() {
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
+  const hasRestoredScrollRef = useRef(false);
+
+  useEffect(() => {
+    hasRestoredScrollRef.current = false;
+  }, [name]);
 
   useEffect(() => {
     let ignore = false;
@@ -222,6 +235,44 @@ export function SubredditPage() {
       observer.disconnect();
     };
   }, [after, loadingMore, videoFeedMode, visiblePosts.length]);
+
+  useEffect(() => {
+    if (loading || hasRestoredScrollRef.current) {
+      return;
+    }
+
+    let shouldRestore = false;
+    let nextScrollY = 0;
+
+    try {
+      shouldRestore = sessionStorage.getItem(getSubredditRestoreFlagKey(name)) === '1';
+
+      if (shouldRestore) {
+        const raw = sessionStorage.getItem(getSubredditScrollKey(name));
+        const parsed = raw ? Number(raw) : 0;
+        nextScrollY = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+      }
+    } catch {
+      shouldRestore = false;
+    }
+
+    if (!shouldRestore) {
+      hasRestoredScrollRef.current = true;
+      return;
+    }
+
+    hasRestoredScrollRef.current = true;
+
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: nextScrollY, behavior: 'auto' });
+    });
+
+    try {
+      sessionStorage.removeItem(getSubredditRestoreFlagKey(name));
+    } catch {
+      // Ignore storage failures.
+    }
+  }, [loading, name]);
 
   const triggerIndex = Math.max(0, visiblePosts.length - 3);
 

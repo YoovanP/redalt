@@ -171,6 +171,15 @@ export function FeedSettings() {
             />
             Persistent header
           </label>
+
+          <label>
+            <input
+              type="checkbox"
+              checked={settings.openInNewTab}
+              onChange={(event) => updateSettings({ openInNewTab: event.target.checked })}
+            />
+            Open posts in new tab
+          </label>
         </div>
       )}
     </section>

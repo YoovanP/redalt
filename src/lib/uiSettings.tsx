@@ -23,6 +23,7 @@ type UiSettings = {
   videoFeedMode: boolean;
   cardMode: CardMode;
   persistentHeader: boolean;
+  openInNewTab: boolean;
 };
 
 type UiSettingsContextType = {
@@ -40,6 +41,7 @@ const defaultSettings: UiSettings = {
   videoFeedMode: false,
   cardMode: 'default',
   persistentHeader: true,
+  openInNewTab: false,
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
@@ -86,6 +88,10 @@ function normalizeSettings(input: unknown): UiSettings {
       typeof value.persistentHeader === 'boolean'
         ? value.persistentHeader
         : defaultSettings.persistentHeader,
+    openInNewTab:
+      typeof value.openInNewTab === 'boolean'
+        ? value.openInNewTab
+        : defaultSettings.openInNewTab,
   };
 }
 
