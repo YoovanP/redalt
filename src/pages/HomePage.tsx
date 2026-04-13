@@ -1,4 +1,5 @@
-import { Link } from 'react-router-dom';
+import { FormEvent, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 
 const QUICK_SUBREDDITS = [
   'mildlyinfuriating',
@@ -12,11 +13,38 @@ const QUICK_SUBREDDITS = [
 ];
 
 export function HomePage() {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextQuery = query.trim();
+
+    if (!nextQuery) {
+      return;
+    }
+
+    navigate(`/search?q=${encodeURIComponent(nextQuery)}`);
+  };
+
   return (
     <section className="home-page">
       <div className="home-hero">
         <h2>Welcome to RedAlt</h2>
         <p>Use the top search bar to open a subreddit, search keywords, or paste a Reddit link.</p>
+        <form className="home-search-form" onSubmit={onSubmit}>
+          <input
+            className="home-search-input"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search posts, communities, users..."
+            aria-label="Search RedAlt"
+          />
+          <button type="submit" className="home-search-submit">
+            Search
+          </button>
+        </form>
       </div>
 
       <article className="home-card">

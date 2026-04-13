@@ -963,6 +963,45 @@ input:focus, select:focus {
   opacity: 0.88;
 }
 
+.home-search-form {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.65rem;
+}
+
+.home-search-input {
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 96%, var(--link) 4%));
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.72rem 0.9rem;
+  font-size: 0.96rem;
+  font-weight: 600;
+  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.home-search-input::placeholder {
+  color: color-mix(in srgb, var(--text) 58%, transparent);
+}
+
+.home-search-input:focus {
+  border-color: var(--link);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 24%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
+}
+
+.home-search-submit {
+  border: 2px solid var(--input-border);
+  background: linear-gradient(135deg, var(--input-bg) 0%, color-mix(in srgb, var(--input-bg) 92%, var(--link) 8%));
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.72rem 1rem;
+  font-size: 0.94rem;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  min-width: 110px;
+}
+
 .home-chip-list {
   display: flex;
   flex-wrap: wrap;
@@ -1947,6 +1986,15 @@ input:focus, select:focus {
   .external-frame-vertical {
     width: min(100%, 360px);
     min-height: 420px;
+  }
+
+  .home-search-form {
+    grid-template-columns: 1fr;
+  }
+
+  .home-search-submit {
+    width: 100%;
+    min-width: 0;
   }
 }
 
