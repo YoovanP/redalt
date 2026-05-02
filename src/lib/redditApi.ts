@@ -115,6 +115,9 @@ export type GlobalSearchOptions = {
   topTimeRange?: TopTimeRange;
   subredditScope?: string;
   includeNsfw?: boolean;
+  postLimit?: number;
+  subredditLimit?: number;
+  userLimit?: number;
 };
 
 type SubredditTypeaheadResponse = {
@@ -485,6 +488,9 @@ export async function fetchGlobalSearch(
   const topTimeRange = options.topTimeRange ?? 'day';
   const includeNsfw = options.includeNsfw ?? true;
   const subredditScope = normalizeSubredditName(options.subredditScope ?? '');
+  const postLimit = Math.min(Math.max(options.postLimit ?? 16, 1), 100);
+  const subredditLimit = Math.min(Math.max(options.subredditLimit ?? 12, 1), 100);
+  const userLimit = Math.min(Math.max(options.userLimit ?? 12, 1), 100);
 
   const postSearchPath = subredditScope
     ? `/r/${encodeURIComponent(subredditScope)}/search.json?raw_json=1&restrict_sr=1`
@@ -494,13 +500,12 @@ export async function fetchGlobalSearch(
     `t=${encodeURIComponent(topTimeRange)}`,
     `include_over_18=${includeNsfw ? 'on' : 'off'}`,
     'type=link',
-    'limit=16',
+    `limit=${postLimit}`,
     `q=${encodeURIComponent(cleaned)}`,
   ];
   const communityQueryParts = [
     `raw_json=1`,
     `include_over_18=${includeNsfw ? 'on' : 'off'}`,
-    `limit=12`,
     `q=${encodeURIComponent(cleaned)}`,
   ];
 
@@ -516,10 +521,14 @@ export async function fetchGlobalSearch(
 
   const [postListing, subredditListing, userListing] = await Promise.allSettled([
     fetchReddit<RedditListingResponse>(`${postSearchPath}&${postQueryParts.join('&')}`),
-    fetchReddit<SubredditSearchResponse>(`/subreddits/search.json?${communityQueryParts.join('&')}`),
+    fetchReddit<SubredditSearchResponse>(
+      `/subreddits/search.json?${[...communityQueryParts, `limit=${subredditLimit}`].join('&')}`,
+    ),
     blockProneSearchEndpoints
       ? Promise.resolve<UserSearchResponse>({ kind: 'Listing', data: { children: [] } })
-      : fetchReddit<UserSearchResponse>(`/users/search.json?${communityQueryParts.join('&')}`),
+      : fetchReddit<UserSearchResponse>(
+          `/users/search.json?${[...communityQueryParts, `limit=${userLimit}`].join('&')}`,
+        ),
   ]);
 
   const postsSource = postListing.status === 'fulfilled' ? postListing.value : null;

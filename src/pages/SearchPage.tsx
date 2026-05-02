@@ -1,4 +1,4 @@
-import { type CSSProperties, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { PostCard } from '../components/PostCard';
 import { StateView } from '../components/StateView';
@@ -9,6 +9,13 @@ import type { RedditPostData } from '../types/reddit';
 import type { SearchSubredditResult, SearchUserResult } from '../lib/redditApi';
 
 type MediaFilter = 'all' | 'text' | 'image' | 'gallery' | 'video' | 'external' | 'link';
+
+const DEFAULT_POST_LIMIT = 16;
+const DEFAULT_SUBREDDIT_LIMIT = 12;
+const DEFAULT_USER_LIMIT = 12;
+const MAX_SEARCH_LIMIT = 60;
+const POST_LIMIT_STEP = 16;
+const COMMUNITY_LIMIT_STEP = 12;
 
 function getValidatedSearchSort(input: string | null): SearchSort {
   if (input === 'relevance' || input === 'hot' || input === 'new' || input === 'top' || input === 'comments') {
@@ -65,10 +72,17 @@ export function SearchPage() {
   const [subreddits, setSubreddits] = useState<SearchSubredditResult[]>([]);
   const [users, setUsers] = useState<SearchUserResult[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState<null | 'posts' | 'subreddits' | 'users'>(null);
   const [error, setError] = useState<string | null>(null);
+  const [postLimit, setPostLimit] = useState(DEFAULT_POST_LIMIT);
+  const [subredditLimit, setSubredditLimit] = useState(DEFAULT_SUBREDDIT_LIMIT);
+  const [userLimit, setUserLimit] = useState(DEFAULT_USER_LIMIT);
+  const prevSearchKeyRef = useRef<string | null>(null);
+  const searchKey = `${query}|${sort}|${topTimeRange}|${subredditScope}|${includeNsfw}`;
 
   useEffect(() => {
     let ignore = false;
+    const isNewSearch = prevSearchKeyRef.current !== searchKey;
 
     if (query.length < 2) {
       setPosts([]);
@@ -76,12 +90,42 @@ export function SearchPage() {
       setUsers([]);
       setError(null);
       setLoading(false);
+      setLoadingMore(null);
+      if (
+        postLimit !== DEFAULT_POST_LIMIT ||
+        subredditLimit !== DEFAULT_SUBREDDIT_LIMIT ||
+        userLimit !== DEFAULT_USER_LIMIT
+      ) {
+        setPostLimit(DEFAULT_POST_LIMIT);
+        setSubredditLimit(DEFAULT_SUBREDDIT_LIMIT);
+        setUserLimit(DEFAULT_USER_LIMIT);
+      }
+      prevSearchKeyRef.current = searchKey;
       return () => {
         ignore = true;
       };
     }
 
-    setLoading(true);
+    if (
+      isNewSearch &&
+      (postLimit !== DEFAULT_POST_LIMIT ||
+        subredditLimit !== DEFAULT_SUBREDDIT_LIMIT ||
+        userLimit !== DEFAULT_USER_LIMIT)
+    ) {
+      setPostLimit(DEFAULT_POST_LIMIT);
+      setSubredditLimit(DEFAULT_SUBREDDIT_LIMIT);
+      setUserLimit(DEFAULT_USER_LIMIT);
+      setLoading(false);
+      setLoadingMore(null);
+      return () => {
+        ignore = true;
+      };
+    }
+
+    if (isNewSearch) {
+      setLoading(true);
+      setLoadingMore(null);
+    }
     setError(null);
 
     fetchGlobalSearch(query, {
@@ -89,6 +133,9 @@ export function SearchPage() {
       topTimeRange,
       subredditScope,
       includeNsfw,
+      postLimit,
+      subredditLimit,
+      userLimit,
     })
       .then((result) => {
         if (ignore) {
@@ -109,13 +156,25 @@ export function SearchPage() {
       .finally(() => {
         if (!ignore) {
           setLoading(false);
+          setLoadingMore(null);
+          prevSearchKeyRef.current = searchKey;
         }
       });
 
     return () => {
       ignore = true;
     };
-  }, [query, sort, topTimeRange, subredditScope, includeNsfw]);
+  }, [
+    query,
+    sort,
+    topTimeRange,
+    subredditScope,
+    includeNsfw,
+    postLimit,
+    subredditLimit,
+    userLimit,
+    searchKey,
+  ]);
 
   const normalizedPosts = useMemo(
     () =>
@@ -131,6 +190,9 @@ export function SearchPage() {
     [posts, mediaFilter],
   );
   const hasResults = normalizedPosts.length > 0 || subreddits.length > 0 || users.length > 0;
+  const canLoadMorePosts = posts.length >= postLimit && postLimit < MAX_SEARCH_LIMIT;
+  const canLoadMoreSubreddits = subreddits.length >= subredditLimit && subredditLimit < MAX_SEARCH_LIMIT;
+  const canLoadMoreUsers = users.length >= userLimit && userLimit < MAX_SEARCH_LIMIT;
 
   const setFilterParam = (key: string, value: string | null) => {
     const next = new URLSearchParams(searchParams);
@@ -235,6 +297,19 @@ export function SearchPage() {
               </Link>
             ))}
           </div>
+          {canLoadMoreSubreddits && (
+            <button
+              type="button"
+              className="load-more"
+              disabled={loading || loadingMore !== null}
+              onClick={() => {
+                setLoadingMore('subreddits');
+                setSubredditLimit((limit) => Math.min(limit + COMMUNITY_LIMIT_STEP, MAX_SEARCH_LIMIT));
+              }}
+            >
+              {loadingMore === 'subreddits' ? 'Loading…' : 'View more subreddits'}
+            </button>
+          )}
         </section>
       )}
 
@@ -252,6 +327,19 @@ export function SearchPage() {
               </Link>
             ))}
           </div>
+          {canLoadMoreUsers && (
+            <button
+              type="button"
+              className="load-more"
+              disabled={loading || loadingMore !== null}
+              onClick={() => {
+                setLoadingMore('users');
+                setUserLimit((limit) => Math.min(limit + COMMUNITY_LIMIT_STEP, MAX_SEARCH_LIMIT));
+              }}
+            >
+              {loadingMore === 'users' ? 'Loading…' : 'View more users'}
+            </button>
+          )}
         </section>
       )}
 
@@ -265,6 +353,19 @@ export function SearchPage() {
               </article>
             ))}
           </div>
+          {canLoadMorePosts && (
+            <button
+              type="button"
+              className="load-more"
+              disabled={loading || loadingMore !== null}
+              onClick={() => {
+                setLoadingMore('posts');
+                setPostLimit((limit) => Math.min(limit + POST_LIMIT_STEP, MAX_SEARCH_LIMIT));
+              }}
+            >
+              {loadingMore === 'posts' ? 'Loading…' : 'View more posts'}
+            </button>
+          )}
         </section>
       )}
     </section>
