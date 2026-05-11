@@ -8,9 +8,6 @@ type GalleryCarouselProps = {
 
 export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   const [index, setIndex] = useState(0);
-  const isTouchDevice =
-    typeof window !== 'undefined' &&
-    (window.matchMedia?.('(hover: none)').matches || window.matchMedia?.('(pointer: coarse)').matches);
 
   const boundedIndex = useMemo(() => {
     if (items.length === 0) {
