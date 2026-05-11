@@ -289,11 +289,50 @@ export function SearchPage() {
             {subreddits.map((subreddit) => (
               <Link key={subreddit.name} to={`/r/${subreddit.name}`} className="search-chip-card">
                 {subreddit.iconUrl && <img src={subreddit.iconUrl} alt="" loading="lazy" />}
-                <div>
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <strong>r/{subreddit.name}</strong>
                   <p>{subreddit.title}</p>
                   <span>{subreddit.subscribers.toLocaleString()} members{` ${subreddit.isNsfw ? '· NSFW' : ''}`}</span>
                 </div>
+                <button
+                  type="button"
+                  aria-label={`Add r/${subreddit.name} to custom feed`}
+                  title="Add to custom feed"
+                  style={{
+                    marginLeft: 'auto',
+                    padding: '0',
+                    fontSize: '1.25rem',
+                    lineHeight: 1,
+                    minHeight: '32px',
+                    minWidth: '32px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '50%'
+                  }}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    try {
+                      const raw = localStorage.getItem('redalt.customFeed');
+                      let parsed: string[] = [];
+                      if (raw) {
+                        const data = JSON.parse(raw);
+                        if (Array.isArray(data)) {
+                          parsed = data.map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : '')).filter(Boolean);
+                        }
+                      }
+                      const name = subreddit.name.toLowerCase();
+                      if (!parsed.includes(name)) {
+                        parsed.push(name);
+                        localStorage.setItem('redalt.customFeed', JSON.stringify(parsed));
+                      }
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  }}
+                >
+                  +
+                </button>
               </Link>
             ))}
           </div>
