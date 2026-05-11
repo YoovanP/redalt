@@ -29,13 +29,17 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   return (
     <div className="media-block gallery">
       <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
-      {items.length > 1 && !isTouchDevice && (
+      {items.length > 1 && (
         <div className="gallery-controls">
           <button
             type="button"
             className="gallery-nav gallery-nav-prev"
             aria-label="Previous image"
-            onClick={() => setIndex((value) => Math.max(0, value - 1))}
+            disabled={boundedIndex === 0}
+            onClick={(e) => {
+              e.preventDefault();
+              setIndex((value) => Math.max(0, value - 1));
+            }}
           >
             ←
           </button>
@@ -46,7 +50,11 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
             type="button"
             className="gallery-nav gallery-nav-next"
             aria-label="Next image"
-            onClick={() => setIndex((value) => Math.min(items.length - 1, value + 1))}
+            disabled={boundedIndex === items.length - 1}
+            onClick={(e) => {
+              e.preventDefault();
+              setIndex((value) => Math.min(items.length - 1, value + 1));
+            }}
           >
             →
           </button>
