@@ -15,7 +15,7 @@ export function VideoMedia({ sourceUrl, hlsUrl, title, showSourceLink = true }: 
   const shouldMute = !autoplayWithAudio;
 
   return (
-    <div className="media-block">
+    <div className="media-block media-aspect-wrap">
       <video
         className="post-video"
         controls

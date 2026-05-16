@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { CustomFeedBuilder } from './components/CustomFeedBuilder';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
+import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -110,6 +112,9 @@ function AppLayout() {
                   <nav className="header-nav-links" aria-label="Quick links">
                     <Link to="/saved">Saved</Link>
                     <Link to="/history">History</Link>
+                    <span className="header-theme-toggle">
+                      <ThemeSwitcher compact />
+                    </span>
                     <button
                       type="button"
                       className="header-expand-toggle"
@@ -138,17 +143,19 @@ function AppLayout() {
       )}
 
       <main>
-        <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/r/:name" element={<SubredditPage />} />
-          <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
-          <Route path="/u/:username" element={<UserPage />} />
-          <Route path="/user/:username" element={<UserPage />} />
-          <Route path="/search" element={<SearchPage />} />
-          <Route path="/saved" element={<LibraryPage mode="saved" />} />
-          <Route path="/history" element={<LibraryPage mode="history" />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/r/:name" element={<SubredditPage />} />
+            <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
+            <Route path="/u/:username" element={<UserPage />} />
+            <Route path="/user/:username" element={<UserPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/saved" element={<LibraryPage mode="saved" />} />
+            <Route path="/history" element={<LibraryPage mode="history" />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

@@ -169,7 +169,7 @@ export function FeedSettings() {
               checked={settings.persistentHeader}
               onChange={(event) => updateSettings({ persistentHeader: event.target.checked })}
             />
-            Persistent header
+            Sticky header
           </label>
 
           <label>

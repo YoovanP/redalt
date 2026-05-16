@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { MarkdownText } from '../components/MarkdownText';
 import { RenderMedia } from '../components/media/RenderMedia';
+import { SkeletonLoader } from '../components/SkeletonLoader';
 import { StateView } from '../components/StateView';
 import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
@@ -16,39 +17,53 @@ type CommentItemProps = {
 };
 
 function CommentItem({ comment, depth = 0 }: CommentItemProps) {
+  const [collapsed, setCollapsed] = useState(false);
   const [showReplies, setShowReplies] = useState(true);
-  const itemClassName = depth === 0 ? 'comment-item comment-item-root' : 'comment-item comment-item-child';
+  const itemClassName = depth === 0
+    ? `comment-item comment-item-root${collapsed ? ' comment-root-collapsed' : ''}`
+    : 'comment-item comment-item-child';
+
+  const toggleCollapse = () => {
+    if (depth === 0) {
+      setCollapsed((c) => !c);
+    }
+  };
 
   return (
     <li className={itemClassName}>
-      <div className="comment-meta">
+      <div className="comment-meta" onClick={toggleCollapse} role={depth === 0 ? 'button' : undefined} tabIndex={depth === 0 ? 0 : undefined} onKeyDown={depth === 0 ? (e) => { if (e.key === 'Enter') toggleCollapse(); } : undefined}>
         <strong>
-          <Link to={`/u/${comment.author}`}>u/{comment.author}</Link>
+          <Link to={`/u/${comment.author}`} onClick={(e) => e.stopPropagation()}>u/{comment.author}</Link>
         </strong>
         {comment.parentAuthor && (
           <span>
-            replying to <Link to={`/u/${comment.parentAuthor}`}>u/{comment.parentAuthor}</Link>
+            replying to <Link to={`/u/${comment.parentAuthor}`} onClick={(e) => e.stopPropagation()}>u/{comment.parentAuthor}</Link>
           </span>
         )}
       </div>
-      <MarkdownText text={comment.body} className="self-text-markdown comment-body" />
 
-      {comment.replies.length > 0 && (
+      {!collapsed && (
         <>
-          <button
-            type="button"
-            className="comment-toggle"
-            onClick={() => setShowReplies((current) => !current)}
-          >
-            {showReplies ? 'Hide' : 'Show'} replies ({comment.replies.length})
-          </button>
+          <MarkdownText text={comment.body} className="self-text-markdown comment-body" />
 
-          {showReplies && (
-            <ul className="comments-children">
-              {comment.replies.map((reply) => (
-                <CommentItem key={reply.id} comment={reply} depth={depth + 1} />
-              ))}
-            </ul>
+          {comment.replies.length > 0 && (
+            <>
+              <button
+                type="button"
+                className="comment-toggle"
+                onClick={(e) => { e.stopPropagation(); setShowReplies((current) => !current); }}
+              >
+                {showReplies ? 'Hide' : 'Show'} replies ({comment.replies.length})
+              </button>
+
+              {showReplies && (
+                <ul className="comments-children">
+                  {comment.replies.map((reply) => (
+                    <CommentItem key={reply.id} comment={reply} depth={depth + 1} />
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </>
       )}
@@ -116,7 +131,14 @@ export function PostDetailPage() {
   }, [normalized]);
 
   if (loading) {
-    return <StateView kind="loading" />;
+    return (
+      <section className="detail-page">
+        <SkeletonLoader kind="text" count={1} />
+        <div style={{ marginTop: '1.5rem' }}>
+          <SkeletonLoader kind="comment" count={4} />
+        </div>
+      </section>
+    );
   }
 
   if (error || !normalized) {

@@ -14,7 +14,13 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
       return 0;
     }
 
-    return Math.min(index, items.length - 1);
+    const clamped = Math.min(index, items.length - 1);
+
+    if (clamped !== index) {
+      setIndex(clamped);
+    }
+
+    return clamped;
   }, [index, items.length]);
 
   if (items.length === 0) {
@@ -24,7 +30,7 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   const active = items[boundedIndex];
 
   return (
-    <div className="media-block gallery">
+    <div className="media-block media-aspect-wrap gallery">
       <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
       {items.length > 1 && (
         <div className="gallery-controls">

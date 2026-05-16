@@ -108,6 +108,7 @@ export function SubredditPage() {
     };
   }, [name, sort, topTimeRange]);
 
+  const postRefs = useRef<Map<string, HTMLElement>>(new Map());
   const normalizedPosts = useMemo(() => posts.map(normalizePost), [posts]);
   const discoveredFlairs = useMemo(() => {
     const seen = new Set<string>();
@@ -152,6 +153,45 @@ export function SubredditPage() {
 
     return flairFilteredPosts.filter((post) => isMediaPost(post.media.type));
   }, [flairFilteredPosts, videoFeedMode]);
+
+  const [focusedPostIndex, setFocusedPostIndex] = useState(-1);
+
+  useEffect(() => {
+    if (videoFeedMode) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement) {
+        return;
+      }
+
+      if (event.key === 'j' || event.key === 'k') {
+        event.preventDefault();
+        setFocusedPostIndex((prev) => {
+          if (visiblePosts.length === 0) return -1;
+          const delta = event.key === 'j' ? 1 : -1;
+          const next = Math.max(0, Math.min(visiblePosts.length - 1, prev + delta));
+          const key = visiblePosts[next]?.name;
+
+          if (key) {
+            const el = postRefs.current.get(key);
+            el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+
+          return next;
+        });
+      }
+
+      if (event.key === 'Enter' && focusedPostIndex >= 0 && focusedPostIndex < visiblePosts.length) {
+        const post = visiblePosts[focusedPostIndex];
+        if (post) {
+          window.location.href = `/r/${post.subreddit}/comments/${post.id}`;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [videoFeedMode, visiblePosts, focusedPostIndex]);
 
   const loadMore = async () => {
     if (!after || loadingMore) {
@@ -335,7 +375,14 @@ export function SubredditPage() {
       ) : (
         <div className="post-list" style={{ '--post-columns': columns } as CSSProperties}>
           {visiblePosts.map((post, index) => (
-            <article key={post.name}>
+            <article
+              key={post.name}
+              ref={(el) => {
+                if (el) postRefs.current.set(post.name, el);
+                else postRefs.current.delete(post.name);
+              }}
+              data-focused={focusedPostIndex === index ? 'true' : undefined}
+            >
               {index === triggerIndex && after && <div ref={nearEndRef} className="near-end-trigger" />}
               <PostCard post={post} cardMode={cardMode} />
             </article>

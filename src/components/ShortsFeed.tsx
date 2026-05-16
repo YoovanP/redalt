@@ -16,6 +16,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const feedRef = useRef<HTMLDivElement | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLElement | null>>([]);
+  const videoRefs = useRef<Map<string, HTMLVideoElement | null>>(new Map());
   const gestureRef = useRef<{
     index: number;
     startX: number;
@@ -193,19 +194,13 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   }, [activeIndex, posts.length]);
 
   useEffect(() => {
-    const feed = feedRef.current;
-
-    if (!feed) {
-      return;
+    for (const [_, video] of videoRefs.current) {
+      if (video) {
+        video.muted = shortsMuted;
+        video.playbackRate = playbackRate;
+      }
     }
-
-    const videos = feed.querySelectorAll<HTMLVideoElement>('video.post-video');
-
-    for (const video of videos) {
-      video.muted = shortsMuted;
-      video.playbackRate = playbackRate;
-    }
-  }, [shortsMuted, playbackRate, posts.length, activeIndex]);
+  }, [shortsMuted, playbackRate]);
 
   const triggerIndex = Math.max(0, posts.length - 3);
 
@@ -377,7 +372,17 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
           onPointerCancel={onTouchPointerCancel}
         >
           {index === triggerIndex && hasMore && <div ref={nearEndRef} className="near-end-trigger" />}
-          <div className="shorts-media-wrap">
+          <div
+            className="shorts-media-wrap"
+            ref={(el) => {
+              if (el) {
+                const video = el.querySelector<HTMLVideoElement>('video.post-video');
+                videoRefs.current.set(post.name, video);
+              } else {
+                videoRefs.current.delete(post.name);
+              }
+            }}
+          >
             <RenderMedia post={post} expanded mode="shorts" />
           </div>
           {showOverlay && (
