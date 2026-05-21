@@ -40,7 +40,7 @@ const defaultSettings: UiSettings = {
   columns: 1,
   videoFeedMode: false,
   cardMode: 'default',
-  persistentHeader: true,
+  persistentHeader: false,
   openInNewTab: false,
 };
 

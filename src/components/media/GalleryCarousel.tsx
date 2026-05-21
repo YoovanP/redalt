@@ -28,9 +28,10 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   }
 
   const active = items[boundedIndex];
+  const hasDimensions = typeof active.width === 'number' && typeof active.height === 'number' && active.width > 0 && active.height > 0;
 
   return (
-    <div className="media-block media-aspect-wrap gallery">
+    <div className="media-block gallery" style={hasDimensions ? { aspectRatio: `${active.width} / ${active.height}`, maxHeight: '80vh' } : { aspectRatio: '16 / 9', maxHeight: '520px' }}>
       <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
       {items.length > 1 && (
         <div className="gallery-controls">

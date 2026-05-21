@@ -20,7 +20,7 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
   }
 
   if (media.type === 'image') {
-    return <ImageMedia url={media.url} alt={post.title} />;
+    return <ImageMedia url={media.url} alt={post.title} width={media.width} height={media.height} />;
   }
 
   if (media.type === 'gallery') {

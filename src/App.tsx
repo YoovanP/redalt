@@ -4,7 +4,6 @@ import { CustomFeedBuilder } from './components/CustomFeedBuilder';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
-import { ThemeSwitcher } from './components/ThemeSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -108,13 +107,10 @@ function AppLayout() {
                   <h1>RedAlt</h1>
                 </div>
                 <div className="header-controls">
-                  <SubredditSwitcher initialSubreddit={subreddit} wide />
+                  <SubredditSwitcher initialSubreddit={subreddit} />
                   <nav className="header-nav-links" aria-label="Quick links">
                     <Link to="/saved">Saved</Link>
                     <Link to="/history">History</Link>
-                    <span className="header-theme-toggle">
-                      <ThemeSwitcher compact />
-                    </span>
                     <button
                       type="button"
                       className="header-expand-toggle"
