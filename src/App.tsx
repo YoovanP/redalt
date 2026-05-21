@@ -104,11 +104,12 @@ function AppLayout() {
             <>
               <div className="header-top">
                 <div className="app-brand">
-                  <h1>RedAlt</h1>
+                  <Link to="/"><h1>RedAlt</h1></Link>
                 </div>
                 <div className="header-controls">
                   <SubredditSwitcher initialSubreddit={subreddit} />
                   <nav className="header-nav-links" aria-label="Quick links">
+                    <FeedSettings />
                     <Link to="/saved">Saved</Link>
                     <Link to="/history">History</Link>
                     <button
@@ -122,10 +123,6 @@ function AppLayout() {
                     </button>
                   </nav>
                 </div>
-              </div>
-
-              <div className="header-row">
-                <FeedSettings />
               </div>
 
               {headerExpanded && (
