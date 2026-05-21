@@ -93,7 +93,7 @@ export function FeedSettings() {
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        ☰ Feed settings
+        ☰
       </button>
 
       {open && (
