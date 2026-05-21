@@ -325,6 +325,7 @@ export function SearchPage() {
                       if (!parsed.includes(name)) {
                         parsed.push(name);
                         localStorage.setItem('redalt.customFeed', JSON.stringify(parsed));
+                        window.dispatchEvent(new CustomEvent('redalt-custom-feed-update'));
                       }
                     } catch (err) {
                       console.error(err);

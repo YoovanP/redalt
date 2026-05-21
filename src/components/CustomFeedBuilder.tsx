@@ -44,6 +44,10 @@ export function CustomFeedBuilder({ currentSubreddit }: CustomFeedBuilderProps) 
 
   useEffect(() => {
     setSavedSubreddits(loadSavedSubreddits());
+
+    const onUpdate = () => setSavedSubreddits(loadSavedSubreddits());
+    window.addEventListener('redalt-custom-feed-update', onUpdate);
+    return () => window.removeEventListener('redalt-custom-feed-update', onUpdate);
   }, []);
 
   useEffect(() => {
