@@ -27,10 +27,6 @@ function isCloudflarePagesHost(): boolean {
 }
 
 function resolveRedditBases(rawBases: string | undefined): string[] {
-  if (isCloudflarePagesHost()) {
-    return [DEFAULT_REDDIT_BASE];
-  }
-
   const configuredBases = (rawBases ?? '')
     .split(',')
     .map((base) => normalizeBase(base))
@@ -181,7 +177,7 @@ async function fetchReddit<T>(path: string): Promise<T> {
             notifyApiStatus('warn', 'Reddit is rate-limiting requests. Results may load slowly.');
           }
 
-          throw new RedditApiError(getApiErrorMessage(response.status), response.status);
+          throw new RedditApiError(await readApiErrorMessage(response), response.status);
         }
 
         const contentType = response.headers.get('Content-Type') ?? '';
@@ -234,6 +230,22 @@ async function fetchReddit<T>(path: string): Promise<T> {
   notifyApiStatus('error', 'Network error while contacting Reddit.');
 
   throw new RedditApiError('Network error while contacting Reddit.', 0);
+}
+
+async function readApiErrorMessage(response: Response): Promise<string> {
+  const fallback = getApiErrorMessage(response.status);
+  const contentType = response.headers.get('Content-Type') ?? '';
+
+  if (!contentType.toLowerCase().includes('application/json')) {
+    return fallback;
+  }
+
+  try {
+    const payload = (await response.clone().json()) as { message?: unknown };
+    return typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function fetchSubredditListing(

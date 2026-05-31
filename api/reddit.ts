@@ -1,5 +1,14 @@
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
+const OAUTH_HOST = 'https://oauth.reddit.com';
+const OAUTH_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
+
+type OAuthTokenCache = {
+  token: string;
+  expiresAt: number;
+};
+
+let oauthTokenCache: OAuthTokenCache | null = null;
 
 function isJsonContentType(contentType: string | null): boolean {
   return (contentType ?? '').toLowerCase().includes('application/json');
@@ -42,9 +51,91 @@ async function fetchViaAllOrigins(upstreamPath: string): Promise<Response> {
   return fetch(mirrorUrl, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'RedAlt/1.0 (Vercel proxy)',
+      'User-Agent': getProxyUserAgent(),
     },
   });
+}
+
+function getProxyUserAgent(): string {
+  return process.env.REDDIT_PROXY_USER_AGENT ?? 'RedAlt/1.0 (Vercel proxy)';
+}
+
+async function getOAuthAccessToken(): Promise<string | null> {
+  const staticToken = process.env.REDDIT_BEARER_TOKEN?.trim();
+
+  if (staticToken) {
+    return staticToken;
+  }
+
+  const clientId = process.env.REDDIT_CLIENT_ID?.trim();
+  const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
+
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+
+  const now = Date.now();
+
+  if (oauthTokenCache && oauthTokenCache.expiresAt > now + 30000) {
+    return oauthTokenCache.token;
+  }
+
+  try {
+    const response = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': getProxyUserAgent(),
+      },
+      body: 'grant_type=client_credentials',
+    });
+
+    if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+      return null;
+    }
+
+    const tokenPayload = (await response.json()) as {
+      access_token?: unknown;
+      expires_in?: unknown;
+    };
+
+    if (typeof tokenPayload.access_token !== 'string') {
+      return null;
+    }
+
+    const expiresIn = typeof tokenPayload.expires_in === 'number' ? tokenPayload.expires_in : 3600;
+
+    oauthTokenCache = {
+      token: tokenPayload.access_token,
+      expiresAt: now + Math.max(expiresIn - 60, 60) * 1000,
+    };
+
+    return oauthTokenCache.token;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchViaOAuth(upstreamPath: string): Promise<Response | null> {
+  const token = await getOAuthAccessToken();
+
+  if (!token) {
+    return null;
+  }
+
+  try {
+    return await fetch(`${OAUTH_HOST}${upstreamPath}`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token}`,
+        'User-Agent': getProxyUserAgent(),
+      },
+    });
+  } catch {
+    return null;
+  }
 }
 
 export default async function handler(req: any, res: any): Promise<void> {
@@ -65,11 +156,24 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
+  const oauthResponse = await fetchViaOAuth(upstreamPath);
+
+  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
+    const body = await oauthResponse.text();
+
+    res
+      .status(oauthResponse.status)
+      .setHeader('Content-Type', oauthResponse.headers.get('content-type') ?? 'application/json')
+      .setHeader('Cache-Control', 'public, max-age=30, s-maxage=120')
+      .send(body);
+    return;
+  }
+
   // Prefer a known-working Cloudflare proxy to bypass Vercel egress blocks.
   const cloudflareResponse = await fetch(`${CLOUDFLARE_PROXY_BASE}${upstreamPath}`, {
     headers: {
       Accept: 'application/json',
-      'User-Agent': 'RedAlt/1.0 (Vercel proxy)',
+      'User-Agent': getProxyUserAgent(),
     },
   });
 
@@ -96,7 +200,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     const upstreamResponse = await fetch(upstreamUrl, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'RedAlt/1.0 (Vercel proxy)',
+        'User-Agent': getProxyUserAgent(),
       },
     });
 
@@ -120,7 +224,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         cacheControl: 'public, max-age=15, s-maxage=30',
         body: JSON.stringify({
           error: 'blocked',
-          message: 'Reddit blocked this request from the current network.',
+          message: 'Reddit blocked this request from the current network. Configure Reddit OAuth credentials on the proxy to use authenticated API access.',
         }),
       };
       continue;

@@ -35,6 +35,8 @@ Both repos run the same app architecture and can be kept in sync.
 ## How It Works
 
 RedAlt loads Reddit JSON through proxy backends to reduce direct client-side rate-limit/CORS issues.
+For production, configure Reddit OAuth credentials on each proxy. Reddit often blocks anonymous JSON
+requests from shared hosting egress IPs, so authenticated calls to `oauth.reddit.com` are much more reliable.
 
 ### Request Flow
 
@@ -54,6 +56,16 @@ This means:
 1. Render proxy as primary
 2. Cloudflare Pages proxy as secondary
 3. Same-origin Vercel API route as final fallback
+
+Proxy env vars:
+
+```bash
+REDDIT_CLIENT_ID=<reddit app client id>
+REDDIT_CLIENT_SECRET=<reddit app client secret>
+REDDIT_PROXY_USER_AGENT="RedAlt/1.0 by your-reddit-username"
+```
+
+Use a Reddit script/web app credential and keep these values server-side only.
 
 ## Features
 
@@ -135,6 +147,7 @@ vercel --prod
 ```
 
 Set `VITE_REDDIT_API_BASES` in Project Settings -> Environment Variables.
+Also set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, and `REDDIT_PROXY_USER_AGENT` for the API route.
 
 ### Render (Proxy Service)
 
@@ -145,6 +158,7 @@ Use `fly-proxy/` as root service directory.
 - Start Command: `npm run start`
 - Health Check Path: `/healthz`
 - Env: `ENABLE_MIRROR_FALLBACK=true`
+- Env: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_PROXY_USER_AGENT`
 
 You can deploy via [render.yaml](render.yaml) blueprint or dashboard setup.
 
@@ -158,6 +172,7 @@ Health endpoint:
 - Build command: `npm run build`
 - Output directory: `dist`
 - Ensure Functions are enabled so `functions/api/reddit/[[path]].ts` is active.
+- Set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, and `REDDIT_PROXY_USER_AGENT` as Pages environment variables.
 
 ### Railway
 
