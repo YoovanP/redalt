@@ -2,13 +2,46 @@ const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'htt
 const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
 const OAUTH_HOST = 'https://oauth.reddit.com';
 const OAUTH_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
+const PUBLIC_INSTANCE_LIST_URLS = [
+  'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
+  'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
+];
+const STATIC_PUBLIC_INSTANCES = [
+  'https://redlib.catsarch.com',
+  'https://redlib.perennialte.ch',
+  'https://redlib.r4fo.com',
+  'https://red.artemislena.eu',
+  'https://redlib.cow.rip',
+  'https://redlib.privacyredirect.com',
+  'https://redlib.nadeko.net',
+  'https://redlib.orangenet.cc',
+  'https://redlib.privadency.com',
+  'https://lr.vern.cc',
+  'https://teddit.net',
+  'https://teddit.ggc-project.de',
+  'https://teddit.kavin.rocks',
+  'https://teddit.zaggy.nl',
+  'https://teddit.namazso.eu',
+  'https://teddit.nautolan.racing',
+  'https://teddit.tinfoil-hat.net',
+  'https://teddit.domain.glass',
+  'https://eddrit.com',
+  'https://www.troddit.com',
+  'https://troddit.com',
+];
 
 type OAuthTokenCache = {
   token: string;
   expiresAt: number;
 };
 
+type PublicInstanceCache = {
+  urls: string[];
+  expiresAt: number;
+};
+
 let oauthTokenCache: OAuthTokenCache | null = null;
+let publicInstanceCache: PublicInstanceCache | null = null;
 
 function isJsonContentType(contentType: string | null): boolean {
   return (contentType ?? '').toLowerCase().includes('application/json');
@@ -58,6 +91,213 @@ async function fetchViaAllOrigins(upstreamPath: string): Promise<Response> {
 
 function getProxyUserAgent(): string {
   return process.env.REDDIT_PROXY_USER_AGENT ?? 'RedAlt/1.0 (Vercel proxy)';
+}
+
+function publicInstanceFallbackEnabled(): boolean {
+  return (process.env.ENABLE_PUBLIC_INSTANCE_FALLBACK ?? 'true').toLowerCase() !== 'false';
+}
+
+function normalizeInstanceBase(base: string): string {
+  return base.trim().replace(/\/+$/g, '');
+}
+
+function addInstanceUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== 'string') {
+    return;
+  }
+
+  const normalized = normalizeInstanceBase(value);
+
+  if (!normalized.startsWith('https://') || seen.has(normalized)) {
+    return;
+  }
+
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+function collectHttpsUrls(value: unknown, urls: string[], seen: Set<string>): void {
+  if (typeof value === 'string') {
+    addInstanceUrl(urls, seen, value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectHttpsUrls(item, urls, seen);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  for (const item of Object.values(value)) {
+    collectHttpsUrls(item, urls, seen);
+  }
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
+async function getPublicInstanceUrls(): Promise<string[]> {
+  const now = Date.now();
+
+  if (publicInstanceCache && publicInstanceCache.expiresAt > now) {
+    return publicInstanceCache.urls;
+  }
+
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  const configuredInstances = (process.env.REDDIT_PUBLIC_INSTANCE_BASES ?? '')
+    .split(',')
+    .map((base) => base.trim())
+    .filter(Boolean);
+
+  for (const base of [...configuredInstances, ...STATIC_PUBLIC_INSTANCES]) {
+    addInstanceUrl(urls, seen, base);
+  }
+
+  for (const sourceUrl of PUBLIC_INSTANCE_LIST_URLS) {
+    try {
+      const response = await fetchWithTimeout(
+        sourceUrl,
+        {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': getProxyUserAgent(),
+          },
+        },
+        2500,
+      );
+
+      if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+        continue;
+      }
+
+      collectHttpsUrls(await response.json(), urls, seen);
+    } catch {
+      // Static instances remain available if a list endpoint is stale or blocked.
+    }
+  }
+
+  publicInstanceCache = {
+    urls,
+    expiresAt: now + 10 * 60 * 1000,
+  };
+
+  return urls;
+}
+
+function isPublicPostPath(upstreamPath: string): boolean {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (!normalizedPath.endsWith('.json')) {
+    return false;
+  }
+
+  return (
+    normalizedPath.startsWith('/r/') ||
+    normalizedPath.startsWith('/user/') ||
+    normalizedPath === '/search.json'
+  );
+}
+
+function isCompatibleRedditPayload(payload: unknown, upstreamPath: string): boolean {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath.includes('/comments/')) {
+    return (
+      Array.isArray(payload) &&
+      typeof payload[0] === 'object' &&
+      payload[0] !== null &&
+      Array.isArray((payload[0] as { data?: { children?: unknown[] } }).data?.children)
+    );
+  }
+
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { kind?: unknown }).kind === 'Listing' &&
+    Array.isArray((payload as { data?: { children?: unknown[] } }).data?.children)
+  );
+}
+
+async function fetchFromPublicInstance(base: string, upstreamPath: string): Promise<Response | null> {
+  try {
+    const response = await fetchWithTimeout(
+      `${base}${upstreamPath}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': getProxyUserAgent(),
+        },
+      },
+      3500,
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const body = await response.text();
+    const contentType = response.headers.get('content-type');
+    const looksJson = isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
+
+    if (!looksJson) {
+      return null;
+    }
+
+    if (!isCompatibleRedditPayload(JSON.parse(body), upstreamPath)) {
+      return null;
+    }
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType ?? 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'X-RedAlt-Fallback': 'public-instance',
+        'X-RedAlt-Instance': base,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function fetchViaPublicInstances(upstreamPath: string): Promise<Response | null> {
+  if (!publicInstanceFallbackEnabled() || !isPublicPostPath(upstreamPath)) {
+    return null;
+  }
+
+  const urls = await getPublicInstanceUrls();
+  const batchSize = 6;
+
+  for (let index = 0; index < urls.length; index += batchSize) {
+    const batch = urls.slice(index, index + batchSize);
+    const results = await Promise.all(batch.map((base) => fetchFromPublicInstance(base, upstreamPath)));
+    const successfulResponse = results.find((response) => response !== null);
+
+    if (successfulResponse) {
+      return successfulResponse;
+    }
+  }
+
+  return null;
 }
 
 async function getOAuthAccessToken(): Promise<string | null> {
@@ -249,6 +489,21 @@ export default async function handler(req: any, res: any): Promise<void> {
       .status(mirrorResponse.status)
       .setHeader('Content-Type', mirrorResponse.headers.get('content-type') ?? 'application/json')
       .setHeader('Cache-Control', 'public, max-age=30, s-maxage=120')
+      .send(body);
+    return;
+  }
+
+  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
+
+  if (publicInstanceResponse) {
+    const body = await publicInstanceResponse.text();
+
+    res
+      .status(publicInstanceResponse.status)
+      .setHeader('Content-Type', publicInstanceResponse.headers.get('content-type') ?? 'application/json')
+      .setHeader('Cache-Control', publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120')
+      .setHeader('X-RedAlt-Fallback', publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance')
+      .setHeader('X-RedAlt-Instance', publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown')
       .send(body);
     return;
   }

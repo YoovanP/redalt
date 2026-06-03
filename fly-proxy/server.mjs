@@ -8,8 +8,36 @@ const MIRROR_ENABLED = (process.env.ENABLE_MIRROR_FALLBACK ?? 'true').toLowerCas
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 const OAUTH_HOST = 'https://oauth.reddit.com';
 const OAUTH_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
+const PUBLIC_INSTANCE_LIST_URLS = [
+  'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
+  'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
+];
+const STATIC_PUBLIC_INSTANCES = [
+  'https://redlib.catsarch.com',
+  'https://redlib.perennialte.ch',
+  'https://redlib.r4fo.com',
+  'https://red.artemislena.eu',
+  'https://redlib.cow.rip',
+  'https://redlib.privacyredirect.com',
+  'https://redlib.nadeko.net',
+  'https://redlib.orangenet.cc',
+  'https://redlib.privadency.com',
+  'https://lr.vern.cc',
+  'https://teddit.net',
+  'https://teddit.ggc-project.de',
+  'https://teddit.kavin.rocks',
+  'https://teddit.zaggy.nl',
+  'https://teddit.namazso.eu',
+  'https://teddit.nautolan.racing',
+  'https://teddit.tinfoil-hat.net',
+  'https://teddit.domain.glass',
+  'https://eddrit.com',
+  'https://www.troddit.com',
+  'https://troddit.com',
+];
 
 let oauthTokenCache = null;
+let publicInstanceCache = null;
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -93,6 +121,203 @@ async function fetchViaAllOrigins(upstreamPath) {
       'User-Agent': USER_AGENT,
     },
   });
+}
+
+function publicInstanceFallbackEnabled() {
+  return (process.env.ENABLE_PUBLIC_INSTANCE_FALLBACK ?? 'true').toLowerCase() !== 'false';
+}
+
+function normalizeInstanceBase(base) {
+  return base.trim().replace(/\/+$/g, '');
+}
+
+function addInstanceUrl(urls, seen, value) {
+  if (typeof value !== 'string') {
+    return;
+  }
+
+  const normalized = normalizeInstanceBase(value);
+
+  if (!normalized.startsWith('https://') || seen.has(normalized)) {
+    return;
+  }
+
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+function collectHttpsUrls(value, urls, seen) {
+  if (typeof value === 'string') {
+    addInstanceUrl(urls, seen, value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectHttpsUrls(item, urls, seen);
+    }
+    return;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  for (const item of Object.values(value)) {
+    collectHttpsUrls(item, urls, seen);
+  }
+}
+
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    globalThis.clearTimeout(timeoutId);
+  }
+}
+
+async function getPublicInstanceUrls() {
+  const now = Date.now();
+
+  if (publicInstanceCache && publicInstanceCache.expiresAt > now) {
+    return publicInstanceCache.urls;
+  }
+
+  const urls = [];
+  const seen = new Set();
+
+  const configuredInstances = (process.env.REDDIT_PUBLIC_INSTANCE_BASES ?? '')
+    .split(',')
+    .map((base) => base.trim())
+    .filter(Boolean);
+
+  for (const base of [...configuredInstances, ...STATIC_PUBLIC_INSTANCES]) {
+    addInstanceUrl(urls, seen, base);
+  }
+
+  for (const sourceUrl of PUBLIC_INSTANCE_LIST_URLS) {
+    try {
+      const response = await fetchWithTimeout(
+        sourceUrl,
+        {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': USER_AGENT,
+          },
+        },
+        2500,
+      );
+
+      if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+        continue;
+      }
+
+      collectHttpsUrls(await response.json(), urls, seen);
+    } catch {
+      // Static instances remain available if a list endpoint is stale or blocked.
+    }
+  }
+
+  publicInstanceCache = {
+    urls,
+    expiresAt: now + 10 * 60 * 1000,
+  };
+
+  return urls;
+}
+
+function isPublicPostPath(upstreamPath) {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (!normalizedPath.endsWith('.json')) {
+    return false;
+  }
+
+  return (
+    normalizedPath.startsWith('/r/') ||
+    normalizedPath.startsWith('/user/') ||
+    normalizedPath === '/search.json'
+  );
+}
+
+function isCompatibleRedditPayload(payload, upstreamPath) {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath.includes('/comments/')) {
+    return Array.isArray(payload) && Array.isArray(payload[0]?.data?.children);
+  }
+
+  return payload?.kind === 'Listing' && Array.isArray(payload.data?.children);
+}
+
+async function fetchFromPublicInstance(base, upstreamPath) {
+  try {
+    const response = await fetchWithTimeout(
+      `${base}${upstreamPath}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': USER_AGENT,
+        },
+      },
+      3500,
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const body = await response.text();
+    const contentType = response.headers.get('content-type');
+    const looksJson = isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
+
+    if (!looksJson) {
+      return null;
+    }
+
+    if (!isCompatibleRedditPayload(JSON.parse(body), upstreamPath)) {
+      return null;
+    }
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': contentType ?? 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'X-RedAlt-Fallback': 'public-instance',
+        'X-RedAlt-Instance': base,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function fetchViaPublicInstances(upstreamPath) {
+  if (!publicInstanceFallbackEnabled() || !isPublicPostPath(upstreamPath)) {
+    return null;
+  }
+
+  const urls = await getPublicInstanceUrls();
+  const batchSize = 6;
+
+  for (let index = 0; index < urls.length; index += batchSize) {
+    const batch = urls.slice(index, index + batchSize);
+    const results = await Promise.all(batch.map((base) => fetchFromPublicInstance(base, upstreamPath)));
+    const successfulResponse = results.find((response) => response !== null);
+
+    if (successfulResponse) {
+      return successfulResponse;
+    }
+  }
+
+  return null;
 }
 
 async function getOAuthAccessToken() {
@@ -273,6 +498,21 @@ async function proxyRequest(req, res) {
       );
       return;
     }
+  }
+
+  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
+
+  if (publicInstanceResponse) {
+    const body = await publicInstanceResponse.text();
+    setCorsHeaders(res);
+    res.writeHead(publicInstanceResponse.status, {
+      'Content-Type': publicInstanceResponse.headers.get('content-type') ?? 'application/json; charset=utf-8',
+      'Cache-Control': publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
+      'X-RedAlt-Fallback': publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance',
+      'X-RedAlt-Instance': publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown',
+    });
+    res.end(body);
+    return;
   }
 
   if (fallback) {

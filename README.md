@@ -63,9 +63,33 @@ Proxy env vars:
 REDDIT_CLIENT_ID=<reddit app client id>
 REDDIT_CLIENT_SECRET=<reddit app client secret>
 REDDIT_PROXY_USER_AGENT="RedAlt/1.0 by your-reddit-username"
+ENABLE_PUBLIC_INSTANCE_FALLBACK=true
+REDDIT_PUBLIC_INSTANCE_BASES=
 ```
 
 Use a Reddit script/web app credential and keep these values server-side only.
+
+### Proxy Fallbacks
+
+Each proxy tries upstreams in this order:
+
+1. Reddit OAuth API, when `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` are configured.
+2. Same-project proxy fallback, where available.
+3. Direct Reddit JSON hosts: `www.reddit.com`, `api.reddit.com`, and `old.reddit.com`.
+4. AllOrigins mirror fallback, when enabled.
+5. Public alternative frontend instances for post JSON.
+
+The public-instance fallback is enabled by default with `ENABLE_PUBLIC_INSTANCE_FALLBACK=true`. It only runs for public post/listing JSON routes such as subreddit feeds, user submitted feeds, search results, and post detail threads. The proxy validates that the response is Reddit-shaped JSON before returning it to the app, so HTML block pages or incompatible frontend responses are skipped.
+
+Built-in public fallback sources include Redlib, Libreddit, Teddit, Eddrit, and Troddit. Redlib and Libreddit instance lists are refreshed from their public JSON lists and cached briefly by the proxy; the other projects are included as static public bases because their public instance metadata is less consistent.
+
+You can prefer your own public or self-hosted instances with a comma-separated list:
+
+```bash
+REDDIT_PUBLIC_INSTANCE_BASES=https://redlib.example.com,https://teddit.example.com
+```
+
+Set `ENABLE_PUBLIC_INSTANCE_FALLBACK=false` to disable this behavior.
 
 ## Features
 
@@ -147,7 +171,7 @@ vercel --prod
 ```
 
 Set `VITE_REDDIT_API_BASES` in Project Settings -> Environment Variables.
-Also set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, and `REDDIT_PROXY_USER_AGENT` for the API route.
+Also set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_PROXY_USER_AGENT`, and `ENABLE_PUBLIC_INSTANCE_FALLBACK` for the API route.
 
 ### Render (Proxy Service)
 
@@ -158,6 +182,7 @@ Use `fly-proxy/` as root service directory.
 - Start Command: `npm run start`
 - Health Check Path: `/healthz`
 - Env: `ENABLE_MIRROR_FALLBACK=true`
+- Env: `ENABLE_PUBLIC_INSTANCE_FALLBACK=true`
 - Env: `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_PROXY_USER_AGENT`
 
 You can deploy via [render.yaml](render.yaml) blueprint or dashboard setup.
@@ -172,7 +197,7 @@ Health endpoint:
 - Build command: `npm run build`
 - Output directory: `dist`
 - Ensure Functions are enabled so `functions/api/reddit/[[path]].ts` is active.
-- Set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, and `REDDIT_PROXY_USER_AGENT` as Pages environment variables.
+- Set `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_PROXY_USER_AGENT`, and `ENABLE_PUBLIC_INSTANCE_FALLBACK` as Pages environment variables.
 
 ### Railway
 
