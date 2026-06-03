@@ -13,15 +13,6 @@ const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
 ];
 const STATIC_PUBLIC_INSTANCES = [
-  'https://redlib.catsarch.com',
-  'https://redlib.perennialte.ch',
-  'https://redlib.r4fo.com',
-  'https://red.artemislena.eu',
-  'https://redlib.cow.rip',
-  'https://redlib.privacyredirect.com',
-  'https://redlib.nadeko.net',
-  'https://redlib.orangenet.cc',
-  'https://redlib.privadency.com',
   'https://lr.vern.cc',
   'https://teddit.net',
   'https://teddit.ggc-project.de',
@@ -31,6 +22,15 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://teddit.nautolan.racing',
   'https://teddit.tinfoil-hat.net',
   'https://teddit.domain.glass',
+  'https://redlib.catsarch.com',
+  'https://redlib.perennialte.ch',
+  'https://redlib.r4fo.com',
+  'https://red.artemislena.eu',
+  'https://redlib.cow.rip',
+  'https://redlib.privacyredirect.com',
+  'https://redlib.nadeko.net',
+  'https://redlib.orangenet.cc',
+  'https://redlib.privadency.com',
   'https://eddrit.com',
   'https://www.troddit.com',
   'https://troddit.com',
@@ -115,12 +115,12 @@ async function fetchViaAllOrigins(upstreamPath) {
   const redditUrl = `https://www.reddit.com${upstreamPath}`;
   const mirrorUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(redditUrl)}`;
 
-  return fetch(mirrorUrl, {
+  return fetchWithTimeout(mirrorUrl, {
     headers: {
       Accept: 'application/json',
       'User-Agent': USER_AGENT,
     },
-  });
+  }, 4000);
 }
 
 function publicInstanceFallbackEnabled() {
@@ -180,6 +180,220 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   } finally {
     globalThis.clearTimeout(timeoutId);
   }
+}
+
+function isTedditInstance(base) {
+  try {
+    return new URL(base).hostname.toLowerCase().includes('teddit');
+  } catch {
+    return false;
+  }
+}
+
+function appendTedditApiParams(path, sourceParams) {
+  const params = new URLSearchParams();
+  params.set('api', '');
+  params.set('type', 'json');
+  params.set('target', 'reddit');
+
+  for (const [key, value] of sourceParams) {
+    if (!params.has(key) && key !== 'raw_json') {
+      params.append(key, value);
+    }
+  }
+
+  return `${path}?${params.toString()}`;
+}
+
+function buildTedditPath(upstreamPath) {
+  const [rawPath, rawQuery = ''] = upstreamPath.split('?');
+  const sourceParams = new URLSearchParams(rawQuery);
+  const path = rawPath.replace(/\.json$/i, '');
+  const subredditMatch = path.match(/^\/r\/([^/]+)\/([^/]+)$/i);
+  const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+
+  if (subredditMatch) {
+    return appendTedditApiParams(`/r/${subredditMatch[1]}/${subredditMatch[2]}`, sourceParams);
+  }
+
+  if (userMatch) {
+    return appendTedditApiParams(`/u/${userMatch[1]}/submitted`, sourceParams);
+  }
+
+  return null;
+}
+
+function isBrowserAppInstance(base) {
+  try {
+    const hostname = new URL(base).hostname.toLowerCase();
+    return hostname.includes('eddrit') || hostname.includes('troddit');
+  } catch {
+    return true;
+  }
+}
+
+function buildRssPath(upstreamPath) {
+  const [rawPath] = upstreamPath.split('?');
+  const path = rawPath.replace(/\.json$/i, '');
+  const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/[^/]+)?$/i);
+  const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+
+  if (subredditMatch) {
+    return `/r/${subredditMatch[1]}.rss`;
+  }
+
+  if (userMatch) {
+    return `/user/${userMatch[1]}.rss`;
+  }
+
+  return null;
+}
+
+function buildPublicInstancePath(base, upstreamPath) {
+  if (isTedditInstance(base)) {
+    return buildTedditPath(upstreamPath);
+  }
+
+  if (isBrowserAppInstance(base)) {
+    return null;
+  }
+
+  return buildRssPath(upstreamPath);
+}
+
+function normalizePublicInstancePayload(payload, upstreamPath) {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath.startsWith('/user/') && Array.isArray(payload?.overview?.data?.children)) {
+    return payload.overview;
+  }
+
+  return payload;
+}
+
+function decodeXmlEntities(value) {
+  return value
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
+function stripHtml(value) {
+  return decodeXmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+function readXmlTag(xml, tag) {
+  const match = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'));
+  return match ? decodeXmlEntities(match[1]).trim() : '';
+}
+
+function readXmlAttribute(xml, tag, attribute) {
+  const match = xml.match(new RegExp(`<${tag}[^>]*\\s${attribute}=["']([^"']+)["'][^>]*>`, 'i'));
+  return match ? decodeXmlEntities(match[1]).trim() : '';
+}
+
+function inferSubredditFromPath(upstreamPath) {
+  const match = upstreamPath.match(/^\/r\/([^/?]+)/i);
+  return match ? decodeURIComponent(match[1]) : 'popular';
+}
+
+function inferUserFromPath(upstreamPath) {
+  const match = upstreamPath.match(/^\/user\/([^/?]+)/i);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function stableIdFromUrl(url, fallbackIndex) {
+  const commentMatch = url.match(/\/comments\/([^/]+)/i);
+  if (commentMatch) {
+    return commentMatch[1];
+  }
+
+  let hash = 0;
+  for (let index = 0; index < url.length; index += 1) {
+    hash = (hash * 31 + url.charCodeAt(index)) >>> 0;
+  }
+
+  return `rss_${hash.toString(36)}_${fallbackIndex}`;
+}
+
+function parseRssListing(xml, upstreamPath) {
+  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item>/gi)];
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const subreddit = inferSubredditFromPath(upstreamPath);
+  const user = inferUserFromPath(upstreamPath);
+
+  return {
+    kind: 'Listing',
+    data: {
+      after: null,
+      children: items.slice(0, 25).map((item, index) => {
+        const itemXml = item[1];
+        const title = stripHtml(readXmlTag(itemXml, 'title')) || 'Untitled post';
+        const link = readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
+        const author = stripHtml(readXmlTag(itemXml, 'author')) || user || '[unknown]';
+        const content = readXmlTag(itemXml, 'content:encoded') || readXmlTag(itemXml, 'content') || readXmlTag(itemXml, 'description');
+        const enclosureUrl = readXmlAttribute(itemXml, 'enclosure', 'url');
+        const created = Date.parse(readXmlTag(itemXml, 'pubDate'));
+        const id = stableIdFromUrl(link || title, index);
+        const permalink = (() => {
+          try {
+            return new URL(link).pathname;
+          } catch {
+            return link.startsWith('/') ? link : `/r/${subreddit}/comments/${id}`;
+          }
+        })();
+        const outboundUrl = enclosureUrl || link || `https://www.reddit.com${permalink}`;
+
+        return {
+          kind: 't3',
+          data: {
+            id,
+            name: `t3_${id}`,
+            title,
+            author,
+            subreddit,
+            permalink,
+            score: 0,
+            ups: 0,
+            num_comments: 0,
+            created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
+            selftext: stripHtml(content),
+            over_18: false,
+            url: outboundUrl,
+            url_overridden_by_dest: outboundUrl,
+            domain: (() => {
+              try {
+                return new URL(outboundUrl).hostname;
+              } catch {
+                return '';
+              }
+            })(),
+            is_self: !enclosureUrl,
+            post_hint: enclosureUrl ? 'image' : undefined,
+            preview: enclosureUrl
+              ? {
+                  images: [
+                    {
+                      source: {
+                        url: enclosureUrl,
+                      },
+                    },
+                  ],
+                }
+              : undefined,
+          },
+        };
+      }),
+    },
+  };
 }
 
 async function getPublicInstanceUrls() {
@@ -258,15 +472,21 @@ function isCompatibleRedditPayload(payload, upstreamPath) {
 
 async function fetchFromPublicInstance(base, upstreamPath) {
   try {
+    const publicPath = buildPublicInstancePath(base, upstreamPath);
+
+    if (!publicPath) {
+      return null;
+    }
+
     const response = await fetchWithTimeout(
-      `${base}${upstreamPath}`,
+      `${base}${publicPath}`,
       {
         headers: {
           Accept: 'application/json',
           'User-Agent': USER_AGENT,
         },
       },
-      3500,
+      2500,
     );
 
     if (!response.ok) {
@@ -276,16 +496,23 @@ async function fetchFromPublicInstance(base, upstreamPath) {
     const body = await response.text();
     const contentType = response.headers.get('content-type');
     const looksJson = isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
+    const looksRss = (contentType ?? '').toLowerCase().includes('rss') || /<rss\b|<feed\b|<item\b/i.test(body);
 
-    if (!looksJson) {
+    if (!looksJson && !looksRss) {
       return null;
     }
 
-    if (!isCompatibleRedditPayload(JSON.parse(body), upstreamPath)) {
+    const normalizedPayload = looksJson
+      ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
+      : parseRssListing(body, upstreamPath);
+
+    if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
     }
 
-    return new Response(body, {
+    const normalizedBody = JSON.stringify(normalizedPayload);
+
+    return new Response(normalizedBody, {
       status: 200,
       headers: {
         'Content-Type': contentType ?? 'application/json; charset=utf-8',
@@ -305,7 +532,7 @@ async function fetchViaPublicInstances(upstreamPath) {
   }
 
   const urls = await getPublicInstanceUrls();
-  const batchSize = 6;
+  const batchSize = 8;
 
   for (let index = 0; index < urls.length; index += batchSize) {
     const batch = urls.slice(index, index + batchSize);
@@ -440,12 +667,20 @@ async function proxyRequest(req, res) {
 
   for (const host of UPSTREAM_HOSTS) {
     const upstreamUrl = `${host}${upstreamPath}`;
-    const upstreamResponse = await fetch(upstreamUrl, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': USER_AGENT,
+    const upstreamResponse = await fetchWithTimeout(
+      upstreamUrl,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': USER_AGENT,
+        },
       },
-    });
+      5000,
+    ).catch(() => null);
+
+    if (!upstreamResponse) {
+      continue;
+    }
 
     const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
 
