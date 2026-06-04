@@ -31,17 +31,19 @@ export function HomePage() {
   useEffect(() => {
     let ignore = false;
 
+    async function fetchTrendingSource() {
+      try {
+        return await fetchSubredditListing('popular', { sort: 'hot' });
+      } catch {
+        return fetchSubredditListing('all', { sort: 'hot' });
+      }
+    }
+
     async function loadTrendingPosts() {
       setTrendingLoading(true);
 
       try {
-        let result;
-
-        try {
-          result = await fetchSubredditListing('popular', { sort: 'hot' });
-        } catch {
-          result = await fetchSubredditListing('all', { sort: 'hot' });
-        }
+        let result = await fetchTrendingSource();
 
         if (result.posts.length === 0) {
           result = await fetchSubredditListing('all', { sort: 'hot' });
