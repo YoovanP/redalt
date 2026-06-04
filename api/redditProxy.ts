@@ -586,6 +586,209 @@ function stripHtml(value: string): string {
   return decodeXmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
+function stripHtmlLines(value: string): string[] {
+  return decodeXmlEntities(
+    value
+      .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:p|div|li|blockquote|h\d)>/gi, '\n')
+      .replace(/<[^>]+>/g, ' '),
+  )
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function readHtmlAttributes(html: string, attribute: 'href' | 'src'): string[] {
+  return [...html.matchAll(new RegExp(`\\s${attribute}=["']([^"']+)["']`, 'gi'))].map((match) =>
+    decodeXmlEntities(match[1] ?? '').trim(),
+  );
+}
+
+function normalizeUrlCandidate(value: string, baseUrl: string): string {
+  const candidate = decodeXmlEntities(value).trim();
+
+  if (!candidate || /^(?:#|javascript:|mailto:)/i.test(candidate)) {
+    return '';
+  }
+
+  try {
+    const url = new URL(candidate, baseUrl);
+
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return '';
+    }
+
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function getUrlHostname(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function getUrlPathname(url: string): string {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function isLikelyImageUrl(url: string): boolean {
+  const pathname = getUrlPathname(url);
+  return /\.(?:png|jpe?g|webp|gif|avif)$/i.test(pathname);
+}
+
+function isLikelyVideoUrl(url: string): boolean {
+  const pathname = getUrlPathname(url);
+  return /\.(?:mp4|webm|mov|m4v|m3u8)$/i.test(pathname) || pathname.endsWith('.gifv');
+}
+
+function isRedditNavigationUrl(url: string): boolean {
+  const hostname = getUrlHostname(url);
+
+  if (!hostname.endsWith('reddit.com') && !hostname.endsWith('redd.it')) {
+    return false;
+  }
+
+  const pathname = getUrlPathname(url);
+  return (
+    pathname === '/' ||
+    pathname.startsWith('/r/') ||
+    pathname.startsWith('/user/') ||
+    pathname.startsWith('/u/') ||
+    pathname.startsWith('/search')
+  );
+}
+
+function firstDistinctUrl(values: string[], baseUrl: string): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+
+  for (const value of values) {
+    const url = normalizeUrlCandidate(value, baseUrl);
+    const key = url.toLowerCase();
+
+    if (!url || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    urls.push(url);
+  }
+
+  return urls;
+}
+
+function buildYouTubeEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    let id = '';
+
+    if (hostname.includes('youtu.be')) {
+      id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    } else if (hostname.includes('youtube.com')) {
+      id =
+        parsed.searchParams.get('v') ??
+        parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/i)?.[1] ??
+        '';
+    }
+
+    return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildVimeoEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('vimeo.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.match(/\/(\d+)/)?.[1] ?? '';
+    return id ? `https://player.vimeo.com/video/${id}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildRedgifsEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('redgifs.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.match(/\/(?:watch|ifr)\/([^/?]+)/i)?.[1] ?? '';
+    return id ? `https://www.redgifs.com/ifr/${id}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildKnownEmbed(url: string): { provider: string; embedUrl: string } | null {
+  const youtubeEmbed = buildYouTubeEmbed(url);
+
+  if (youtubeEmbed) {
+    return { provider: 'YouTube', embedUrl: youtubeEmbed };
+  }
+
+  const vimeoEmbed = buildVimeoEmbed(url);
+
+  if (vimeoEmbed) {
+    return { provider: 'Vimeo', embedUrl: vimeoEmbed };
+  }
+
+  const redgifsEmbed = buildRedgifsEmbed(url);
+
+  if (redgifsEmbed) {
+    return { provider: 'Redgifs', embedUrl: redgifsEmbed };
+  }
+
+  return null;
+}
+
+function cleanRssSelfText(content: string, title: string, mediaUrl: string): string {
+  const titleKey = title.trim().toLowerCase();
+  const mediaKey = mediaUrl.trim().toLowerCase();
+  const lines = stripHtmlLines(content).filter((line) => {
+    const key = line.toLowerCase();
+
+    if (!key || key === titleKey || key === mediaKey) {
+      return false;
+    }
+
+    if (
+      /^submitted\b/i.test(line) ||
+      /^by\s+\/?u\//i.test(line) ||
+      /^to\s+\/?r\//i.test(line) ||
+      (/(?:^|\s)(?:comments?|permalink|source|share|save)(?:\s|$)/i.test(line) && line.length < 80) ||
+      /^\d+\s+comments?$/i.test(line) ||
+      /^https?:\/\//i.test(line) ||
+      /^(\[[^\]]+\]\s*)+$/i.test(line)
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return lines.slice(0, 4).join('\n\n');
+}
+
 function collectNamesFromHtml(html: string, pattern: RegExp, query: string): string[] {
   const names: string[] = [];
   const seen = new Set<string>();
@@ -673,7 +876,7 @@ function stableIdFromUrl(url: string, fallbackIndex: number): string {
   return `rss_${hash.toString(36)}_${fallbackIndex}`;
 }
 
-function parseRssListing(xml: string, upstreamPath: string): unknown | null {
+function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
 
   if (items.length === 0) {
@@ -697,7 +900,12 @@ function parseRssListing(xml: string, upstreamPath: string): unknown | null {
           readXmlTag(itemXml, 'content') ||
           readXmlTag(itemXml, 'summary') ||
           readXmlTag(itemXml, 'description');
-        const enclosureUrl = readXmlAttribute(itemXml, 'enclosure', 'url') || readXmlAttribute(itemXml, 'media:thumbnail', 'url');
+        const enclosureUrl = normalizeUrlCandidate(
+          readXmlAttribute(itemXml, 'enclosure', 'url') ||
+            readXmlAttribute(itemXml, 'media:content', 'url') ||
+            readXmlAttribute(itemXml, 'media:thumbnail', 'url'),
+          sourceBase,
+        );
         const created = Date.parse(readXmlTag(itemXml, 'pubDate') || readXmlTag(itemXml, 'updated') || readXmlTag(itemXml, 'published'));
         const id = stableIdFromUrl(link || title, index);
         const permalink = (() => {
@@ -708,7 +916,24 @@ function parseRssListing(xml: string, upstreamPath: string): unknown | null {
           }
         })();
         const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
-        const outboundUrl = enclosureUrl || link || `https://www.reddit.com${permalink}`;
+        const contentUrls = firstDistinctUrl(
+          [
+            enclosureUrl,
+            ...readHtmlAttributes(content, 'src'),
+            ...readHtmlAttributes(content, 'href'),
+            link,
+          ],
+          sourceBase,
+        );
+        const imageUrl = contentUrls.find(isLikelyImageUrl) ?? '';
+        const videoUrl = contentUrls.find(isLikelyVideoUrl) ?? '';
+        const embed = contentUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
+        const externalUrl = contentUrls.find((url) => !isRedditNavigationUrl(url)) ?? '';
+        const outboundUrl = videoUrl || imageUrl || externalUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
+        const thumbnailUrl = imageUrl || enclosureUrl;
+        const selftext = cleanRssSelfText(content, title, outboundUrl);
+        const domain = getUrlHostname(outboundUrl);
+        const isMediaPost = Boolean(imageUrl || videoUrl || embed || externalUrl);
 
         return {
           kind: 't3',
@@ -723,25 +948,52 @@ function parseRssListing(xml: string, upstreamPath: string): unknown | null {
             ups: 0,
             num_comments: 0,
             created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
-            selftext: stripHtml(content),
+            selftext,
             over_18: false,
             url: outboundUrl,
             url_overridden_by_dest: outboundUrl,
-            domain: (() => {
-              try {
-                return new URL(outboundUrl).hostname;
-              } catch {
-                return '';
-              }
-            })(),
-            is_self: !enclosureUrl,
-            post_hint: enclosureUrl ? 'image' : undefined,
-            preview: enclosureUrl
+            domain,
+            is_self: !isMediaPost,
+            post_hint: videoUrl ? 'hosted:video' : embed ? 'rich:video' : imageUrl ? 'image' : externalUrl ? 'link' : undefined,
+            thumbnail: thumbnailUrl || undefined,
+            media: embed
+              ? {
+                  oembed: {
+                    provider_name: embed.provider,
+                    thumbnail_url: thumbnailUrl || undefined,
+                    html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
+                  },
+                }
+              : videoUrl
+                ? {
+                    reddit_video: {
+                      fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
+                      hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+                    },
+                  }
+                : null,
+            secure_media: embed
+              ? {
+                  oembed: {
+                    provider_name: embed.provider,
+                    thumbnail_url: thumbnailUrl || undefined,
+                    html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
+                  },
+                }
+              : videoUrl
+                ? {
+                    reddit_video: {
+                      fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
+                      hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+                    },
+                  }
+                : null,
+            preview: thumbnailUrl
               ? {
                   images: [
                     {
                       source: {
-                        url: enclosureUrl,
+                        url: thumbnailUrl,
                       },
                     },
                   ],
@@ -886,7 +1138,7 @@ async function fetchFromPublicInstance(
     const normalizedPayload = looksJson
       ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
       : looksRss
-        ? normalizePublicInstancePayload(parseRssListing(body, upstreamPath), upstreamPath)
+        ? normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath)
         : parseHtmlDiscoveryListing(body, upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
