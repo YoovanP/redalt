@@ -351,7 +351,60 @@ function buildRssPath(upstreamPath: string): string | null {
   return null;
 }
 
+function getPublicSearchParams(upstreamPath: string): URLSearchParams | null {
+  const [, rawQuery = ''] = upstreamPath.split('?');
+  const sourceParams = new URLSearchParams(rawQuery);
+  const query = (sourceParams.get('q') ?? sourceParams.get('query') ?? '').trim();
+
+  if (query.length < 2) {
+    return null;
+  }
+
+  const params = new URLSearchParams();
+  params.set('q', query);
+  params.set('sort', sourceParams.get('sort') ?? 'relevance');
+  params.set('type', sourceParams.get('type') ?? 'link');
+
+  for (const key of ['t', 'limit', 'include_over_18']) {
+    const value = sourceParams.get(key);
+
+    if (value) {
+      params.set(key, value);
+    }
+  }
+
+  return params;
+}
+
+function isPublicDiscoveryPath(upstreamPath: string): boolean {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  return (
+    normalizedPath === '/api/search_reddit_names.json' ||
+    normalizedPath === '/subreddits/search.json' ||
+    normalizedPath === '/users/search.json'
+  );
+}
+
+function buildPublicDiscoveryPath(base: string, upstreamPath: string): string | null {
+  const params = getPublicSearchParams(upstreamPath);
+
+  if (!params) {
+    return null;
+  }
+
+  if (isTedditInstance(base)) {
+    return appendTedditApiParams('/search', params);
+  }
+
+  return `/search.rss?${params.toString()}`;
+}
+
 function buildPublicInstancePath(base: string, upstreamPath: string): string | null {
+  if (isPublicDiscoveryPath(upstreamPath)) {
+    return buildPublicDiscoveryPath(base, upstreamPath);
+  }
+
   if (isTedditInstance(base)) {
     return buildTedditPath(upstreamPath);
   }
@@ -363,8 +416,148 @@ function buildPublicInstancePath(base: string, upstreamPath: string): string | n
   return buildRssPath(upstreamPath);
 }
 
+function getSearchQuery(upstreamPath: string): string {
+  const [, rawQuery = ''] = upstreamPath.split('?');
+  const params = new URLSearchParams(rawQuery);
+
+  return (params.get('q') ?? params.get('query') ?? '').trim().toLowerCase();
+}
+
+function normalizeCommunityName(value: string): string {
+  return value.trim().replace(/^\/?r\//i, '').replace(/^\/+|\/+$/g, '');
+}
+
+function normalizeUserName(value: string): string {
+  return value.trim().replace(/^\/?(?:u|user)\//i, '').replace(/^\/+|\/+$/g, '');
+}
+
+function matchesSearchQuery(value: string, query: string): boolean {
+  return !query || value.toLowerCase().includes(query);
+}
+
+function listingChildren(payload: unknown): Array<{ data?: Record<string, unknown> }> {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { kind?: unknown }).kind === 'Listing' &&
+    Array.isArray((payload as { data?: { children?: unknown[] } }).data?.children)
+  ) {
+    return (payload as { data: { children: Array<{ data?: Record<string, unknown> }> } }).data.children;
+  }
+
+  return [];
+}
+
+function collectSubredditNamesFromListing(payload: unknown, upstreamPath: string): string[] {
+  const query = getSearchQuery(upstreamPath);
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  for (const child of listingChildren(payload)) {
+    const data = child.data ?? {};
+    const rawName =
+      typeof data.subreddit === 'string'
+        ? data.subreddit
+        : typeof data.display_name === 'string'
+          ? data.display_name
+          : typeof data.permalink === 'string'
+            ? inferSubredditFromPermalink(data.permalink, '')
+            : '';
+    const name = normalizeCommunityName(rawName);
+    const key = name.toLowerCase();
+
+    if (!name || seen.has(key) || !matchesSearchQuery(name, query)) {
+      continue;
+    }
+
+    seen.add(key);
+    names.push(name);
+  }
+
+  return names;
+}
+
+function collectUserNamesFromListing(payload: unknown, upstreamPath: string): string[] {
+  const query = getSearchQuery(upstreamPath);
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  for (const child of listingChildren(payload)) {
+    const data = child.data ?? {};
+    const rawName = typeof data.author === 'string' ? data.author : typeof data.name === 'string' ? data.name : '';
+    const name = normalizeUserName(rawName);
+    const key = name.toLowerCase();
+
+    if (!name || name === '[unknown]' || seen.has(key) || !matchesSearchQuery(name, query)) {
+      continue;
+    }
+
+    seen.add(key);
+    names.push(name);
+  }
+
+  return names;
+}
+
+function buildSubredditSearchPayload(names: string[]): unknown {
+  return {
+    kind: 'Listing',
+    data: {
+      after: null,
+      children: names.slice(0, 25).map((name) => ({
+        kind: 't5',
+        data: {
+          display_name: name,
+          title: `r/${name}`,
+          public_description: '',
+          over18: false,
+          subscribers: 0,
+        },
+      })),
+    },
+  };
+}
+
+function buildUserSearchPayload(names: string[]): unknown {
+  return {
+    kind: 'Listing',
+    data: {
+      after: null,
+      children: names.slice(0, 25).map((name) => ({
+        kind: 't2',
+        data: {
+          name,
+          total_karma: 0,
+        },
+      })),
+    },
+  };
+}
+
 function normalizePublicInstancePayload(payload: unknown, upstreamPath: string): unknown {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath === '/api/search_reddit_names.json') {
+    const names = collectSubredditNamesFromListing(payload, upstreamPath);
+
+    if (names.length === 0) {
+      return null;
+    }
+
+    return {
+      names: names.slice(0, 25),
+    };
+  }
+
+  if (normalizedPath === '/subreddits/search.json') {
+    const names = collectSubredditNamesFromListing(payload, upstreamPath);
+    return names.length > 0 ? buildSubredditSearchPayload(names) : null;
+  }
+
+  if (normalizedPath === '/users/search.json') {
+    const names = collectUserNamesFromListing(payload, upstreamPath);
+    return names.length > 0 ? buildUserSearchPayload(names) : null;
+  }
 
   if (
     normalizedPath.startsWith('/user/') &&
@@ -391,6 +584,47 @@ function decodeXmlEntities(value: string): string {
 
 function stripHtml(value: string): string {
   return decodeXmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+function collectNamesFromHtml(html: string, pattern: RegExp, query: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  for (const match of html.matchAll(pattern)) {
+    const name = decodeXmlEntities(match[1] ?? '').trim();
+    const key = name.toLowerCase();
+
+    if (!name || seen.has(key) || !matchesSearchQuery(name, query)) {
+      continue;
+    }
+
+    seen.add(key);
+    names.push(name);
+  }
+
+  return names;
+}
+
+function parseHtmlDiscoveryListing(html: string, upstreamPath: string): unknown | null {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+  const query = getSearchQuery(upstreamPath);
+
+  if (normalizedPath === '/api/search_reddit_names.json') {
+    const names = collectNamesFromHtml(html, /(?:href=["'][^"']*\/r\/|>\s*r\/)([A-Za-z0-9_]{2,21})/gi, query);
+    return names.length > 0 ? { names: names.slice(0, 25) } : null;
+  }
+
+  if (normalizedPath === '/subreddits/search.json') {
+    const names = collectNamesFromHtml(html, /(?:href=["'][^"']*\/r\/|>\s*r\/)([A-Za-z0-9_]{2,21})/gi, query);
+    return names.length > 0 ? buildSubredditSearchPayload(names) : null;
+  }
+
+  if (normalizedPath === '/users/search.json') {
+    const names = collectNamesFromHtml(html, /(?:href=["'][^"']*\/(?:u|user)\/|>\s*u\/)([A-Za-z0-9_-]{2,24})/gi, query);
+    return names.length > 0 ? buildUserSearchPayload(names) : null;
+  }
+
+  return null;
 }
 
 function readXmlTag(xml: string, tag: string): string {
@@ -579,8 +813,20 @@ function isPublicPostPath(upstreamPath: string): boolean {
   return normalizedPath.startsWith('/r/') || normalizedPath.startsWith('/user/') || normalizedPath === '/search.json';
 }
 
+function isPublicFallbackPath(upstreamPath: string): boolean {
+  return isPublicPostPath(upstreamPath) || isPublicDiscoveryPath(upstreamPath);
+}
+
 function isCompatibleRedditPayload(payload: unknown, upstreamPath: string): boolean {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath === '/api/search_reddit_names.json') {
+    return (
+      typeof payload === 'object' &&
+      payload !== null &&
+      Array.isArray((payload as { names?: unknown[] }).names)
+    );
+  }
 
   if (normalizedPath.includes('/comments/')) {
     return (
@@ -631,12 +877,17 @@ async function fetchFromPublicInstance(
     const contentType = response.headers.get('content-type');
     const looksJson = isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
     const looksRss = (contentType ?? '').toLowerCase().includes('rss') || /<rss\b|<feed\b|<item\b/i.test(body);
+    const looksHtml = (contentType ?? '').toLowerCase().includes('html') || /<html\b|<a\s/i.test(body);
 
-    if (!looksJson && !looksRss) {
+    if (!looksJson && !looksRss && !(looksHtml && isPublicDiscoveryPath(upstreamPath))) {
       return null;
     }
 
-    const normalizedPayload = looksJson ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath) : parseRssListing(body, upstreamPath);
+    const normalizedPayload = looksJson
+      ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
+      : looksRss
+        ? normalizePublicInstancePayload(parseRssListing(body, upstreamPath), upstreamPath)
+        : parseHtmlDiscoveryListing(body, upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
@@ -661,7 +912,7 @@ async function fetchViaPublicInstances(
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
 ): Promise<Response | null> {
-  if (!publicInstanceFallbackEnabled(env) || !isPublicPostPath(upstreamPath)) {
+  if (!publicInstanceFallbackEnabled(env) || !isPublicFallbackPath(upstreamPath)) {
     return null;
   }
 
