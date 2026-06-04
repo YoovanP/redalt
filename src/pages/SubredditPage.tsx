@@ -1,43 +1,16 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
+import { LoadMoreButton } from '../components/LoadMoreButton';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
 import { StateView } from '../components/StateView';
-import { normalizePost } from '../lib/normalizePost';
+import { getValidatedListingSort, getValidatedTopTimeRange, isMediaPost } from '../lib/feedUtils';
 import {
   fetchSubredditListing,
-  type ListingSort,
-  type TopTimeRange,
+  type FetchListingOptions,
 } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
-import type { RedditPostData } from '../types/reddit';
-
-function getValidatedSort(input: string | null): ListingSort {
-  if (input === 'hot' || input === 'new' || input === 'rising' || input === 'top') {
-    return input;
-  }
-
-  return 'hot';
-}
-
-function getValidatedTopTimeRange(input: string | null): TopTimeRange {
-  if (
-    input === 'hour' ||
-    input === 'day' ||
-    input === 'week' ||
-    input === 'month' ||
-    input === 'year' ||
-    input === 'all'
-  ) {
-    return input;
-  }
-
-  return 'day';
-}
-
-function isMediaPost(mediaType: string): boolean {
-  return mediaType === 'image' || mediaType === 'gallery' || mediaType === 'video' || mediaType === 'external';
-}
+import { useNearEndLoadMore, usePostListingFeed } from '../lib/usePostListingFeed';
 
 function getSubredditScrollKey(name: string): string {
   return `redalt.subreddit.scroll.${name}`;
@@ -53,63 +26,39 @@ export function SubredditPage() {
   } = useUiSettings();
   const { name = 'mildlyinfuriating' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const sort = getValidatedSort(searchParams.get('sort'));
+  const sort = getValidatedListingSort(searchParams.get('sort'));
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const selectedFlair = searchParams.get('flair') ?? 'all';
-  const [posts, setPosts] = useState<RedditPostData[]>([]);
-  const [after, setAfter] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
-  const nearEndRef = useRef<HTMLDivElement | null>(null);
   const hasRestoredScrollRef = useRef(false);
+  const fetchPage = useCallback(
+    (options: FetchListingOptions) =>
+      fetchSubredditListing(name, {
+        ...options,
+        sort,
+        topTimeRange,
+      }),
+    [name, sort, topTimeRange],
+  );
+  const {
+    normalizedPosts,
+    after,
+    loading,
+    loadingMore,
+    error,
+    loadMoreError,
+    loadMore,
+  } = usePostListingFeed({
+    sourceKey: `${name}:${sort}:${topTimeRange}`,
+    fetchPage,
+    videoFeedMode,
+    initialErrorMessage: 'Unable to load subreddit.',
+  });
 
   useEffect(() => {
     hasRestoredScrollRef.current = false;
   }, [name]);
 
-  useEffect(() => {
-    let ignore = false;
-
-    setLoading(true);
-    setError(null);
-    setLoadMoreError(null);
-    setPosts([]);
-    setAfter(null);
-
-    fetchSubredditListing(name, {
-      sort,
-      topTimeRange,
-    })
-      .then((result) => {
-        if (ignore) {
-          return;
-        }
-
-        setPosts(result.posts);
-        setAfter(result.after);
-      })
-      .catch((err: unknown) => {
-        if (ignore) {
-          return;
-        }
-
-        setError(err instanceof Error ? err.message : 'Unable to load subreddit.');
-      })
-      .finally(() => {
-        if (!ignore) {
-          setLoading(false);
-        }
-      });
-
-    return () => {
-      ignore = true;
-    };
-  }, [name, sort, topTimeRange]);
-
   const postRefs = useRef<Map<string, HTMLElement>>(new Map());
-  const normalizedPosts = useMemo(() => posts.map(normalizePost), [posts]);
   const discoveredFlairs = useMemo(() => {
     const seen = new Set<string>();
 
@@ -155,6 +104,13 @@ export function SubredditPage() {
   }, [flairFilteredPosts, videoFeedMode]);
 
   const [focusedPostIndex, setFocusedPostIndex] = useState(-1);
+  const { nearEndRef, triggerIndex } = useNearEndLoadMore({
+    after,
+    loadingMore,
+    disabled: videoFeedMode,
+    itemCount: visiblePosts.length,
+    loadMore,
+  });
 
   useEffect(() => {
     if (videoFeedMode) return;
@@ -193,89 +149,6 @@ export function SubredditPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [videoFeedMode, visiblePosts, focusedPostIndex]);
 
-  const loadMore = async () => {
-    if (!after || loadingMore) {
-      return;
-    }
-
-    setLoadMoreError(null);
-    setLoadingMore(true);
-
-    try {
-      let cursor: string | null = after;
-      let nextAfter: string | null = after;
-      let attempts = 0;
-      const maxAttempts = videoFeedMode ? 4 : 1;
-      const collected: RedditPostData[] = [];
-
-      while (cursor && attempts < maxAttempts) {
-        const result = await fetchSubredditListing(name, {
-          after: cursor,
-          sort,
-          topTimeRange,
-        });
-
-        collected.push(...result.posts);
-        nextAfter = result.after;
-        attempts += 1;
-
-        if (!videoFeedMode) {
-          break;
-        }
-
-        const chunkHasMedia = result.posts.some((post) => {
-          const mediaType = normalizePost(post).media.type;
-          return isMediaPost(mediaType);
-        });
-
-        if (chunkHasMedia) {
-          break;
-        }
-
-        cursor = result.after;
-      }
-
-      if (collected.length > 0) {
-        setPosts((previous) => [...previous, ...collected]);
-      }
-
-      setAfter(nextAfter);
-    } catch (err) {
-      setLoadMoreError(err instanceof Error ? err.message : 'Unable to load more posts.');
-    } finally {
-      setLoadingMore(false);
-    }
-  };
-
-  useEffect(() => {
-    const target = nearEndRef.current;
-
-    if (!target || !after || loadingMore || videoFeedMode) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            void loadMore();
-            break;
-          }
-        }
-      },
-      {
-        root: null,
-        threshold: 0.4,
-      },
-    );
-
-    observer.observe(target);
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [after, loadingMore, videoFeedMode, visiblePosts.length]);
-
   useEffect(() => {
     if (loading || hasRestoredScrollRef.current) {
       return;
@@ -313,8 +186,6 @@ export function SubredditPage() {
       // Ignore storage failures.
     }
   }, [loading, name]);
-
-  const triggerIndex = Math.max(0, visiblePosts.length - 3);
 
   const onFlairChange = (nextFlair: string) => {
     const nextParams = new URLSearchParams(searchParams);
@@ -392,9 +263,9 @@ export function SubredditPage() {
 
       {after && !videoFeedMode && (
         <div>
-          <button className="load-more" onClick={loadMore} disabled={loadingMore}>
-            {loadingMore ? 'Loading…' : 'Load more'}
-          </button>
+          <LoadMoreButton loading={loadingMore} onClick={loadMore}>
+            Load more
+          </LoadMoreButton>
           {loadMoreError && <p className="meta">{loadMoreError}</p>}
         </div>
       )}

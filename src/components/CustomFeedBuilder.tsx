@@ -1,37 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-
-const STORAGE_KEY = 'redalt.customFeed';
-
-function sanitizeSubreddit(input: string): string {
-  return input
-    .trim()
-    .replace(/^\/?r\//i, '')
-    .replace(/^\/+|\/+$/g, '')
-    .toLowerCase();
-}
-
-function loadSavedSubreddits(): string[] {
-  try {
-    const value = localStorage.getItem(STORAGE_KEY);
-
-    if (!value) {
-      return [];
-    }
-
-    const parsed = JSON.parse(value) as unknown;
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed
-      .map((entry) => (typeof entry === 'string' ? sanitizeSubreddit(entry) : ''))
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
+import {
+  CUSTOM_FEED_UPDATE_EVENT,
+  notifyCustomFeedUpdate,
+  readCustomFeedSubreddits,
+  sanitizeSubreddit,
+  writeCustomFeedSubreddits,
+} from '../lib/customFeed';
 
 type CustomFeedBuilderProps = {
   currentSubreddit: string;
@@ -43,18 +18,20 @@ export function CustomFeedBuilder({ currentSubreddit }: CustomFeedBuilderProps) 
   const [savedSubreddits, setSavedSubreddits] = useState<string[]>([]);
 
   useEffect(() => {
-    setSavedSubreddits(loadSavedSubreddits());
+    setSavedSubreddits(readCustomFeedSubreddits());
 
-    const onUpdate = () => setSavedSubreddits(loadSavedSubreddits());
-    window.addEventListener('redalt-custom-feed-update', onUpdate);
-    return () => window.removeEventListener('redalt-custom-feed-update', onUpdate);
+    const onUpdate = () => setSavedSubreddits(readCustomFeedSubreddits());
+    window.addEventListener(CUSTOM_FEED_UPDATE_EVENT, onUpdate);
+    return () => window.removeEventListener(CUSTOM_FEED_UPDATE_EVENT, onUpdate);
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(savedSubreddits));
-  }, [savedSubreddits]);
-
   const combinedFeed = useMemo(() => savedSubreddits.join('+'), [savedSubreddits]);
+
+  const saveSubreddits = (nextSubreddits: string[]) => {
+    writeCustomFeedSubreddits(nextSubreddits);
+    setSavedSubreddits(readCustomFeedSubreddits());
+    notifyCustomFeedUpdate();
+  };
 
   const addSubreddit = (subredditInput: string) => {
     const subreddit = sanitizeSubreddit(subredditInput);
@@ -63,13 +40,9 @@ export function CustomFeedBuilder({ currentSubreddit }: CustomFeedBuilderProps) 
       return;
     }
 
-    setSavedSubreddits((previous) => {
-      if (previous.includes(subreddit)) {
-        return previous;
-      }
-
-      return [...previous, subreddit];
-    });
+    if (!savedSubreddits.includes(subreddit)) {
+      saveSubreddits([...savedSubreddits, subreddit]);
+    }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -79,7 +52,7 @@ export function CustomFeedBuilder({ currentSubreddit }: CustomFeedBuilderProps) 
   };
 
   const removeSubreddit = (subreddit: string) => {
-    setSavedSubreddits((previous) => previous.filter((entry) => entry !== subreddit));
+    saveSubreddits(savedSubreddits.filter((entry) => entry !== subreddit));
   };
 
   return (

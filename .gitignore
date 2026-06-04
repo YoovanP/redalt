@@ -9,3 +9,5 @@ Thumbs.db
 coverage/
 *.log
 .vercel
+.superpowers/
+tmp-*/

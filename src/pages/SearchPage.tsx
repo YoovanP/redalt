@@ -1,9 +1,12 @@
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { LoadMoreButton } from '../components/LoadMoreButton';
 import { PostCard } from '../components/PostCard';
 import { StateView } from '../components/StateView';
+import { addCustomFeedSubreddit } from '../lib/customFeed';
+import { getValidatedTopTimeRange } from '../lib/feedUtils';
 import { normalizePost } from '../lib/normalizePost';
-import { fetchGlobalSearch, type SearchSort, type TopTimeRange } from '../lib/redditApi';
+import { fetchGlobalSearch, type SearchSort } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import type { RedditPostData } from '../types/reddit';
 import type { SearchSubredditResult, SearchUserResult } from '../lib/redditApi';
@@ -23,21 +26,6 @@ function getValidatedSearchSort(input: string | null): SearchSort {
   }
 
   return 'relevance';
-}
-
-function getValidatedTopTimeRange(input: string | null): TopTimeRange {
-  if (
-    input === 'hour' ||
-    input === 'day' ||
-    input === 'week' ||
-    input === 'month' ||
-    input === 'year' ||
-    input === 'all'
-  ) {
-    return input;
-  }
-
-  return 'day';
 }
 
 function getValidatedMediaFilter(input: string | null): MediaFilter {
@@ -312,24 +300,7 @@ export function SearchPage() {
                   }}
                   onClick={(event) => {
                     event.preventDefault();
-                    try {
-                      const raw = localStorage.getItem('redalt.customFeed');
-                      let parsed: string[] = [];
-                      if (raw) {
-                        const data = JSON.parse(raw);
-                        if (Array.isArray(data)) {
-                          parsed = data.map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : '')).filter(Boolean);
-                        }
-                      }
-                      const name = subreddit.name.toLowerCase();
-                      if (!parsed.includes(name)) {
-                        parsed.push(name);
-                        localStorage.setItem('redalt.customFeed', JSON.stringify(parsed));
-                        window.dispatchEvent(new CustomEvent('redalt-custom-feed-update'));
-                      }
-                    } catch (err) {
-                      console.error(err);
-                    }
+                    addCustomFeedSubreddit(subreddit.name);
                   }}
                 >
                   +
@@ -338,17 +309,16 @@ export function SearchPage() {
             ))}
           </div>
           {canLoadMoreSubreddits && (
-            <button
-              type="button"
-              className="load-more"
+            <LoadMoreButton
+              loading={loadingMore === 'subreddits'}
               disabled={loading || loadingMore !== null}
               onClick={() => {
                 setLoadingMore('subreddits');
                 setSubredditLimit((limit) => Math.min(limit + COMMUNITY_LIMIT_STEP, MAX_SEARCH_LIMIT));
               }}
             >
-              {loadingMore === 'subreddits' ? 'Loading…' : 'View more subreddits'}
-            </button>
+              View more subreddits
+            </LoadMoreButton>
           )}
         </section>
       )}
@@ -368,17 +338,16 @@ export function SearchPage() {
             ))}
           </div>
           {canLoadMoreUsers && (
-            <button
-              type="button"
-              className="load-more"
+            <LoadMoreButton
+              loading={loadingMore === 'users'}
               disabled={loading || loadingMore !== null}
               onClick={() => {
                 setLoadingMore('users');
                 setUserLimit((limit) => Math.min(limit + COMMUNITY_LIMIT_STEP, MAX_SEARCH_LIMIT));
               }}
             >
-              {loadingMore === 'users' ? 'Loading…' : 'View more users'}
-            </button>
+              View more users
+            </LoadMoreButton>
           )}
         </section>
       )}
@@ -394,17 +363,16 @@ export function SearchPage() {
             ))}
           </div>
           {canLoadMorePosts && (
-            <button
-              type="button"
-              className="load-more"
+            <LoadMoreButton
+              loading={loadingMore === 'posts'}
               disabled={loading || loadingMore !== null}
               onClick={() => {
                 setLoadingMore('posts');
                 setPostLimit((limit) => Math.min(limit + POST_LIMIT_STEP, MAX_SEARCH_LIMIT));
               }}
             >
-              {loadingMore === 'posts' ? 'Loading…' : 'View more posts'}
-            </button>
+              View more posts
+            </LoadMoreButton>
           )}
         </section>
       )}

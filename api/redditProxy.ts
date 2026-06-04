@@ -1,9 +1,19 @@
-import http from 'node:http';
+export type RedditProxyEnv = Record<string, string | undefined>;
 
-const PORT = Number(process.env.PORT ?? 8080);
-const HOST = process.env.HOST ?? '0.0.0.0';
-const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'RedAlt/1.0 (Render proxy)';
-const MIRROR_ENABLED = (process.env.ENABLE_MIRROR_FALLBACK ?? 'true').toLowerCase() !== 'false';
+type RedditProxyOptions = {
+  cloudflareProxyBase?: string;
+  userAgentFallback?: string;
+};
+
+type OAuthTokenCache = {
+  token: string;
+  expiresAt: number;
+};
+
+type PublicInstanceCache = {
+  urls: string[];
+  expiresAt: number;
+};
 
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 const OAUTH_HOST = 'https://oauth.reddit.com';
@@ -36,102 +46,196 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://troddit.com',
 ];
 
-let oauthTokenCache = null;
-let publicInstanceCache = null;
+let oauthTokenCache: OAuthTokenCache | null = null;
+let publicInstanceCache: PublicInstanceCache | null = null;
 
-function setCorsHeaders(res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept');
-}
-
-function isJsonContentType(contentType) {
-  return (contentType ?? '').toLowerCase().includes('application/json');
-}
-
-async function isBlockedHtmlResponse(response) {
-  const contentType = response.headers.get('content-type');
-
-  if (isJsonContentType(contentType)) {
-    return false;
-  }
-
-  if (response.status !== 403 && response.status !== 429) {
-    return false;
-  }
-
-  const body = await response.clone().text();
-  const normalized = body.toLowerCase();
+export function isAllowedRedditPath(upstreamPath: string): boolean {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
 
   return (
-    normalized.includes("you've been blocked by network security") ||
-    normalized.includes('blocked by network security')
+    normalizedPath.startsWith('/r/') ||
+    normalizedPath.startsWith('/user/') ||
+    normalizedPath.startsWith('/search.json') ||
+    normalizedPath.startsWith('/subreddits/') ||
+    normalizedPath.startsWith('/users/') ||
+    normalizedPath.startsWith('/api/search_reddit_names.json')
   );
 }
 
-function getAllowedPath(url) {
-  const normalizedPath = url.pathname;
-
-  if (!normalizedPath.startsWith('/api/reddit/')) {
-    return null;
+export async function handleRedditProxyRequest(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions = {},
+): Promise<Response> {
+  if (!isAllowedRedditPath(upstreamPath)) {
+    return new Response('Invalid Reddit path', {
+      status: 400,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
   }
 
-  const upstreamPath = normalizedPath.slice('/api/reddit'.length);
+  const oauthResponse = await fetchViaOAuth(upstreamPath, env, options);
 
-  const allowedPrefix =
-    upstreamPath.startsWith('/r/') ||
-    upstreamPath.startsWith('/user/') ||
-    upstreamPath.startsWith('/search.json') ||
-    upstreamPath.startsWith('/subreddits/') ||
-    upstreamPath.startsWith('/users/') ||
-    upstreamPath.startsWith('/api/search_reddit_names.json');
-
-  if (!allowedPrefix) {
-    return null;
+  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
+    return responseFromUpstream(oauthResponse, 'public, max-age=30, s-maxage=120');
   }
 
-  return `${upstreamPath}${url.search || ''}`;
+  if (options.cloudflareProxyBase) {
+    const cloudflareResponse = await fetchWithTimeout(
+      `${options.cloudflareProxyBase}${upstreamPath}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': getProxyUserAgent(env, options),
+        },
+      },
+      4000,
+    ).catch(() => null);
+
+    if (cloudflareResponse?.ok && isJsonContentType(cloudflareResponse.headers.get('content-type'))) {
+      return responseFromUpstream(cloudflareResponse, 'public, max-age=30, s-maxage=120');
+    }
+  }
+
+  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath, env, options);
+
+  if (publicInstanceResponse) {
+    return publicInstanceResponse;
+  }
+
+  let fallbackResponse: Response | null = null;
+
+  for (const host of UPSTREAM_HOSTS) {
+    const upstreamResponse = await fetchWithTimeout(
+      `${host}${upstreamPath}`,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': getProxyUserAgent(env, options),
+        },
+      },
+      5000,
+    ).catch(() => null);
+
+    if (!upstreamResponse) {
+      continue;
+    }
+
+    const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
+
+    if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
+      return responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120');
+    }
+
+    if (blockedHtml) {
+      fallbackResponse = new Response(
+        JSON.stringify({
+          error: 'blocked',
+          message:
+            'Reddit blocked this request from the current network. Configure Reddit OAuth credentials on the proxy to use authenticated API access.',
+        }),
+        {
+          status: 403,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=15, s-maxage=30',
+          },
+        },
+      );
+      continue;
+    }
+
+    if (!fallbackResponse) {
+      fallbackResponse = responseFromUpstream(upstreamResponse, 'public, max-age=15, s-maxage=30');
+    }
+  }
+
+  const mirrorResponse = await fetchViaAllOrigins(upstreamPath, env, options).catch(() => null);
+
+  if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
+    return responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120');
+  }
+
+  const redditRssResponse = await fetchViaRedditRss(upstreamPath, env, options);
+
+  if (redditRssResponse) {
+    return redditRssResponse;
+  }
+
+  return (
+    fallbackResponse ??
+    new Response(JSON.stringify({ error: 'upstream_unavailable' }), {
+      status: 502,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    })
+  );
 }
 
-function writeJson(res, statusCode, payload, cacheControl = 'no-store') {
-  setCorsHeaders(res);
-  res.writeHead(statusCode, {
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': cacheControl,
+function responseFromUpstream(response: Response, cacheControl: string): Response {
+  const headers = new Headers();
+  headers.set('Content-Type', response.headers.get('content-type') ?? 'application/json');
+  headers.set('Cache-Control', cacheControl);
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
   });
-  res.end(JSON.stringify(payload));
 }
 
-function writeText(res, statusCode, text, contentType = 'text/plain; charset=utf-8', cacheControl = 'no-store') {
-  setCorsHeaders(res);
-  res.writeHead(statusCode, {
-    'Content-Type': contentType,
-    'Cache-Control': cacheControl,
-  });
-  res.end(text);
+function isJsonContentType(contentType: string | null): boolean {
+  return (contentType ?? '').toLowerCase().includes('application/json');
 }
 
-async function fetchViaAllOrigins(upstreamPath) {
+async function isBlockedHtmlResponse(response: Response): Promise<boolean> {
+  const contentType = response.headers.get('content-type');
+
+  if (isJsonContentType(contentType) || (response.status !== 403 && response.status !== 429)) {
+    return false;
+  }
+
+  const normalized = (await response.clone().text()).toLowerCase();
+  return normalized.includes("you've been blocked by network security") || normalized.includes('blocked by network security');
+}
+
+async function fetchViaAllOrigins(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Response> {
   const redditUrl = `https://www.reddit.com${upstreamPath}`;
   const mirrorUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(redditUrl)}`;
 
-  return fetchWithTimeout(mirrorUrl, {
-    headers: {
-      Accept: 'application/json',
-      'User-Agent': USER_AGENT,
+  return fetchWithTimeout(
+    mirrorUrl,
+    {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': getProxyUserAgent(env, options),
+      },
     },
-  }, 4000);
+    4000,
+  );
 }
 
-function publicInstanceFallbackEnabled() {
-  return (process.env.ENABLE_PUBLIC_INSTANCE_FALLBACK ?? 'true').toLowerCase() !== 'false';
+function getProxyUserAgent(env: RedditProxyEnv | undefined, options: RedditProxyOptions): string {
+  return env?.REDDIT_PROXY_USER_AGENT ?? options.userAgentFallback ?? 'RedAlt/1.0 (Reddit proxy)';
 }
 
-function normalizeInstanceBase(base) {
+function publicInstanceFallbackEnabled(env: RedditProxyEnv | undefined): boolean {
+  return (env?.ENABLE_PUBLIC_INSTANCE_FALLBACK ?? 'true').toLowerCase() !== 'false';
+}
+
+function normalizeInstanceBase(base: string): string {
   return base.trim().replace(/\/+$/g, '');
 }
 
-function addInstanceUrl(urls, seen, value) {
+function addInstanceUrl(urls: string[], seen: Set<string>, value: unknown): void {
   if (typeof value !== 'string') {
     return;
   }
@@ -146,7 +250,7 @@ function addInstanceUrl(urls, seen, value) {
   urls.push(normalized);
 }
 
-function collectHttpsUrls(value, urls, seen) {
+function collectHttpsUrls(value: unknown, urls: string[], seen: Set<string>): void {
   if (typeof value === 'string') {
     addInstanceUrl(urls, seen, value);
     return;
@@ -168,7 +272,7 @@ function collectHttpsUrls(value, urls, seen) {
   }
 }
 
-async function fetchWithTimeout(url, init, timeoutMs) {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
@@ -182,7 +286,7 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   }
 }
 
-function isTedditInstance(base) {
+function isTedditInstance(base: string): boolean {
   try {
     return new URL(base).hostname.toLowerCase().includes('teddit');
   } catch {
@@ -190,7 +294,7 @@ function isTedditInstance(base) {
   }
 }
 
-function appendTedditApiParams(path, sourceParams) {
+function appendTedditApiParams(path: string, sourceParams: URLSearchParams): string {
   const params = new URLSearchParams();
   params.set('api', '');
   params.set('type', 'json');
@@ -205,7 +309,7 @@ function appendTedditApiParams(path, sourceParams) {
   return `${path}?${params.toString()}`;
 }
 
-function buildTedditPath(upstreamPath) {
+function buildTedditPath(upstreamPath: string): string | null {
   const [rawPath, rawQuery = ''] = upstreamPath.split('?');
   const sourceParams = new URLSearchParams(rawQuery);
   const path = rawPath.replace(/\.json$/i, '');
@@ -223,22 +327,21 @@ function buildTedditPath(upstreamPath) {
   return null;
 }
 
-function isUnsupportedBrowserAppInstance(base) {
+function isUnsupportedBrowserAppInstance(base: string): boolean {
   try {
-    const hostname = new URL(base).hostname.toLowerCase();
-    return hostname.includes('troddit');
+    return new URL(base).hostname.toLowerCase().includes('troddit');
   } catch {
     return true;
   }
 }
 
-function buildRssPath(upstreamPath) {
+function buildRssPath(upstreamPath: string): string | null {
   const [rawPath, rawQuery = ''] = upstreamPath.split('?');
   const path = rawPath.replace(/\.json$/i, '');
   const rssParams = new URLSearchParams(rawQuery);
   rssParams.delete('raw_json');
   const query = rssParams.toString();
-  const withQuery = (rssPath) => `${rssPath}${query ? `?${query}` : ''}`;
+  const withQuery = (rssPath: string) => `${rssPath}${query ? `?${query}` : ''}`;
   const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
   const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
   const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
@@ -263,7 +366,7 @@ function buildRssPath(upstreamPath) {
   return null;
 }
 
-function buildPublicInstancePath(base, upstreamPath) {
+function buildPublicInstancePath(base: string, upstreamPath: string): string | null {
   if (isTedditInstance(base)) {
     return buildTedditPath(upstreamPath);
   }
@@ -275,17 +378,22 @@ function buildPublicInstancePath(base, upstreamPath) {
   return buildRssPath(upstreamPath);
 }
 
-function normalizePublicInstancePayload(payload, upstreamPath) {
+function normalizePublicInstancePayload(payload: unknown, upstreamPath: string): unknown {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
 
-  if (normalizedPath.startsWith('/user/') && Array.isArray(payload?.overview?.data?.children)) {
-    return payload.overview;
+  if (
+    normalizedPath.startsWith('/user/') &&
+    typeof payload === 'object' &&
+    payload !== null &&
+    Array.isArray((payload as { overview?: { data?: { children?: unknown[] } } }).overview?.data?.children)
+  ) {
+    return (payload as { overview: unknown }).overview;
   }
 
   return payload;
 }
 
-function decodeXmlEntities(value) {
+function decodeXmlEntities(value: string): string {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&amp;/g, '&')
@@ -296,47 +404,49 @@ function decodeXmlEntities(value) {
     .replace(/&apos;/g, "'");
 }
 
-function stripHtml(value) {
+function stripHtml(value: string): string {
   return decodeXmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-function readXmlTag(xml, tag) {
+function readXmlTag(xml: string, tag: string): string {
   const match = xml.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i'));
   return match ? decodeXmlEntities(match[1]).trim() : '';
 }
 
-function readXmlAttribute(xml, tag, attribute) {
+function readXmlAttribute(xml: string, tag: string, attribute: string): string {
   const match = xml.match(new RegExp(`<${tag}[^>]*\\s${attribute}=["']([^"']+)["'][^>]*>`, 'i'));
   return match ? decodeXmlEntities(match[1]).trim() : '';
 }
 
-function readXmlAuthor(xml) {
+function readXmlAuthor(xml: string): string {
   const authorXml = readXmlTag(xml, 'author');
   return stripHtml(readXmlTag(authorXml, 'name') || authorXml);
 }
 
-function inferSubredditFromPath(upstreamPath) {
+function inferSubredditFromPath(upstreamPath: string): string {
   const match = upstreamPath.match(/^\/r\/([^/?]+)/i);
   return match ? decodeURIComponent(match[1]) : 'popular';
 }
 
-function inferUserFromPath(upstreamPath) {
+function inferUserFromPath(upstreamPath: string): string {
   const match = upstreamPath.match(/^\/user\/([^/?]+)/i);
   return match ? decodeURIComponent(match[1]) : '';
 }
 
-function inferSubredditFromPermalink(permalink, fallback) {
+function inferSubredditFromPermalink(permalink: string, fallback: string): string {
   const match = permalink.match(/^\/r\/([^/]+)/i);
   return match ? decodeURIComponent(match[1]) : fallback;
 }
 
-function stableIdFromUrl(url, fallbackIndex) {
+function stableIdFromUrl(url: string, fallbackIndex: number): string {
   const commentMatch = url.match(/\/comments\/([^/]+)/i);
+
   if (commentMatch) {
     return commentMatch[1];
   }
 
   let hash = 0;
+
   for (let index = 0; index < url.length; index += 1) {
     hash = (hash * 31 + url.charCodeAt(index)) >>> 0;
   }
@@ -344,7 +454,7 @@ function stableIdFromUrl(url, fallbackIndex) {
   return `rss_${hash.toString(36)}_${fallbackIndex}`;
 }
 
-function parseRssListing(xml, upstreamPath) {
+function parseRssListing(xml: string, upstreamPath: string): unknown | null {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
 
   if (items.length === 0) {
@@ -425,17 +535,16 @@ function parseRssListing(xml, upstreamPath) {
   };
 }
 
-async function getPublicInstanceUrls() {
+async function getPublicInstanceUrls(env: RedditProxyEnv | undefined, options: RedditProxyOptions): Promise<string[]> {
   const now = Date.now();
 
   if (publicInstanceCache && publicInstanceCache.expiresAt > now) {
     return publicInstanceCache.urls;
   }
 
-  const urls = [];
-  const seen = new Set();
-
-  const configuredInstances = (process.env.REDDIT_PUBLIC_INSTANCE_BASES ?? '')
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const configuredInstances = (env?.REDDIT_PUBLIC_INSTANCE_BASES ?? '')
     .split(',')
     .map((base) => base.trim())
     .filter(Boolean);
@@ -451,7 +560,7 @@ async function getPublicInstanceUrls() {
         {
           headers: {
             Accept: 'application/json',
-            'User-Agent': USER_AGENT,
+            'User-Agent': getProxyUserAgent(env, options),
           },
         },
         2500,
@@ -475,31 +584,42 @@ async function getPublicInstanceUrls() {
   return urls;
 }
 
-function isPublicPostPath(upstreamPath) {
+function isPublicPostPath(upstreamPath: string): boolean {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
 
   if (!normalizedPath.endsWith('.json')) {
     return false;
   }
 
-  return (
-    normalizedPath.startsWith('/r/') ||
-    normalizedPath.startsWith('/user/') ||
-    normalizedPath === '/search.json'
-  );
+  return normalizedPath.startsWith('/r/') || normalizedPath.startsWith('/user/') || normalizedPath === '/search.json';
 }
 
-function isCompatibleRedditPayload(payload, upstreamPath) {
+function isCompatibleRedditPayload(payload: unknown, upstreamPath: string): boolean {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
 
   if (normalizedPath.includes('/comments/')) {
-    return Array.isArray(payload) && Array.isArray(payload[0]?.data?.children);
+    return (
+      Array.isArray(payload) &&
+      typeof payload[0] === 'object' &&
+      payload[0] !== null &&
+      Array.isArray((payload[0] as { data?: { children?: unknown[] } }).data?.children)
+    );
   }
 
-  return payload?.kind === 'Listing' && Array.isArray(payload.data?.children);
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { kind?: unknown }).kind === 'Listing' &&
+    Array.isArray((payload as { data?: { children?: unknown[] } }).data?.children)
+  );
 }
 
-async function fetchFromPublicInstance(base, upstreamPath) {
+async function fetchFromPublicInstance(
+  base: string,
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Response | null> {
   try {
     const publicPath = buildPublicInstancePath(base, upstreamPath);
 
@@ -512,7 +632,7 @@ async function fetchFromPublicInstance(base, upstreamPath) {
       {
         headers: {
           Accept: 'application/json',
-          'User-Agent': USER_AGENT,
+          'User-Agent': getProxyUserAgent(env, options),
         },
       },
       2500,
@@ -531,17 +651,13 @@ async function fetchFromPublicInstance(base, upstreamPath) {
       return null;
     }
 
-    const normalizedPayload = looksJson
-      ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
-      : parseRssListing(body, upstreamPath);
+    const normalizedPayload = looksJson ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath) : parseRssListing(body, upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
     }
 
-    const normalizedBody = JSON.stringify(normalizedPayload);
-
-    return new Response(normalizedBody, {
+    return new Response(JSON.stringify(normalizedPayload), {
       status: 200,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
@@ -555,17 +671,21 @@ async function fetchFromPublicInstance(base, upstreamPath) {
   }
 }
 
-async function fetchViaPublicInstances(upstreamPath) {
-  if (!publicInstanceFallbackEnabled() || !isPublicPostPath(upstreamPath)) {
+async function fetchViaPublicInstances(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Response | null> {
+  if (!publicInstanceFallbackEnabled(env) || !isPublicPostPath(upstreamPath)) {
     return null;
   }
 
-  const urls = await getPublicInstanceUrls();
+  const urls = await getPublicInstanceUrls(env, options);
   const batchSize = 8;
 
   for (let index = 0; index < urls.length; index += batchSize) {
     const batch = urls.slice(index, index + batchSize);
-    const results = await Promise.all(batch.map((base) => fetchFromPublicInstance(base, upstreamPath)));
+    const results = await Promise.all(batch.map((base) => fetchFromPublicInstance(base, upstreamPath, env, options)));
     const successfulResponse = results.find((response) => response !== null);
 
     if (successfulResponse) {
@@ -576,7 +696,11 @@ async function fetchViaPublicInstances(upstreamPath) {
   return null;
 }
 
-async function fetchViaRedditRss(upstreamPath) {
+async function fetchViaRedditRss(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Response | null> {
   const rssPath = buildRssPath(upstreamPath);
 
   if (!rssPath) {
@@ -589,7 +713,7 @@ async function fetchViaRedditRss(upstreamPath) {
       {
         headers: {
           Accept: 'application/rss+xml, application/xml, text/xml',
-          'User-Agent': USER_AGENT,
+          'User-Agent': getProxyUserAgent(env, options),
         },
       },
       5000,
@@ -599,8 +723,7 @@ async function fetchViaRedditRss(upstreamPath) {
       return null;
     }
 
-    const body = await response.text();
-    const normalizedPayload = parseRssListing(body, upstreamPath);
+    const normalizedPayload = parseRssListing(await response.text(), upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
@@ -619,15 +742,18 @@ async function fetchViaRedditRss(upstreamPath) {
   }
 }
 
-async function getOAuthAccessToken() {
-  const staticToken = process.env.REDDIT_BEARER_TOKEN?.trim();
+async function getOAuthAccessToken(
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<string | null> {
+  const staticToken = env?.REDDIT_BEARER_TOKEN?.trim();
 
   if (staticToken) {
     return staticToken;
   }
 
-  const clientId = process.env.REDDIT_CLIENT_ID?.trim();
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
+  const clientId = env?.REDDIT_CLIENT_ID?.trim();
+  const clientSecret = env?.REDDIT_CLIENT_SECRET?.trim();
 
   if (!clientId || !clientSecret) {
     return null;
@@ -644,9 +770,9 @@ async function getOAuthAccessToken() {
       method: 'POST',
       headers: {
         Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
+        Authorization: `Basic ${encodeBase64(`${clientId}:${clientSecret}`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': USER_AGENT,
+        'User-Agent': getProxyUserAgent(env, options),
       },
       body: 'grant_type=client_credentials',
     });
@@ -655,7 +781,10 @@ async function getOAuthAccessToken() {
       return null;
     }
 
-    const tokenPayload = await response.json();
+    const tokenPayload = (await response.json()) as {
+      access_token?: unknown;
+      expires_in?: unknown;
+    };
 
     if (typeof tokenPayload.access_token !== 'string') {
       return null;
@@ -674,8 +803,32 @@ async function getOAuthAccessToken() {
   }
 }
 
-async function fetchViaOAuth(upstreamPath) {
-  const token = await getOAuthAccessToken();
+function encodeBase64(value: string): string {
+  if (typeof btoa === 'function') {
+    return btoa(value);
+  }
+
+  const globalWithBuffer = globalThis as typeof globalThis & {
+    Buffer?: {
+      from(input: string): {
+        toString(encoding: 'base64'): string;
+      };
+    };
+  };
+
+  if (!globalWithBuffer.Buffer) {
+    throw new Error('No base64 encoder available.');
+  }
+
+  return globalWithBuffer.Buffer.from(value).toString('base64');
+}
+
+async function fetchViaOAuth(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Response | null> {
+  const token = await getOAuthAccessToken(env, options);
 
   if (!token) {
     return null;
@@ -686,171 +839,10 @@ async function fetchViaOAuth(upstreamPath) {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token}`,
-        'User-Agent': USER_AGENT,
+        'User-Agent': getProxyUserAgent(env, options),
       },
     });
   } catch {
     return null;
   }
 }
-
-async function proxyRequest(req, res) {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
-
-  if (req.method === 'OPTIONS') {
-    setCorsHeaders(res);
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  if (req.method !== 'GET') {
-    writeText(res, 405, 'Method not allowed');
-    return;
-  }
-
-  if (url.pathname === '/healthz') {
-    writeJson(res, 200, { ok: true });
-    return;
-  }
-
-  const upstreamPath = getAllowedPath(url);
-
-  if (!upstreamPath) {
-    writeText(res, 400, 'Invalid Reddit path');
-    return;
-  }
-
-  const oauthResponse = await fetchViaOAuth(upstreamPath);
-
-  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
-    const body = await oauthResponse.text();
-    writeText(
-      res,
-      oauthResponse.status,
-      body,
-      oauthResponse.headers.get('content-type') ?? 'application/json',
-      'public, max-age=30, s-maxage=120',
-    );
-    return;
-  }
-
-  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
-
-  if (publicInstanceResponse) {
-    const body = await publicInstanceResponse.text();
-    setCorsHeaders(res);
-    res.writeHead(publicInstanceResponse.status, {
-      'Content-Type': publicInstanceResponse.headers.get('content-type') ?? 'application/json; charset=utf-8',
-      'Cache-Control': publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
-      'X-RedAlt-Fallback': publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance',
-      'X-RedAlt-Instance': publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown',
-    });
-    res.end(body);
-    return;
-  }
-
-  let fallback = null;
-
-  for (const host of UPSTREAM_HOSTS) {
-    const upstreamUrl = `${host}${upstreamPath}`;
-    const upstreamResponse = await fetchWithTimeout(
-      upstreamUrl,
-      {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': USER_AGENT,
-        },
-      },
-      5000,
-    ).catch(() => null);
-
-    if (!upstreamResponse) {
-      continue;
-    }
-
-    const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
-
-    if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
-      const body = await upstreamResponse.text();
-      writeText(
-        res,
-        upstreamResponse.status,
-        body,
-        upstreamResponse.headers.get('content-type') ?? 'application/json',
-        'public, max-age=30, s-maxage=120',
-      );
-      return;
-    }
-
-    if (blockedHtml) {
-      fallback = {
-        status: 403,
-        contentType: 'application/json; charset=utf-8',
-        cacheControl: 'public, max-age=15, s-maxage=30',
-        body: JSON.stringify({
-          error: 'blocked',
-          message: 'Reddit blocked this request from the current network. Configure Reddit OAuth credentials on the proxy to use authenticated API access.',
-        }),
-      };
-      continue;
-    }
-
-    if (!fallback) {
-      fallback = {
-        status: upstreamResponse.status,
-        contentType: upstreamResponse.headers.get('content-type') ?? 'application/json',
-        cacheControl: 'public, max-age=15, s-maxage=30',
-        body: await upstreamResponse.text(),
-      };
-    }
-  }
-
-  if (MIRROR_ENABLED) {
-    const mirrorResponse = await fetchViaAllOrigins(upstreamPath).catch(() => null);
-
-    if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
-      const body = await mirrorResponse.text();
-      writeText(
-        res,
-        mirrorResponse.status,
-        body,
-        mirrorResponse.headers.get('content-type') ?? 'application/json',
-        'public, max-age=30, s-maxage=120',
-      );
-      return;
-    }
-  }
-
-  const redditRssResponse = await fetchViaRedditRss(upstreamPath);
-
-  if (redditRssResponse) {
-    const body = await redditRssResponse.text();
-    setCorsHeaders(res);
-    res.writeHead(redditRssResponse.status, {
-      'Content-Type': redditRssResponse.headers.get('content-type') ?? 'application/json; charset=utf-8',
-      'Cache-Control': redditRssResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
-      'X-RedAlt-Fallback': redditRssResponse.headers.get('x-redalt-fallback') ?? 'reddit-rss',
-    });
-    res.end(body);
-    return;
-  }
-
-  if (fallback) {
-    writeText(res, fallback.status, fallback.body, fallback.contentType, fallback.cacheControl);
-    return;
-  }
-
-  writeJson(res, 502, { error: 'upstream_unavailable' });
-}
-
-const server = http.createServer((req, res) => {
-  proxyRequest(req, res).catch((error) => {
-    console.error('Proxy error:', error);
-    writeJson(res, 502, { error: 'proxy_failure' });
-  });
-});
-
-server.listen(PORT, HOST, () => {
-  console.log(`RedAlt proxy listening on http://${HOST}:${PORT}`);
-});

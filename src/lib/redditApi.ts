@@ -9,6 +9,11 @@ import type {
 } from '../types/reddit';
 
 const DEFAULT_REDDIT_BASE = '/api/reddit';
+const DEFAULT_REDDIT_BASES = [
+  'https://redalt-vercel.onrender.com/api/reddit',
+  'https://redalt.pages.dev/api/reddit',
+  DEFAULT_REDDIT_BASE,
+];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const PAGE_SIZE = 8;
 
@@ -26,17 +31,35 @@ function isCloudflarePagesHost(): boolean {
   return typeof window !== 'undefined' && window.location.hostname.endsWith('.pages.dev');
 }
 
+function isViteDevServer(): boolean {
+  return import.meta.env.DEV;
+}
+
 function resolveRedditBases(rawBases: string | undefined): string[] {
   const configuredBases = (rawBases ?? '')
     .split(',')
     .map((base) => normalizeBase(base))
     .filter((base) => base.length > 0);
+  const bases =
+    configuredBases.length === 0
+      ? DEFAULT_REDDIT_BASES.filter((base) => !isViteDevServer() || base !== DEFAULT_REDDIT_BASE)
+      : configuredBases;
+  const seen = new Set<string>();
+  const deduped: string[] = [];
 
-  if (configuredBases.length === 0) {
-    return [DEFAULT_REDDIT_BASE];
+  for (const base of bases) {
+    const normalized = normalizeBase(base);
+    const key = normalized.toLowerCase();
+
+    if (!normalized || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(normalized);
   }
 
-  return configuredBases;
+  return deduped.length > 0 ? deduped : [DEFAULT_REDDIT_BASE];
 }
 
 export type ListingSort = 'hot' | 'new' | 'rising' | 'top';
@@ -120,7 +143,7 @@ type SubredditTypeaheadResponse = {
   names?: string[];
 };
 
-type FetchListingOptions = {
+export type FetchListingOptions = {
   after?: string | null;
   sort?: ListingSort;
   topTimeRange?: TopTimeRange;
@@ -199,13 +222,11 @@ async function fetchReddit<T>(path: string): Promise<T> {
         if (error instanceof RedditApiError) {
           if (error.status === 429) {
             notifyApiStatus('warn', 'Reddit rate limit hit. Retrying...');
+          } else if (error.status === 403 || error.status === 451) {
+            notifyApiStatus('warn', 'Reddit blocked one proxy. Trying another...');
           } else if (error.status >= 500 || error.status === 0) {
             notifyApiStatus('error', 'Reddit connection issue. Retrying...');
           }
-        }
-
-        if (error instanceof RedditApiError && error.status >= 400 && error.status < 500 && error.status !== 429) {
-          throw error;
         }
 
         if (error instanceof RedditApiError && error.status !== 429 && error.status < 500) {

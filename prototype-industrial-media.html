@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RedAlt Industrial Media Prototype</title>
+  <style>
+    :root {
+      --bg: #070809;
+      --steel: #101318;
+      --steel-2: #171b22;
+      --steel-3: #202631;
+      --line: #2a3039;
+      --line-hot: #ff6a00;
+      --text: #f3f0e8;
+      --muted: #9ba3ae;
+      --orange: #ff6a00;
+      --orange-2: #ff9a3d;
+      --cyan: #36e7ff;
+      --danger: #ff3d2e;
+      --shadow: rgba(0, 0, 0, 0.58);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 78% 8%, rgba(255, 106, 0, 0.18), transparent 27%),
+        radial-gradient(circle at 18% 18%, rgba(54, 231, 255, 0.1), transparent 22%),
+        repeating-linear-gradient(90deg, transparent 0 31px, rgba(255, 255, 255, 0.026) 32px),
+        repeating-linear-gradient(0deg, transparent 0 23px, rgba(255, 106, 0, 0.026) 24px),
+        var(--bg);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      letter-spacing: -0.015em;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+      background-size: 100% 6px;
+      mix-blend-mode: overlay;
+      opacity: 0.34;
+      z-index: 30;
+    }
+
+    a,
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .shell {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: auto minmax(220px, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 14px;
+      background: rgba(10, 12, 15, 0.92);
+      border: 1px solid var(--line);
+      border-top: 3px solid var(--orange);
+      box-shadow: 0 20px 60px var(--shadow), inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+      backdrop-filter: blur(18px);
+      clip-path: polygon(0 0, calc(100% - 18px) 0, 100% 18px, 100% 100%, 18px 100%, 0 calc(100% - 18px));
+    }
+
+    .brand {
+      color: var(--orange);
+      font-size: clamp(30px, 4vw, 42px);
+      font-weight: 950;
+      letter-spacing: -0.09em;
+      line-height: 0.9;
+      text-decoration: none;
+      text-transform: uppercase;
+      text-shadow: 0 0 28px rgba(255, 106, 0, 0.32);
+    }
+
+    .command-search,
+    .top-actions,
+    .post-actions,
+    .mode-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .command-search {
+      min-width: 0;
+      background: linear-gradient(180deg, var(--steel-2), var(--steel));
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--orange);
+      padding: 9px 12px;
+      color: var(--orange);
+      box-shadow: inset 0 0 22px rgba(54, 231, 255, 0.04);
+    }
+
+    .command-search span,
+    .panel-kicker,
+    .signal-label,
+    .meta-strip,
+    .status-readout {
+      color: var(--orange);
+      font-family: Consolas, "Courier New", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .command-search input {
+      flex: 1;
+      min-width: 0;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      outline: 0;
+      font-weight: 800;
+    }
+
+    .command-search:focus-within {
+      border-color: var(--cyan);
+      box-shadow: 0 0 30px rgba(54, 231, 255, 0.14);
+    }
+
+    a,
+    button {
+      color: var(--text);
+    }
+
+    .chip,
+    .top-actions a,
+    .top-actions button,
+    .post-actions a,
+    .post-actions button,
+    .left-rail a,
+    .left-rail button {
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, var(--steel-2), var(--steel));
+      padding: 9px 12px;
+      text-decoration: none;
+      font-weight: 850;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, color 180ms ease;
+    }
+
+    .top-actions button,
+    .post-actions button,
+    .left-rail button {
+      appearance: none;
+    }
+
+    .chip:hover,
+    .top-actions a:hover,
+    .top-actions button:hover,
+    .post-actions a:hover,
+    .post-actions button:hover,
+    .left-rail a:hover,
+    .left-rail button:hover {
+      border-color: var(--orange);
+      color: #fff7ef;
+      transform: translateY(-1px);
+      box-shadow: 0 0 22px rgba(255, 106, 0, 0.18);
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 240px minmax(0, 1fr);
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    .left-rail {
+      position: sticky;
+      top: 112px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      height: fit-content;
+    }
+
+    .panel,
+    .hero-card,
+    .post-card {
+      background: rgba(16, 19, 24, 0.9);
+      border: 1px solid var(--line);
+      box-shadow: 0 20px 70px var(--shadow), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+
+    .panel {
+      padding: 14px;
+      clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+    }
+
+    .panel-kicker,
+    .signal-label,
+    .meta-strip {
+      margin: 0;
+    }
+
+    .panel a,
+    .panel button {
+      display: block;
+      width: 100%;
+      margin-top: 8px;
+      text-align: left;
+    }
+
+    .status-readout {
+      display: grid;
+      gap: 8px;
+      margin-top: 12px;
+      color: var(--muted);
+    }
+
+    .status-readout strong {
+      color: var(--cyan);
+    }
+
+    .meter {
+      height: 8px;
+      overflow: hidden;
+      background: #08090c;
+      border: 1px solid var(--line);
+    }
+
+    .meter span {
+      display: block;
+      width: 74%;
+      height: 100%;
+      background: linear-gradient(90deg, var(--orange), var(--cyan));
+      box-shadow: 0 0 18px rgba(255, 106, 0, 0.55);
+    }
+
+    .feed {
+      display: grid;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .hero-card {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(26px, 5vw, 64px);
+      border-top: 3px solid var(--orange);
+    }
+
+    .hero-card::after {
+      content: "ALT-FEED / 00:13:37";
+      position: absolute;
+      right: 20px;
+      bottom: 16px;
+      color: rgba(54, 231, 255, 0.55);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      letter-spacing: 0.16em;
+    }
+
+    .hero-card h1 {
+      max-width: 980px;
+      margin: 14px 0 0;
+      font-size: clamp(42px, 8vw, 112px);
+      line-height: 0.84;
+      letter-spacing: -0.095em;
+      text-transform: uppercase;
+    }
+
+    .hero-card p:last-child {
+      color: var(--muted);
+      max-width: 710px;
+      font-size: clamp(16px, 2vw, 20px);
+      font-weight: 700;
+    }
+
+    .hero-command-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+
+    .post-card {
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: minmax(300px, 0.95fr) 1fr;
+      transition: border-color 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+    }
+
+    .post-card:hover {
+      border-color: rgba(255, 106, 0, 0.72);
+      transform: translateY(-2px);
+      box-shadow: 0 24px 80px var(--shadow), 0 0 28px rgba(255, 106, 0, 0.11);
+    }
+
+    .post-card.text-card {
+      display: block;
+    }
+
+    .post-media {
+      position: relative;
+      min-height: 330px;
+      border-right: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .post-media::before {
+      content: "MEDIA PREVIEW";
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 2;
+      padding: 7px 9px;
+      background: rgba(7, 8, 9, 0.72);
+      border: 1px solid rgba(255, 106, 0, 0.58);
+      color: var(--orange-2);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.12em;
+    }
+
+    .post-media::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(120deg, transparent 0 54%, rgba(255, 255, 255, 0.08) 55%, transparent 62%);
+      transform: translateX(-110%);
+      animation: sweep 6s ease-in-out infinite;
+    }
+
+    @keyframes sweep {
+      0%, 48% { transform: translateX(-110%); }
+      68%, 100% { transform: translateX(110%); }
+    }
+
+    .media-grid {
+      background:
+        radial-gradient(circle at 70% 24%, rgba(54, 231, 255, 0.42), transparent 16%),
+        linear-gradient(135deg, rgba(54, 231, 255, 0.24), transparent 32%),
+        repeating-linear-gradient(45deg, #171b22 0 18px, #0e1116 19px 36px);
+    }
+
+    .media-orange {
+      background:
+        radial-gradient(circle at 35% 35%, rgba(255, 154, 61, 0.94), transparent 23%),
+        radial-gradient(circle at 74% 70%, rgba(54, 231, 255, 0.25), transparent 20%),
+        linear-gradient(135deg, #251006, #0d0f12);
+    }
+
+    .post-body {
+      padding: clamp(18px, 3vw, 28px);
+    }
+
+    .meta-strip {
+      display: inline-flex;
+      max-width: 100%;
+      padding: 8px 10px;
+      background: rgba(255, 106, 0, 0.08);
+      border-left: 3px solid var(--orange);
+      color: var(--orange-2);
+    }
+
+    .post-body h2 {
+      margin: 14px 0 12px;
+      font-size: clamp(25px, 4vw, 54px);
+      line-height: 0.96;
+      letter-spacing: -0.06em;
+      text-transform: uppercase;
+    }
+
+    .post-body p:not(.meta-strip) {
+      color: var(--muted);
+      font-size: 16px;
+      font-weight: 650;
+      line-height: 1.55;
+    }
+
+    .post-actions {
+      flex-wrap: wrap;
+      margin-top: 22px;
+    }
+
+    .post-actions a:first-child {
+      border-color: rgba(54, 231, 255, 0.46);
+      color: #dffaff;
+    }
+
+    @media (max-width: 900px) {
+      .topbar {
+        grid-template-columns: 1fr;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .left-rail {
+        position: static;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .post-card {
+        grid-template-columns: 1fr;
+      }
+
+      .post-media {
+        min-height: 280px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .shell {
+        padding: 10px;
+      }
+
+      .left-rail {
+        grid-template-columns: 1fr;
+      }
+
+      .top-actions,
+      .mode-row {
+        flex-wrap: wrap;
+      }
+
+      .top-actions a,
+      .top-actions button,
+      .post-actions a,
+      .post-actions button,
+      .left-rail a,
+      .left-rail button,
+      .chip {
+        flex: 1 1 auto;
+        text-align: center;
+      }
+
+      .hero-card::after {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="#">RedAlt</a>
+      <form class="command-search">
+        <span>r/</span>
+        <input type="search" value="popular" aria-label="Search subreddit or posts" />
+      </form>
+      <nav class="top-actions" aria-label="Primary actions">
+        <a href="#saved">Saved</a>
+        <a href="#history">History</a>
+        <button type="button">Settings</button>
+      </nav>
+    </header>
+
+    <div class="workspace">
+      <aside class="left-rail" aria-label="Feed controls">
+        <section class="panel">
+          <p class="panel-kicker">Communities</p>
+          <a href="#">r/popular</a>
+          <a href="#">r/technology</a>
+          <a href="#">r/videos</a>
+          <a href="#">r/design</a>
+          <a href="#">r/AskReddit</a>
+        </section>
+
+        <section class="panel">
+          <p class="panel-kicker">Modes</p>
+          <button type="button">Hot</button>
+          <button type="button">New</button>
+          <button type="button">Media</button>
+          <button type="button">Compact</button>
+        </section>
+
+        <section class="panel">
+          <p class="panel-kicker">Feed Status</p>
+          <div class="status-readout">
+            <span>Signal <strong>74%</strong></span>
+            <div class="meter"><span></span></div>
+            <span>Latency 42ms</span>
+            <span>Mode media-priority</span>
+          </div>
+        </section>
+      </aside>
+
+      <main class="feed" aria-label="RedAlt feed">
+        <section class="hero-card">
+          <p class="signal-label">Live feed / Industrial media mode</p>
+          <h1>Browse Reddit like a command center built for media.</h1>
+          <p>Compact controls, sharp orange metadata, large previews, and no right rail. This prototype keeps the feed focused while giving image and video posts real presence.</p>
+          <div class="hero-command-row">
+            <a class="chip" href="#">Open r/popular</a>
+            <a class="chip" href="#">Build custom feed</a>
+            <a class="chip" href="#">Scan media posts</a>
+          </div>
+        </section>
+
+        <article class="post-card feature-card">
+          <div class="post-media media-grid"></div>
+          <div class="post-body">
+            <p class="meta-strip">r/technology · u/signalpilot · 18.4k points · 921 comments</p>
+            <h2>The new interface prioritizes fast scanning without hiding visual posts.</h2>
+            <p>Every card keeps metadata visible, actions compact, and the media large enough to matter. The feed reads like a control surface instead of a generic social stream.</p>
+            <footer class="post-actions">
+              <a href="#">Comments</a>
+              <button type="button">Share</button>
+              <button type="button">Save</button>
+              <a href="#">Open source</a>
+            </footer>
+          </div>
+        </article>
+
+        <article class="post-card">
+          <div class="post-media media-orange"></div>
+          <div class="post-body">
+            <p class="meta-strip">r/videos · u/framehunter · 9.8k points · 402 comments</p>
+            <h2>Media-forward browsing still works in a dense Reddit-style feed.</h2>
+            <p>The industrial shell keeps navigation efficient while cyan and orange glow moments make previews feel active and cinematic.</p>
+            <footer class="post-actions">
+              <a href="#">Comments</a>
+              <button type="button">Share</button>
+              <button type="button">Save</button>
+              <a href="#">Open Reddit</a>
+            </footer>
+          </div>
+        </article>
+
+        <article class="post-card text-card">
+          <div class="post-body">
+            <p class="meta-strip">r/AskReddit · u/threadoperator · 42.1k points · 6.3k comments</p>
+            <h2>What small interface change made an app instantly better for you?</h2>
+            <p>Text posts use the same industrial rhythm without forcing empty media space. The card stays compact, readable, and action-oriented.</p>
+            <footer class="post-actions">
+              <a href="#">Comments</a>
+              <button type="button">Share</button>
+              <button type="button">Save</button>
+              <a href="#">Open source</a>
+            </footer>
+          </div>
+        </article>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

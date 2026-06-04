@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { readCustomFeedSubreddits } from '../lib/customFeed';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchSubredditListing } from '../lib/redditApi';
 import { SkeletonLoader } from '../components/SkeletonLoader';
@@ -18,14 +19,7 @@ const QUICK_SUBREDDITS = [
 ];
 
 function getRecentSubreddits(): string[] {
-  try {
-    const raw = localStorage.getItem('redalt.customFeed');
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as string[];
-    return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
-  } catch {
-    return [];
-  }
+  return readCustomFeedSubreddits().slice(0, 4);
 }
 
 export function HomePage() {
