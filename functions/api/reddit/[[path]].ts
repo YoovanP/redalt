@@ -747,9 +747,9 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     }
   }
 
-  const mirrorResponse = await fetchViaAllOrigins(upstreamPath, context.env);
+  const mirrorResponse = await fetchViaAllOrigins(upstreamPath, context.env).catch(() => null);
 
-  if (mirrorResponse.ok && isJsonContentType(mirrorResponse.headers.get('Content-Type'))) {
+  if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('Content-Type'))) {
     const headers = new Headers();
     headers.set('Content-Type', mirrorResponse.headers.get('Content-Type') ?? 'application/json');
     headers.set('Cache-Control', 'public, max-age=30, s-maxage=120');

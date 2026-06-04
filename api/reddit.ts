@@ -724,9 +724,9 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
   }
 
-  const mirrorResponse = await fetchViaAllOrigins(upstreamPath);
+  const mirrorResponse = await fetchViaAllOrigins(upstreamPath).catch(() => null);
 
-  if (mirrorResponse.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
+  if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
     const body = await mirrorResponse.text();
 
     res

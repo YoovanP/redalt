@@ -720,9 +720,9 @@ async function proxyRequest(req, res) {
   }
 
   if (MIRROR_ENABLED) {
-    const mirrorResponse = await fetchViaAllOrigins(upstreamPath);
+    const mirrorResponse = await fetchViaAllOrigins(upstreamPath).catch(() => null);
 
-    if (mirrorResponse.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
+    if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
       const body = await mirrorResponse.text();
       writeText(
         res,
