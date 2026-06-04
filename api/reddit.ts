@@ -500,7 +500,7 @@ async function fetchFromPublicInstance(base: string, upstreamPath: string): Prom
     return new Response(normalizedBody, {
       status: 200,
       headers: {
-        'Content-Type': contentType ?? 'application/json; charset=utf-8',
+        'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'public, max-age=30, s-maxage=120',
         'X-RedAlt-Fallback': 'public-instance',
         'X-RedAlt-Instance': base,
