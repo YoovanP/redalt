@@ -206,10 +206,10 @@ function buildTedditPath(upstreamPath: string): string | null {
   return null;
 }
 
-function isBrowserAppInstance(base: string): boolean {
+function isUnsupportedBrowserAppInstance(base: string): boolean {
   try {
     const hostname = new URL(base).hostname.toLowerCase();
-    return hostname.includes('eddrit') || hostname.includes('troddit');
+    return hostname.includes('troddit');
   } catch {
     return true;
   }
@@ -237,7 +237,7 @@ function buildPublicInstancePath(base: string, upstreamPath: string): string | n
     return buildTedditPath(upstreamPath);
   }
 
-  if (isBrowserAppInstance(base)) {
+  if (isUnsupportedBrowserAppInstance(base)) {
     return null;
   }
 
