@@ -14,6 +14,16 @@ const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
 ];
 const STATIC_PUBLIC_INSTANCES = [
+  'https://redlib.perennialte.ch',
+  'https://redlib.r4fo.com',
+  'https://red.artemislena.eu',
+  'https://redlib.cow.rip',
+  'https://redlib.privacyredirect.com',
+  'https://redlib.nadeko.net',
+  'https://redlib.orangenet.cc',
+  'https://redlib.privadency.com',
+  'https://redlib.catsarch.com',
+  'https://eddrit.com',
   'https://lr.vern.cc',
   'https://teddit.net',
   'https://teddit.ggc-project.de',
@@ -23,16 +33,6 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://teddit.nautolan.racing',
   'https://teddit.tinfoil-hat.net',
   'https://teddit.domain.glass',
-  'https://redlib.catsarch.com',
-  'https://redlib.perennialte.ch',
-  'https://redlib.r4fo.com',
-  'https://red.artemislena.eu',
-  'https://redlib.cow.rip',
-  'https://redlib.privacyredirect.com',
-  'https://redlib.nadeko.net',
-  'https://redlib.orangenet.cc',
-  'https://redlib.privadency.com',
-  'https://eddrit.com',
   'https://www.troddit.com',
   'https://troddit.com',
 ];
@@ -684,6 +684,16 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     });
   }
 
+  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath, context.env);
+
+  if (publicInstanceResponse) {
+    return new Response(publicInstanceResponse.body, {
+      status: publicInstanceResponse.status,
+      statusText: publicInstanceResponse.statusText,
+      headers: withCors(publicInstanceResponse.headers),
+    });
+  }
+
   let fallbackResponse: Response | null = null;
 
   for (const host of UPSTREAM_HOSTS) {
@@ -758,16 +768,6 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
       status: mirrorResponse.status,
       statusText: mirrorResponse.statusText,
         headers: withCors(headers),
-    });
-  }
-
-  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath, context.env);
-
-  if (publicInstanceResponse) {
-    return new Response(publicInstanceResponse.body, {
-      status: publicInstanceResponse.status,
-      statusText: publicInstanceResponse.statusText,
-      headers: withCors(publicInstanceResponse.headers),
     });
   }
 

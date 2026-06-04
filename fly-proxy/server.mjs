@@ -13,6 +13,16 @@ const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
 ];
 const STATIC_PUBLIC_INSTANCES = [
+  'https://redlib.perennialte.ch',
+  'https://redlib.r4fo.com',
+  'https://red.artemislena.eu',
+  'https://redlib.cow.rip',
+  'https://redlib.privacyredirect.com',
+  'https://redlib.nadeko.net',
+  'https://redlib.orangenet.cc',
+  'https://redlib.privadency.com',
+  'https://redlib.catsarch.com',
+  'https://eddrit.com',
   'https://lr.vern.cc',
   'https://teddit.net',
   'https://teddit.ggc-project.de',
@@ -22,16 +32,6 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://teddit.nautolan.racing',
   'https://teddit.tinfoil-hat.net',
   'https://teddit.domain.glass',
-  'https://redlib.catsarch.com',
-  'https://redlib.perennialte.ch',
-  'https://redlib.r4fo.com',
-  'https://red.artemislena.eu',
-  'https://redlib.cow.rip',
-  'https://redlib.privacyredirect.com',
-  'https://redlib.nadeko.net',
-  'https://redlib.orangenet.cc',
-  'https://redlib.privadency.com',
-  'https://eddrit.com',
   'https://www.troddit.com',
   'https://troddit.com',
 ];
@@ -663,6 +663,21 @@ async function proxyRequest(req, res) {
     return;
   }
 
+  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
+
+  if (publicInstanceResponse) {
+    const body = await publicInstanceResponse.text();
+    setCorsHeaders(res);
+    res.writeHead(publicInstanceResponse.status, {
+      'Content-Type': publicInstanceResponse.headers.get('content-type') ?? 'application/json; charset=utf-8',
+      'Cache-Control': publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
+      'X-RedAlt-Fallback': publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance',
+      'X-RedAlt-Instance': publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown',
+    });
+    res.end(body);
+    return;
+  }
+
   let fallback = null;
 
   for (const host of UPSTREAM_HOSTS) {
@@ -733,21 +748,6 @@ async function proxyRequest(req, res) {
       );
       return;
     }
-  }
-
-  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
-
-  if (publicInstanceResponse) {
-    const body = await publicInstanceResponse.text();
-    setCorsHeaders(res);
-    res.writeHead(publicInstanceResponse.status, {
-      'Content-Type': publicInstanceResponse.headers.get('content-type') ?? 'application/json; charset=utf-8',
-      'Cache-Control': publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
-      'X-RedAlt-Fallback': publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance',
-      'X-RedAlt-Instance': publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown',
-    });
-    res.end(body);
-    return;
   }
 
   if (fallback) {
