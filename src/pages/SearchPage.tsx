@@ -6,10 +6,14 @@ import { StateView } from '../components/StateView';
 import { addCustomFeedSubreddit } from '../lib/customFeed';
 import { getValidatedTopTimeRange } from '../lib/feedUtils';
 import { normalizePost } from '../lib/normalizePost';
-import { fetchGlobalSearch, type SearchSort } from '../lib/redditApi';
+import {
+  fetchGlobalSearch,
+  type SearchSort,
+  type SearchSubredditResult,
+  type SearchUserResult,
+} from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import type { RedditPostData } from '../types/reddit';
-import type { SearchSubredditResult, SearchUserResult } from '../lib/redditApi';
 
 type MediaFilter = 'all' | 'text' | 'image' | 'gallery' | 'video' | 'external' | 'link';
 

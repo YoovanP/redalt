@@ -30,28 +30,42 @@ export function HomePage() {
 
   useEffect(() => {
     let ignore = false;
-    setTrendingLoading(true);
 
-    fetchSubredditListing('popular', { sort: 'hot' })
-      .then((result) => {
+    async function loadTrendingPosts() {
+      setTrendingLoading(true);
+
+      try {
+        let result;
+
+        try {
+          result = await fetchSubredditListing('popular', { sort: 'hot' });
+        } catch {
+          result = await fetchSubredditListing('all', { sort: 'hot' });
+        }
+
+        if (result.posts.length === 0) {
+          result = await fetchSubredditListing('all', { sort: 'hot' });
+        }
+
         if (!ignore) {
           setTrendingPosts(result.posts.slice(0, 6).map(normalizePost));
         }
-      })
-      .catch(() => {
+      } catch {
         if (!ignore) {
-          fetchSubredditListing('all', { sort: 'hot' }).then((result) => {
-            if (!ignore) {
-              setTrendingPosts(result.posts.slice(0, 6).map(normalizePost));
-            }
-          }).catch(() => {});
+          setTrendingPosts([]);
         }
-      })
-      .finally(() => {
-        if (!ignore) setTrendingLoading(false);
-      });
+      } finally {
+        if (!ignore) {
+          setTrendingLoading(false);
+        }
+      }
+    }
 
-    return () => { ignore = true; };
+    loadTrendingPosts();
+
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const recentSubreddits = useMemo(() => getRecentSubreddits(), []);
