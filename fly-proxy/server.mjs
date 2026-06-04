@@ -721,20 +721,6 @@ async function proxyRequest(req, res) {
     return;
   }
 
-  const oauthResponse = await fetchViaOAuth(upstreamPath);
-
-  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
-    const body = await oauthResponse.text();
-    writeText(
-      res,
-      oauthResponse.status,
-      body,
-      oauthResponse.headers.get('content-type') ?? 'application/json',
-      'public, max-age=30, s-maxage=120',
-    );
-    return;
-  }
-
   const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath);
 
   if (publicInstanceResponse) {
@@ -833,6 +819,20 @@ async function proxyRequest(req, res) {
       'X-RedAlt-Fallback': redditRssResponse.headers.get('x-redalt-fallback') ?? 'reddit-rss',
     });
     res.end(body);
+    return;
+  }
+
+  const oauthResponse = await fetchViaOAuth(upstreamPath);
+
+  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
+    const body = await oauthResponse.text();
+    writeText(
+      res,
+      oauthResponse.status,
+      body,
+      oauthResponse.headers.get('content-type') ?? 'application/json',
+      'public, max-age=30, s-maxage=120',
+    );
     return;
   }
 

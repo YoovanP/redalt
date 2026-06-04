@@ -76,12 +76,6 @@ export async function handleRedditProxyRequest(
     });
   }
 
-  const oauthResponse = await fetchViaOAuth(upstreamPath, env, options);
-
-  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
-    return responseFromUpstream(oauthResponse, 'public, max-age=30, s-maxage=120');
-  }
-
   if (options.cloudflareProxyBase) {
     const cloudflareResponse = await fetchWithTimeout(
       `${options.cloudflareProxyBase}${upstreamPath}`,
@@ -162,6 +156,12 @@ export async function handleRedditProxyRequest(
 
   if (redditRssResponse) {
     return redditRssResponse;
+  }
+
+  const oauthResponse = await fetchViaOAuth(upstreamPath, env, options);
+
+  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
+    return responseFromUpstream(oauthResponse, 'public, max-age=30, s-maxage=120');
   }
 
   return (
