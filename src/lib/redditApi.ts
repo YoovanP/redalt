@@ -176,6 +176,10 @@ function normalizeUserName(input: string): string {
   return input.trim().replace(/^\/?u(?:ser)?\//i, '').replace(/^\/+|\/+$/g, '');
 }
 
+function shouldRetryApiError(error: RedditApiError): boolean {
+  return error.status === 0 || error.status === 429 || error.status >= 500;
+}
+
 async function fetchReddit<T>(path: string): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
@@ -233,6 +237,10 @@ async function fetchReddit<T>(path: string): Promise<T> {
           continue;
         }
       }
+    }
+
+    if (lastApiError && !shouldRetryApiError(lastApiError)) {
+      break;
     }
 
     if (cycle === 0) {

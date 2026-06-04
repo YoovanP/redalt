@@ -5,19 +5,12 @@ type RedditProxyOptions = {
   userAgentFallback?: string;
 };
 
-type OAuthTokenCache = {
-  token: string;
-  expiresAt: number;
-};
-
 type PublicInstanceCache = {
   urls: string[];
   expiresAt: number;
 };
 
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
-const OAUTH_HOST = 'https://oauth.reddit.com';
-const OAUTH_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
 const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
@@ -46,7 +39,6 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://troddit.com',
 ];
 
-let oauthTokenCache: OAuthTokenCache | null = null;
 let publicInstanceCache: PublicInstanceCache | null = null;
 
 export function isAllowedRedditPath(upstreamPath: string): boolean {
@@ -127,8 +119,7 @@ export async function handleRedditProxyRequest(
       fallbackResponse = new Response(
         JSON.stringify({
           error: 'blocked',
-          message:
-            'Reddit blocked this request from the current network. Configure Reddit OAuth credentials on the proxy to use authenticated API access.',
+          message: 'Reddit blocked this request from the current network. Try another proxy or fallback source.',
         }),
         {
           status: 403,
@@ -156,12 +147,6 @@ export async function handleRedditProxyRequest(
 
   if (redditRssResponse) {
     return redditRssResponse;
-  }
-
-  const oauthResponse = await fetchViaOAuth(upstreamPath, env, options);
-
-  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
-    return responseFromUpstream(oauthResponse, 'public, max-age=30, s-maxage=120');
   }
 
   return (
@@ -735,111 +720,6 @@ async function fetchViaRedditRss(
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'public, max-age=30, s-maxage=120',
         'X-RedAlt-Fallback': 'reddit-rss',
-      },
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function getOAuthAccessToken(
-  env: RedditProxyEnv | undefined,
-  options: RedditProxyOptions,
-): Promise<string | null> {
-  const staticToken = env?.REDDIT_BEARER_TOKEN?.trim();
-
-  if (staticToken) {
-    return staticToken;
-  }
-
-  const clientId = env?.REDDIT_CLIENT_ID?.trim();
-  const clientSecret = env?.REDDIT_CLIENT_SECRET?.trim();
-
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-
-  const now = Date.now();
-
-  if (oauthTokenCache && oauthTokenCache.expiresAt > now + 30000) {
-    return oauthTokenCache.token;
-  }
-
-  try {
-    const response = await fetch(OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Basic ${encodeBase64(`${clientId}:${clientSecret}`)}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': getProxyUserAgent(env, options),
-      },
-      body: 'grant_type=client_credentials',
-    });
-
-    if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
-      return null;
-    }
-
-    const tokenPayload = (await response.json()) as {
-      access_token?: unknown;
-      expires_in?: unknown;
-    };
-
-    if (typeof tokenPayload.access_token !== 'string') {
-      return null;
-    }
-
-    const expiresIn = typeof tokenPayload.expires_in === 'number' ? tokenPayload.expires_in : 3600;
-
-    oauthTokenCache = {
-      token: tokenPayload.access_token,
-      expiresAt: now + Math.max(expiresIn - 60, 60) * 1000,
-    };
-
-    return oauthTokenCache.token;
-  } catch {
-    return null;
-  }
-}
-
-function encodeBase64(value: string): string {
-  if (typeof btoa === 'function') {
-    return btoa(value);
-  }
-
-  const globalWithBuffer = globalThis as typeof globalThis & {
-    Buffer?: {
-      from(input: string): {
-        toString(encoding: 'base64'): string;
-      };
-    };
-  };
-
-  if (!globalWithBuffer.Buffer) {
-    throw new Error('No base64 encoder available.');
-  }
-
-  return globalWithBuffer.Buffer.from(value).toString('base64');
-}
-
-async function fetchViaOAuth(
-  upstreamPath: string,
-  env: RedditProxyEnv | undefined,
-  options: RedditProxyOptions,
-): Promise<Response | null> {
-  const token = await getOAuthAccessToken(env, options);
-
-  if (!token) {
-    return null;
-  }
-
-  try {
-    return await fetch(`${OAUTH_HOST}${upstreamPath}`, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-        'User-Agent': getProxyUserAgent(env, options),
       },
     });
   } catch {

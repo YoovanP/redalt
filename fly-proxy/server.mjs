@@ -6,8 +6,6 @@ const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'RedAlt/1.0 (Render pr
 const MIRROR_ENABLED = (process.env.ENABLE_MIRROR_FALLBACK ?? 'true').toLowerCase() !== 'false';
 
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
-const OAUTH_HOST = 'https://oauth.reddit.com';
-const OAUTH_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
 const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
@@ -36,7 +34,6 @@ const STATIC_PUBLIC_INSTANCES = [
   'https://troddit.com',
 ];
 
-let oauthTokenCache = null;
 let publicInstanceCache = null;
 
 function setCorsHeaders(res) {
@@ -619,81 +616,6 @@ async function fetchViaRedditRss(upstreamPath) {
   }
 }
 
-async function getOAuthAccessToken() {
-  const staticToken = process.env.REDDIT_BEARER_TOKEN?.trim();
-
-  if (staticToken) {
-    return staticToken;
-  }
-
-  const clientId = process.env.REDDIT_CLIENT_ID?.trim();
-  const clientSecret = process.env.REDDIT_CLIENT_SECRET?.trim();
-
-  if (!clientId || !clientSecret) {
-    return null;
-  }
-
-  const now = Date.now();
-
-  if (oauthTokenCache && oauthTokenCache.expiresAt > now + 30000) {
-    return oauthTokenCache.token;
-  }
-
-  try {
-    const response = await fetch(OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': USER_AGENT,
-      },
-      body: 'grant_type=client_credentials',
-    });
-
-    if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
-      return null;
-    }
-
-    const tokenPayload = await response.json();
-
-    if (typeof tokenPayload.access_token !== 'string') {
-      return null;
-    }
-
-    const expiresIn = typeof tokenPayload.expires_in === 'number' ? tokenPayload.expires_in : 3600;
-
-    oauthTokenCache = {
-      token: tokenPayload.access_token,
-      expiresAt: now + Math.max(expiresIn - 60, 60) * 1000,
-    };
-
-    return oauthTokenCache.token;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchViaOAuth(upstreamPath) {
-  const token = await getOAuthAccessToken();
-
-  if (!token) {
-    return null;
-  }
-
-  try {
-    return await fetch(`${OAUTH_HOST}${upstreamPath}`, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${token}`,
-        'User-Agent': USER_AGENT,
-      },
-    });
-  } catch {
-    return null;
-  }
-}
-
 async function proxyRequest(req, res) {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
@@ -776,7 +698,7 @@ async function proxyRequest(req, res) {
         cacheControl: 'public, max-age=15, s-maxage=30',
         body: JSON.stringify({
           error: 'blocked',
-          message: 'Reddit blocked this request from the current network. Configure Reddit OAuth credentials on the proxy to use authenticated API access.',
+          message: 'Reddit blocked this request from the current network. Try another proxy or fallback source.',
         }),
       };
       continue;
@@ -819,20 +741,6 @@ async function proxyRequest(req, res) {
       'X-RedAlt-Fallback': redditRssResponse.headers.get('x-redalt-fallback') ?? 'reddit-rss',
     });
     res.end(body);
-    return;
-  }
-
-  const oauthResponse = await fetchViaOAuth(upstreamPath);
-
-  if (oauthResponse?.ok && isJsonContentType(oauthResponse.headers.get('content-type'))) {
-    const body = await oauthResponse.text();
-    writeText(
-      res,
-      oauthResponse.status,
-      body,
-      oauthResponse.headers.get('content-type') ?? 'application/json',
-      'public, max-age=30, s-maxage=120',
-    );
     return;
   }
 

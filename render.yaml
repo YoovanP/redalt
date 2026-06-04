@@ -13,9 +13,5 @@ services:
         value: "22"
       - key: ENABLE_MIRROR_FALLBACK
         value: "true"
-      - key: REDDIT_CLIENT_ID
-        sync: false
-      - key: REDDIT_CLIENT_SECRET
-        sync: false
       - key: REDDIT_PROXY_USER_AGENT
         sync: false
