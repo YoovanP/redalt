@@ -15,7 +15,10 @@ const DEFAULT_REDDIT_BASES = [
   DEFAULT_REDDIT_BASE,
 ];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
+const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
 const PAGE_SIZE = 8;
+
+let sessionRedditBase = readSessionRedditBase();
 
 function normalizeBase(base: string): string {
   const trimmed = base.trim();
@@ -180,12 +183,96 @@ function shouldRetryApiError(error: RedditApiError): boolean {
   return error.status === 0 || error.status === 429 || error.status >= 500;
 }
 
+function isSourceSwitchableError(error: RedditApiError): boolean {
+  return shouldRetryApiError(error) || error.status === 403 || error.status === 451;
+}
+
+function canUseSessionStorage(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  try {
+    return typeof window.sessionStorage !== 'undefined';
+  } catch {
+    return false;
+  }
+}
+
+function isConfiguredRedditBase(base: string): boolean {
+  const normalized = normalizeBase(base).toLowerCase();
+  return REDDIT_BASES.some((candidate) => candidate.toLowerCase() === normalized);
+}
+
+function readSessionRedditBase(): string | null {
+  if (!canUseSessionStorage()) {
+    return null;
+  }
+
+  try {
+    const storedBase = normalizeBase(window.sessionStorage.getItem(SESSION_REDDIT_BASE_KEY) ?? '');
+    return storedBase && isConfiguredRedditBase(storedBase) ? storedBase : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionRedditBase(base: string): void {
+  const normalized = normalizeBase(base);
+
+  if (!normalized || !isConfiguredRedditBase(normalized)) {
+    return;
+  }
+
+  sessionRedditBase = normalized;
+
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.setItem(SESSION_REDDIT_BASE_KEY, normalized);
+  } catch {
+    // In-memory session pinning still works when storage is unavailable.
+  }
+}
+
+function clearSessionRedditBase(base: string): void {
+  if (sessionRedditBase !== normalizeBase(base)) {
+    return;
+  }
+
+  sessionRedditBase = null;
+
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    window.sessionStorage.removeItem(SESSION_REDDIT_BASE_KEY);
+  } catch {
+    // Nothing else to clear.
+  }
+}
+
+function getRedditBaseCandidates(): string[] {
+  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase)) {
+    sessionRedditBase = null;
+    return REDDIT_BASES;
+  }
+
+  return [
+    sessionRedditBase,
+    ...REDDIT_BASES.filter((base) => base.toLowerCase() !== sessionRedditBase?.toLowerCase()),
+  ];
+}
+
 async function fetchReddit<T>(path: string): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
-    for (const base of REDDIT_BASES) {
+    for (const base of getRedditBaseCandidates()) {
       try {
         const controller = new AbortController();
         const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
@@ -215,12 +302,19 @@ async function fetchReddit<T>(path: string): Promise<T> {
 
         notifyApiStatus('ok', 'Connected to Reddit.');
 
-        return (await response.json()) as T;
+        const payload = (await response.json()) as T;
+        writeSessionRedditBase(base);
+
+        return payload;
       } catch (error) {
         lastError = error;
 
         if (error instanceof RedditApiError) {
           lastApiError = error;
+
+          if (isSourceSwitchableError(error)) {
+            clearSessionRedditBase(base);
+          }
         }
 
         if (error instanceof RedditApiError) {
