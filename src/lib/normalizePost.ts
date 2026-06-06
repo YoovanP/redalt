@@ -106,6 +106,21 @@ function isLikelyImageUrl(url: string): boolean {
   return /\.(png|jpe?g|webp|gif)$/i.test(url);
 }
 
+function stripSubmissionBoilerplate(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) =>
+      line
+        .replace(
+          /\s*submitted\s+by\s+\/?u\/[A-Za-z0-9_-]+(?:\s+to\s+\/?r\/[A-Za-z0-9_]+)?(?:\s+\[[^\]]+\])*\s*$/i,
+          '',
+        )
+        .trim(),
+    )
+    .filter((line) => line && !/^submitted\b/i.test(line))
+    .join('\n\n');
+}
+
 function getExternalMedia(post: RedditPostData) {
   const media: RedditMedia | null | undefined = post.secure_media ?? post.media;
   const oembed = media?.oembed;
@@ -180,7 +195,7 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
     score: post.score,
     numComments: post.num_comments,
     createdUtc: post.created_utc,
-    selfText: post.selftext,
+    selfText: stripSubmissionBoilerplate(post.selftext ?? ''),
     isNsfw: post.over_18,
     outboundUrl,
     media,

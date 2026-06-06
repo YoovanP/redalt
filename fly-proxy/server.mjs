@@ -285,6 +285,20 @@ function getPublicSearchParams(upstreamPath) {
   return params;
 }
 
+function getDiscoverySearchType(upstreamPath) {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+
+  if (normalizedPath === '/subreddits/search.json' || normalizedPath === '/api/search_reddit_names.json') {
+    return 'sr';
+  }
+
+  if (normalizedPath === '/users/search.json') {
+    return 'user';
+  }
+
+  return 'link';
+}
+
 function isPublicDiscoveryPath(upstreamPath) {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
 
@@ -302,11 +316,13 @@ function buildPublicDiscoveryPath(base, upstreamPath) {
     return null;
   }
 
+  params.set('type', getDiscoverySearchType(upstreamPath));
+
   if (isTedditInstance(base)) {
     return appendTedditApiParams('/search', params);
   }
 
-  return `/search.rss?${params.toString()}`;
+  return `/search?${params.toString()}`;
 }
 
 function buildPublicInstancePath(base, upstreamPath) {
@@ -663,7 +679,7 @@ function buildKnownEmbed(url) {
 function cleanRssSelfText(content, title, mediaUrl) {
   const titleKey = title.trim().toLowerCase();
   const mediaKey = mediaUrl.trim().toLowerCase();
-  const lines = stripHtmlLines(content).filter((line) => {
+  const lines = stripHtmlLines(content).map(stripRssSubmissionBoilerplate).filter((line) => {
     const key = line.toLowerCase();
 
     if (!key || key === titleKey || key === mediaKey) {
@@ -686,6 +702,15 @@ function cleanRssSelfText(content, title, mediaUrl) {
   });
 
   return lines.slice(0, 4).join('\n\n');
+}
+
+function stripRssSubmissionBoilerplate(value) {
+  return value
+    .replace(
+      /\s*submitted\s+by\s+\/?u\/[A-Za-z0-9_-]+(?:\s+to\s+\/?r\/[A-Za-z0-9_]+)?(?:\s+\[[^\]]+\])*\s*$/i,
+      '',
+    )
+    .trim();
 }
 
 function collectNamesFromHtml(html, pattern, query) {
@@ -723,6 +748,27 @@ function parseHtmlDiscoveryListing(html, upstreamPath) {
 
   if (normalizedPath === '/users/search.json') {
     const names = collectNamesFromHtml(html, /(?:href=["'][^"']*\/(?:u|user)\/|>\s*u\/)([A-Za-z0-9_-]{2,24})/gi, query);
+    return names.length > 0 ? buildUserSearchPayload(names) : null;
+  }
+
+  return null;
+}
+
+function parseRssDiscoveryListing(xml, upstreamPath) {
+  const normalizedPath = upstreamPath.split('?')[0] || '/';
+  const query = getSearchQuery(upstreamPath);
+
+  if (normalizedPath === '/api/search_reddit_names.json' || normalizedPath === '/subreddits/search.json') {
+    const names = collectNamesFromHtml(xml, /(?:href=["'][^"']*\/r\/|>\s*r\/|\/r\/)([A-Za-z0-9_]{2,21})/gi, query);
+    const payload = normalizedPath === '/api/search_reddit_names.json'
+      ? { names: names.slice(0, 25) }
+      : buildSubredditSearchPayload(names);
+
+    return names.length > 0 ? payload : null;
+  }
+
+  if (normalizedPath === '/users/search.json') {
+    const names = collectNamesFromHtml(xml, /(?:href=["'][^"']*\/(?:u|user)\/|>\s*u\/|\/u\/|\/user\/)([A-Za-z0-9_-]{2,24})/gi, query);
     return names.length > 0 ? buildUserSearchPayload(names) : null;
   }
 
@@ -791,7 +837,7 @@ function parseRssListing(xml, upstreamPath, sourceBase = 'https://www.reddit.com
         const itemXml = item[2];
         const title = stripHtml(readXmlTag(itemXml, 'title')) || 'Untitled post';
         const link = readXmlAttribute(itemXml, 'link', 'href') || readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
-        const author = readXmlAuthor(itemXml) || user || '[unknown]';
+        const author = normalizeUserName(readXmlAuthor(itemXml)) || user || '[unknown]';
         const content =
           readXmlTag(itemXml, 'content:encoded') ||
           readXmlTag(itemXml, 'content') ||
@@ -1020,9 +1066,11 @@ async function fetchFromPublicInstance(base, upstreamPath) {
 
     const normalizedPayload = looksJson
       ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
-      : looksRss
-        ? normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath)
-        : parseHtmlDiscoveryListing(body, upstreamPath);
+      : isPublicDiscoveryPath(upstreamPath)
+        ? looksRss
+          ? parseRssDiscoveryListing(body, upstreamPath)
+          : parseHtmlDiscoveryListing(body, upstreamPath)
+        : normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
