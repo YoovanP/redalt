@@ -157,7 +157,13 @@ export function ExternalEmbed({
         />
       ) : thumbnailUrl ? (
         <a href={outboundUrl} target="_blank" rel="noreferrer">
-          <img className="post-image" src={thumbnailUrl} alt={provider ?? 'External media preview'} loading="lazy" />
+          <img
+            className="post-image"
+            src={thumbnailUrl}
+            alt={provider ?? 'External media preview'}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+          />
         </a>
       ) : null}
 

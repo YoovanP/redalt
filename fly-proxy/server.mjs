@@ -490,6 +490,8 @@ function decodeXmlEntities(value) {
   return value
     .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&amp;/g, '&')
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number.parseInt(code, 10)))
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
@@ -859,20 +861,29 @@ function parseRssListing(xml, upstreamPath, sourceBase = 'https://www.reddit.com
           }
         })();
         const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
-        const contentUrls = firstDistinctUrl(
+        const sourceUrls = firstDistinctUrl(
           [
             enclosureUrl,
             ...readHtmlAttributes(content, 'src'),
+          ],
+          sourceBase,
+        );
+        const hrefUrls = firstDistinctUrl(
+          [
             ...readHtmlAttributes(content, 'href'),
             link,
           ],
           sourceBase,
         );
-        const imageUrl = contentUrls.find(isLikelyImageUrl) ?? '';
-        const videoUrl = contentUrls.find(isLikelyVideoUrl) ?? '';
-        const embed = contentUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
-        const externalUrl = contentUrls.find((url) => !isRedditNavigationUrl(url)) ?? '';
-        const outboundUrl = videoUrl || imageUrl || externalUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
+        const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
+        const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
+        const videoUrl = hrefUrls.find(isLikelyVideoUrl) ?? sourceUrls.find(isLikelyVideoUrl) ?? '';
+        const embed = hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
+        const externalUrl =
+          hrefUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
+          contentUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
+          '';
+        const outboundUrl = videoUrl || externalUrl || imageUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
         const thumbnailUrl = imageUrl || enclosureUrl;
         const selftext = cleanRssSelfText(content, title, outboundUrl);
         const domain = getUrlHostname(outboundUrl);

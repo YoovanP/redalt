@@ -10,12 +10,39 @@ function normalizeUrl(url: string | undefined): string {
   return (url ?? '').replace(/&amp;/g, '&');
 }
 
+function decodeBasicEntities(value: string): string {
+  return value
+    .replace(/&#(?:x20|32);/gi, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
 function getSourceUrl(source: RedditImageSource | undefined): string {
   if (!source) {
     return '';
   }
 
   return normalizeUrl(source.url || source.u);
+}
+
+function getUrlHostname(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function getUrlPathname(url: string): string {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return url.split('?')[0].toLowerCase();
+  }
 }
 
 function getBestImage(source: RedditImageSource | undefined, fallbackUrl: string): {
@@ -37,7 +64,7 @@ function parseEmbedUrl(html: string | undefined): string | undefined {
     return undefined;
   }
 
-  const match = html.match(/<iframe[^>]*src=["']([^"']+)["']/i);
+  const match = decodeBasicEntities(html).match(/<iframe[^>]*src=["']([^"']+)["']/i);
   return match?.[1];
 }
 
@@ -103,11 +130,126 @@ function getVideoMedia(post: RedditPostData) {
 }
 
 function isLikelyImageUrl(url: string): boolean {
-  return /\.(png|jpe?g|webp|gif)$/i.test(url);
+  const hostname = getUrlHostname(url);
+  const pathname = getUrlPathname(url);
+
+  return (
+    /\.(png|jpe?g|webp|gif|avif)$/i.test(pathname) ||
+    ((hostname === 'i.redd.it' || hostname === 'preview.redd.it' || hostname.endsWith('redditmedia.com')) &&
+      !pathname.endsWith('.mp4'))
+  );
+}
+
+function isLikelyThumbnailUrl(url: string | undefined): url is string {
+  const normalized = normalizeUrl(url);
+
+  return (
+    Boolean(normalized) &&
+    !['default', 'self', 'nsfw', 'spoiler', 'image', ''].includes(normalized.toLowerCase()) &&
+    /^https?:\/\//i.test(normalized)
+  );
+}
+
+function getPreviewImage(post: RedditPostData): RedditImageSource | undefined {
+  return post.preview?.images?.[0]?.source;
+}
+
+function getThumbnailUrl(post: RedditPostData): string {
+  const previewUrl = getSourceUrl(getPreviewImage(post));
+
+  if (previewUrl) {
+    return previewUrl;
+  }
+
+  return isLikelyThumbnailUrl(post.thumbnail) ? normalizeUrl(post.thumbnail) : '';
+}
+
+function isRedditMediaHost(hostname: string): boolean {
+  return (
+    hostname === 'i.redd.it' ||
+    hostname === 'preview.redd.it' ||
+    hostname === 'v.redd.it' ||
+    hostname.endsWith('.redd.it') ||
+    hostname.endsWith('redditmedia.com') ||
+    hostname.endsWith('reddit.com')
+  );
+}
+
+function buildYouTubeEmbed(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    let id = '';
+
+    if (hostname.includes('youtu.be')) {
+      id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    } else if (hostname.includes('youtube.com')) {
+      id =
+        parsed.searchParams.get('v') ??
+        parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/i)?.[1] ??
+        '';
+    }
+
+    return id ? `https://www.youtube.com/embed/${encodeURIComponent(id)}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildVimeoEmbed(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('vimeo.com')) {
+      return undefined;
+    }
+
+    const id = parsed.pathname.match(/\/(\d+)/)?.[1] ?? '';
+    return id ? `https://player.vimeo.com/video/${id}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildRedgifsEmbed(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('redgifs.com')) {
+      return undefined;
+    }
+
+    const id = parsed.pathname.match(/\/(?:watch|ifr)\/([^/?]+)/i)?.[1] ?? '';
+    return id ? `https://www.redgifs.com/ifr/${id}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildKnownEmbed(url: string): { provider: string; embedUrl: string } | null {
+  const youtubeEmbed = buildYouTubeEmbed(url);
+
+  if (youtubeEmbed) {
+    return { provider: 'YouTube', embedUrl: youtubeEmbed };
+  }
+
+  const vimeoEmbed = buildVimeoEmbed(url);
+
+  if (vimeoEmbed) {
+    return { provider: 'Vimeo', embedUrl: vimeoEmbed };
+  }
+
+  const redgifsEmbed = buildRedgifsEmbed(url);
+
+  if (redgifsEmbed) {
+    return { provider: 'Redgifs', embedUrl: redgifsEmbed };
+  }
+
+  return null;
 }
 
 function stripSubmissionBoilerplate(value: string): string {
-  return value
+  return decodeBasicEntities(value)
     .split(/\r?\n/)
     .map((line) =>
       line
@@ -121,37 +263,43 @@ function stripSubmissionBoilerplate(value: string): string {
     .join('\n\n');
 }
 
+function normalizeAuthor(value: string): string {
+  return value.trim().replace(/^\/?u\//i, '') || '[unknown]';
+}
+
 function getExternalMedia(post: RedditPostData) {
   const media: RedditMedia | null | undefined = post.secure_media ?? post.media;
   const oembed = media?.oembed;
   const outboundUrl = normalizeUrl(post.url_overridden_by_dest ?? post.url);
   const domain = post.domain?.toLowerCase() ?? '';
+  const knownEmbed = buildKnownEmbed(outboundUrl);
+  const embedHtml = oembed?.html;
+  const embedUrl = parseEmbedUrl(embedHtml) || knownEmbed?.embedUrl;
+  const thumbnailUrl = normalizeUrl(oembed?.thumbnail_url) || getThumbnailUrl(post);
 
   const isExternalDomain =
     domain.length > 0 &&
-    !domain.endsWith('reddit.com') &&
-    !domain.endsWith('redd.it') &&
-    !domain.endsWith('redditmedia.com');
+    !isRedditMediaHost(domain) &&
+    !isLikelyImageUrl(outboundUrl);
 
-  if (!isExternalDomain && post.post_hint !== 'rich:video') {
+  if (!isExternalDomain && !embedUrl && post.post_hint !== 'rich:video') {
     return null;
   }
-
-  const embedHtml = oembed?.html;
 
   return {
     type: 'external' as const,
     outboundUrl,
-    provider: oembed?.provider_name,
+    provider: oembed?.provider_name || knownEmbed?.provider,
     embedHtml,
-    embedUrl: parseEmbedUrl(embedHtml),
-    thumbnailUrl: normalizeUrl(oembed?.thumbnail_url),
+    embedUrl,
+    thumbnailUrl,
   };
 }
 
 export function normalizePost(post: RedditPostData): NormalizedPost {
   const outboundUrl = normalizeUrl(post.url_overridden_by_dest ?? post.url);
-  const imageSource = post.preview?.images?.[0]?.source;
+  const imageSource = getPreviewImage(post);
+  const thumbnailUrl = getThumbnailUrl(post);
 
   let media: NormalizedPost['media'];
 
@@ -172,13 +320,17 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
 
         if (external) {
           media = external;
-        } else if (imageSource?.url || isLikelyImageUrl(outboundUrl) || post.post_hint === 'image') {
-          media = {
-            type: 'image',
-            ...getBestImage(imageSource, outboundUrl),
-          };
         } else {
-          media = { type: 'link', outboundUrl };
+          const imageFallbackUrl = isLikelyImageUrl(outboundUrl) ? outboundUrl : thumbnailUrl;
+
+          if (imageSource?.url || imageSource?.u || imageFallbackUrl || post.post_hint === 'image') {
+            media = {
+              type: 'image',
+              ...getBestImage(imageSource, imageFallbackUrl || outboundUrl),
+            };
+          } else {
+            media = { type: 'link', outboundUrl };
+          }
         }
       }
     }
@@ -188,7 +340,7 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
     id: post.id,
     name: post.name,
     title: post.title,
-    author: post.author,
+    author: normalizeAuthor(post.author),
     flairText: post.link_flair_text?.trim() || undefined,
     subreddit: post.subreddit,
     permalink: post.permalink,

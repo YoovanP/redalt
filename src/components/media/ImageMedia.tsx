@@ -10,7 +10,7 @@ export function ImageMedia({ url, alt, width, height }: ImageMediaProps) {
 
   return (
     <div className="media-block" style={hasDimensions ? { aspectRatio: `${width} / ${height}`, maxHeight: '80vh' } : { aspectRatio: '16 / 9', maxHeight: '520px' }}>
-      <img className="post-image" src={url} alt={alt} loading="lazy" />
+      <img className="post-image" src={url} alt={alt} loading="lazy" referrerPolicy="no-referrer" />
     </div>
   );
 }
