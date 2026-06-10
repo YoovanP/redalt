@@ -10,15 +10,18 @@ import type {
 
 const DEFAULT_REDDIT_BASE = '/api/reddit';
 const DEFAULT_REDDIT_BASES = [
-  'https://redalt-vercel.onrender.com/api/reddit',
   'https://redalt.pages.dev/api/reddit',
+  'https://redalt-vercel.onrender.com/api/reddit',
   DEFAULT_REDDIT_BASE,
 ];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
 const PAGE_SIZE = 8;
+const REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS = 30 * 1000;
+const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 
 let sessionRedditBase = readSessionRedditBase();
+const redditBaseHealth = new Map<string, { failureCount: number; retryAfter: number }>();
 
 function normalizeBase(base: string): string {
   const trimmed = base.trim();
@@ -255,16 +258,45 @@ function clearSessionRedditBase(base: string): void {
   }
 }
 
+function markRedditBaseSuccess(base: string): void {
+  redditBaseHealth.delete(normalizeBase(base).toLowerCase());
+}
+
+function markRedditBaseFailure(base: string): void {
+  const key = normalizeBase(base).toLowerCase();
+  const previous = redditBaseHealth.get(key);
+  const failureCount = Math.min((previous?.failureCount ?? 0) + 1, 5);
+  const cooldown = Math.min(
+    REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS * 2 ** (failureCount - 1),
+    REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS,
+  );
+
+  redditBaseHealth.set(key, {
+    failureCount,
+    retryAfter: Date.now() + cooldown,
+  });
+}
+
+function isRedditBaseCoolingDown(base: string): boolean {
+  const health = redditBaseHealth.get(normalizeBase(base).toLowerCase());
+  return Boolean(health && health.retryAfter > Date.now());
+}
+
 function getRedditBaseCandidates(): string[] {
+  let candidates: string[];
+
   if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase)) {
     sessionRedditBase = null;
-    return REDDIT_BASES;
+    candidates = REDDIT_BASES;
+  } else {
+    candidates = [
+      sessionRedditBase,
+      ...REDDIT_BASES.filter((base) => base.toLowerCase() !== sessionRedditBase?.toLowerCase()),
+    ];
   }
 
-  return [
-    sessionRedditBase,
-    ...REDDIT_BASES.filter((base) => base.toLowerCase() !== sessionRedditBase?.toLowerCase()),
-  ];
+  const activeCandidates = candidates.filter((base) => !isRedditBaseCoolingDown(base));
+  return activeCandidates.length > 0 ? activeCandidates : candidates;
 }
 
 async function fetchReddit<T>(path: string): Promise<T> {
@@ -303,6 +335,7 @@ async function fetchReddit<T>(path: string): Promise<T> {
         notifyApiStatus('ok', 'Connected to Reddit.');
 
         const payload = (await response.json()) as T;
+        markRedditBaseSuccess(base);
         writeSessionRedditBase(base);
 
         return payload;
@@ -313,8 +346,12 @@ async function fetchReddit<T>(path: string): Promise<T> {
           lastApiError = error;
 
           if (isSourceSwitchableError(error)) {
+            markRedditBaseFailure(base);
             clearSessionRedditBase(base);
           }
+        } else {
+          markRedditBaseFailure(base);
+          clearSessionRedditBase(base);
         }
 
         if (error instanceof RedditApiError) {

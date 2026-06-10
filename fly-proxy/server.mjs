@@ -10,6 +10,8 @@ const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
   'https://raw.githubusercontent.com/libreddit/libreddit-instances/master/instances.json',
 ];
+const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
+const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
 const STATIC_PUBLIC_INSTANCES = [
   'https://redlib.perennialte.ch',
   'https://redlib.r4fo.com',
@@ -35,6 +37,7 @@ const STATIC_PUBLIC_INSTANCES = [
 ];
 
 let publicInstanceCache = null;
+const publicInstanceHealth = new Map();
 
 function setCorsHeaders(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -128,6 +131,59 @@ function normalizeInstanceBase(base) {
   return base.trim().replace(/\/+$/g, '');
 }
 
+function getPublicInstanceHealthKey(base) {
+  return normalizeInstanceBase(base).toLowerCase();
+}
+
+function isPublicInstanceCoolingDown(base, now = Date.now()) {
+  const health = publicInstanceHealth.get(getPublicInstanceHealthKey(base));
+  return Boolean(health && health.retryAfter > now);
+}
+
+function markPublicInstanceSuccess(base) {
+  publicInstanceHealth.delete(getPublicInstanceHealthKey(base));
+}
+
+function markPublicInstanceFailure(base, now = Date.now()) {
+  const key = getPublicInstanceHealthKey(base);
+  const previous = publicInstanceHealth.get(key);
+  const failureCount = Math.min((previous?.failureCount ?? 0) + 1, 6);
+  const cooldown = Math.min(
+    PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS * 2 ** (failureCount - 1),
+    PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS,
+  );
+
+  publicInstanceHealth.set(key, {
+    failureCount,
+    retryAfter: now + cooldown,
+  });
+}
+
+function getPublicInstanceCandidates(urls) {
+  const skipped = [];
+  const candidates = [];
+  const now = Date.now();
+
+  for (const url of urls) {
+    if (isPublicInstanceCoolingDown(url, now)) {
+      skipped.push(url);
+    } else {
+      candidates.push(url);
+    }
+  }
+
+  return {
+    candidates: candidates.length > 0 ? candidates : urls,
+    skipped: candidates.length > 0 ? skipped : [],
+  };
+}
+
+function formatInstanceHeader(values) {
+  const visible = values.slice(0, 12);
+  const suffix = values.length > visible.length ? `, +${values.length - visible.length} more` : '';
+  return `${visible.join(', ')}${suffix}`;
+}
+
 function addInstanceUrl(urls, seen, value) {
   if (typeof value !== 'string') {
     return;
@@ -187,6 +243,14 @@ function isTedditInstance(base) {
   }
 }
 
+function isTrodditInstance(base) {
+  try {
+    return new URL(base).hostname.toLowerCase().includes('troddit');
+  } catch {
+    return false;
+  }
+}
+
 function appendTedditApiParams(path, sourceParams) {
   const params = new URLSearchParams();
   params.set('api', '');
@@ -220,15 +284,6 @@ function buildTedditPath(upstreamPath) {
   return null;
 }
 
-function isUnsupportedBrowserAppInstance(base) {
-  try {
-    const hostname = new URL(base).hostname.toLowerCase();
-    return hostname.includes('troddit');
-  } catch {
-    return true;
-  }
-}
-
 function buildRssPath(upstreamPath) {
   const [rawPath, rawQuery = ''] = upstreamPath.split('?');
   const path = rawPath.replace(/\.json$/i, '');
@@ -260,6 +315,42 @@ function buildRssPath(upstreamPath) {
 
   if (path === '/search') {
     return withQuery('/search.rss');
+  }
+
+  return null;
+}
+
+function buildPublicHtmlPath(upstreamPath) {
+  const [rawPath, rawQuery = ''] = upstreamPath.split('?');
+  const path = rawPath.replace(/\.json$/i, '');
+  const params = new URLSearchParams(rawQuery);
+  params.delete('raw_json');
+  const query = params.toString();
+  const withQuery = (htmlPath) => `${htmlPath}${query ? `?${query}` : ''}`;
+  const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
+  const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
+  const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
+  const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+
+  if (commentThreadMatch) {
+    return withQuery(`/r/${commentThreadMatch[1]}/comments/${commentThreadMatch[2]}`);
+  }
+
+  if (subredditSearchMatch) {
+    return withQuery(`/r/${subredditSearchMatch[1]}/search`);
+  }
+
+  if (subredditMatch) {
+    const sort = subredditMatch[2];
+    return withQuery(sort && sort !== 'hot' ? `/r/${subredditMatch[1]}/${sort}` : `/r/${subredditMatch[1]}`);
+  }
+
+  if (userMatch) {
+    return withQuery(`/u/${userMatch[1]}`);
+  }
+
+  if (path === '/search') {
+    return withQuery('/search');
   }
 
   return null;
@@ -330,20 +421,42 @@ function buildPublicDiscoveryPath(base, upstreamPath) {
   return `/search?${params.toString()}`;
 }
 
-function buildPublicInstancePath(base, upstreamPath) {
+function addPublicInstanceRequest(requests, seen, method, path) {
+  if (!path) {
+    return;
+  }
+
+  const key = `${method}:${path}`;
+
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  requests.push({ method, path });
+}
+
+function buildPublicInstanceRequests(base, upstreamPath) {
+  const requests = [];
+  const seen = new Set();
+
   if (isPublicDiscoveryPath(upstreamPath)) {
-    return buildPublicDiscoveryPath(base, upstreamPath);
+    addPublicInstanceRequest(requests, seen, isTedditInstance(base) ? 'json' : 'html', buildPublicDiscoveryPath(base, upstreamPath));
+    addPublicInstanceRequest(requests, seen, 'rss', buildRssPath(upstreamPath));
+    return requests;
   }
 
   if (isTedditInstance(base)) {
-    return buildTedditPath(upstreamPath);
+    addPublicInstanceRequest(requests, seen, 'json', buildTedditPath(upstreamPath));
   }
 
-  if (isUnsupportedBrowserAppInstance(base)) {
-    return null;
+  if (!isTrodditInstance(base)) {
+    addPublicInstanceRequest(requests, seen, 'rss', buildRssPath(upstreamPath));
   }
 
-  return buildRssPath(upstreamPath);
+  addPublicInstanceRequest(requests, seen, 'html', buildPublicHtmlPath(upstreamPath));
+
+  return requests;
 }
 
 function isCommentThreadPath(upstreamPath) {
@@ -817,6 +930,117 @@ function collectNamesFromHtml(html, pattern, query) {
   return names;
 }
 
+function titleFromPermalink(permalink) {
+  const slug = permalink.split('/').filter(Boolean).at(-1) ?? '';
+  return decodeURIComponent(slug).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled post';
+}
+
+function parseHtmlPostLinks(html, upstreamPath, sourceBase) {
+  const children = [];
+  const seen = new Set();
+  const fallbackSubreddit = inferSubredditFromPath(upstreamPath);
+
+  for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const attrs = match[1] ?? '';
+    const href = attrs.match(/\shref=["']([^"']+)["']/i)?.[1] ?? '';
+    const url = normalizeUrlCandidate(href, sourceBase);
+
+    if (!url) {
+      continue;
+    }
+
+    const pathname = (() => {
+      try {
+        return new URL(url).pathname;
+      } catch {
+        return '';
+      }
+    })();
+    const id = pathname.match(/\/comments\/([^/]+)/i)?.[1] ?? '';
+    const permalink = pathname.match(/^\/r\/[^/]+\/comments\/[^/]+/i) ? pathname : '';
+    const key = id.toLowerCase();
+
+    if (!id || !permalink || seen.has(key)) {
+      continue;
+    }
+
+    const rawTitle = stripHtml(match[2] ?? '');
+    const title = rawTitle && !/^comments?$/i.test(rawTitle) ? rawTitle : titleFromPermalink(permalink);
+    const subreddit = inferSubredditFromPermalink(permalink, fallbackSubreddit);
+    seen.add(key);
+    children.push({
+      kind: 't3',
+      data: {
+        id,
+        name: `t3_${id}`,
+        title,
+        author: '[unknown]',
+        subreddit,
+        permalink,
+        score: 0,
+        ups: 0,
+        num_comments: 0,
+        created_utc: Math.floor(Date.now() / 1000),
+        selftext: '',
+        over_18: false,
+        url,
+        url_overridden_by_dest: url,
+        domain: getUrlHostname(url),
+        is_self: false,
+        post_hint: 'link',
+      },
+    });
+  }
+
+  return children;
+}
+
+function parseHtmlListing(html, upstreamPath, sourceBase) {
+  const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const children = parseHtmlPostLinks(html, upstreamPath, sourceBase).slice(0, pageSize);
+
+  if (children.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: 'Listing',
+    data: {
+      after: getSyntheticRssAfter(children, upstreamPath, pageSize),
+      before: null,
+      children,
+    },
+  };
+}
+
+function parseHtmlCommentsResponse(html, upstreamPath, sourceBase) {
+  const postId = inferCommentThreadId(upstreamPath);
+  const postChild = parseHtmlPostLinks(html, upstreamPath, sourceBase).find((child) => child.data.id === postId);
+
+  if (!postChild) {
+    return null;
+  }
+
+  return [
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: [postChild],
+      },
+    },
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: [],
+      },
+    },
+  ];
+}
+
 function parseHtmlDiscoveryListing(html, upstreamPath) {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
   const query = getSearchQuery(upstreamPath);
@@ -1235,69 +1459,105 @@ function isCompatibleRedditPayload(payload, upstreamPath) {
   return payload?.kind === 'Listing' && Array.isArray(payload.data?.children);
 }
 
-async function fetchFromPublicInstance(base, upstreamPath) {
-  try {
-    const publicPath = buildPublicInstancePath(base, upstreamPath);
-
-    if (!publicPath) {
-      return null;
-    }
-
-    const response = await fetchWithTimeout(
-      `${base}${publicPath}`,
-      {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': USER_AGENT,
-        },
-      },
-      2500,
-    );
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const body = await response.text();
-    const contentType = response.headers.get('content-type');
-    const looksJson = isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
-    const looksRss = (contentType ?? '').toLowerCase().includes('rss') || /<rss\b|<feed\b|<item\b/i.test(body);
-    const looksHtml = (contentType ?? '').toLowerCase().includes('html') || /<html\b|<a\s/i.test(body);
-
-    if (!looksJson && !looksRss && !(looksHtml && isPublicDiscoveryPath(upstreamPath))) {
-      return null;
-    }
-
-    const normalizedPayload = looksJson
-      ? normalizePublicInstancePayload(JSON.parse(body), upstreamPath)
-      : isPublicDiscoveryPath(upstreamPath)
-        ? looksRss
-          ? parseRssDiscoveryListing(body, upstreamPath)
-          : parseHtmlDiscoveryListing(body, upstreamPath)
-        : isCommentThreadPath(upstreamPath)
-          ? looksRss
-            ? parseRssCommentsResponse(body, upstreamPath, base)
-            : null
-          : normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
-
-    if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
-      return null;
-    }
-
-    const normalizedBody = JSON.stringify(normalizedPayload);
-
-    return new Response(normalizedBody, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'public, max-age=30, s-maxage=120',
-        'X-RedAlt-Fallback': 'public-instance',
-        'X-RedAlt-Instance': base,
-      },
-    });
-  } catch {
-    return null;
+function getPublicInstanceAccept(method) {
+  if (method === 'json') {
+    return 'application/json';
   }
+
+  if (method === 'rss') {
+    return 'application/rss+xml, application/atom+xml, application/xml, text/xml';
+  }
+
+  return 'text/html, application/xhtml+xml';
+}
+
+function parsePublicInstancePayload(body, contentType, request, base, upstreamPath) {
+  const looksJson = request.method === 'json' || isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
+  const looksRss =
+    request.method === 'rss' ||
+    (contentType ?? '').toLowerCase().includes('rss') ||
+    (contentType ?? '').toLowerCase().includes('atom') ||
+    /<rss\b|<feed\b|<item\b/i.test(body);
+  const looksHtml = request.method === 'html' || (contentType ?? '').toLowerCase().includes('html') || /<html\b|<a\s/i.test(body);
+
+  if (looksJson) {
+    return normalizePublicInstancePayload(JSON.parse(body), upstreamPath);
+  }
+
+  if (isPublicDiscoveryPath(upstreamPath)) {
+    if (looksRss) {
+      return parseRssDiscoveryListing(body, upstreamPath);
+    }
+
+    return looksHtml ? parseHtmlDiscoveryListing(body, upstreamPath) : null;
+  }
+
+  if (isCommentThreadPath(upstreamPath)) {
+    if (looksRss) {
+      return parseRssCommentsResponse(body, upstreamPath, base);
+    }
+
+    return looksHtml ? parseHtmlCommentsResponse(body, upstreamPath, base) : null;
+  }
+
+  if (looksRss) {
+    return normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
+  }
+
+  return looksHtml ? normalizePublicInstancePayload(parseHtmlListing(body, upstreamPath, base), upstreamPath) : null;
+}
+
+async function fetchFromPublicInstance(base, upstreamPath) {
+  const requests = buildPublicInstanceRequests(base, upstreamPath);
+
+  for (const request of requests) {
+    try {
+      const response = await fetchWithTimeout(
+        `${base}${request.path}`,
+        {
+          headers: {
+            Accept: getPublicInstanceAccept(request.method),
+            'User-Agent': USER_AGENT,
+          },
+        },
+        3000,
+      );
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const body = await response.text();
+      const normalizedPayload = parsePublicInstancePayload(
+        body,
+        response.headers.get('content-type'),
+        request,
+        base,
+        upstreamPath,
+      );
+
+      if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
+        continue;
+      }
+
+      const normalizedBody = JSON.stringify(normalizedPayload);
+
+      return new Response(normalizedBody, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'public, max-age=30, s-maxage=120',
+          'X-RedAlt-Fallback': 'public-instance',
+          'X-RedAlt-Instance': base,
+          'X-RedAlt-Instance-Method': request.method,
+        },
+      });
+    } catch {
+      // Try the next supported access method for this instance.
+    }
+  }
+
+  return null;
 }
 
 async function fetchViaPublicInstances(upstreamPath) {
@@ -1306,15 +1566,37 @@ async function fetchViaPublicInstances(upstreamPath) {
   }
 
   const urls = await getPublicInstanceUrls();
+  const { candidates, skipped } = getPublicInstanceCandidates(urls);
+  const attempted = [];
   const batchSize = 8;
 
-  for (let index = 0; index < urls.length; index += batchSize) {
-    const batch = urls.slice(index, index + batchSize);
-    const results = await Promise.all(batch.map((base) => fetchFromPublicInstance(base, upstreamPath)));
-    const successfulResponse = results.find((response) => response !== null);
+  for (let index = 0; index < candidates.length; index += batchSize) {
+    const batch = candidates.slice(index, index + batchSize);
+    attempted.push(...batch);
+    const results = await Promise.all(
+      batch.map(async (base) => ({
+        base,
+        response: await fetchFromPublicInstance(base, upstreamPath),
+      })),
+    );
+    const successfulResult = results.find((result) => result.response !== null);
 
-    if (successfulResponse) {
-      return successfulResponse;
+    for (const result of results) {
+      if (result.response) {
+        markPublicInstanceSuccess(result.base);
+      } else {
+        markPublicInstanceFailure(result.base);
+      }
+    }
+
+    if (successfulResult?.response) {
+      successfulResult.response.headers.set('X-RedAlt-Instance-Attempts', formatInstanceHeader(attempted));
+
+      if (skipped.length > 0) {
+        successfulResult.response.headers.set('X-RedAlt-Skipped-Instances', formatInstanceHeader(skipped));
+      }
+
+      return successfulResult.response;
     }
   }
 
@@ -1403,6 +1685,9 @@ async function proxyRequest(req, res) {
       'Cache-Control': publicInstanceResponse.headers.get('cache-control') ?? 'public, max-age=30, s-maxage=120',
       'X-RedAlt-Fallback': publicInstanceResponse.headers.get('x-redalt-fallback') ?? 'public-instance',
       'X-RedAlt-Instance': publicInstanceResponse.headers.get('x-redalt-instance') ?? 'unknown',
+      'X-RedAlt-Instance-Method': publicInstanceResponse.headers.get('x-redalt-instance-method') ?? 'unknown',
+      'X-RedAlt-Instance-Attempts': publicInstanceResponse.headers.get('x-redalt-instance-attempts') ?? '',
+      'X-RedAlt-Skipped-Instances': publicInstanceResponse.headers.get('x-redalt-skipped-instances') ?? '',
     });
     res.end(body);
     return;
