@@ -153,6 +153,7 @@ export function HomePage() {
                   key={post.id}
                   to={`/r/${post.subreddit}/comments/${post.id}`}
                   className="home-trending-card"
+                  state={{ fallbackPost: post }}
                 >
                   <div className="home-trending-media">
                     {post.media.type !== 'text' && post.media.type !== 'link' ? (

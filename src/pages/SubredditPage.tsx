@@ -1,5 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { LoadMoreButton } from '../components/LoadMoreButton';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
@@ -24,6 +24,7 @@ export function SubredditPage() {
   const {
     settings: { columns, videoFeedMode, cardMode },
   } = useUiSettings();
+  const navigate = useNavigate();
   const { name = 'mildlyinfuriating' } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const sort = getValidatedListingSort(searchParams.get('sort'));
@@ -140,14 +141,16 @@ export function SubredditPage() {
       if (event.key === 'Enter' && focusedPostIndex >= 0 && focusedPostIndex < visiblePosts.length) {
         const post = visiblePosts[focusedPostIndex];
         if (post) {
-          window.location.href = `/r/${post.subreddit}/comments/${post.id}`;
+          navigate(`/r/${post.subreddit}/comments/${post.id}`, {
+            state: { fromSubreddit: post.subreddit, fallbackPost: post },
+          });
         }
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [videoFeedMode, visiblePosts, focusedPostIndex]);
+  }, [videoFeedMode, visiblePosts, focusedPostIndex, navigate]);
 
   useEffect(() => {
     if (loading || hasRestoredScrollRef.current) {

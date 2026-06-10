@@ -327,9 +327,14 @@ function buildRssPath(upstreamPath: string): string | null {
   rssParams.delete('raw_json');
   const query = rssParams.toString();
   const withQuery = (rssPath: string) => `${rssPath}${query ? `?${query}` : ''}`;
+  const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
   const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
   const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
   const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+
+  if (commentThreadMatch) {
+    return withQuery(`/r/${commentThreadMatch[1]}/comments/${commentThreadMatch[2]}.rss`);
+  }
 
   if (subredditSearchMatch) {
     return withQuery(`/r/${subredditSearchMatch[1]}/search.rss`);
@@ -432,6 +437,29 @@ function buildPublicInstancePath(base: string, upstreamPath: string): string | n
   return buildRssPath(upstreamPath);
 }
 
+function isCommentThreadPath(upstreamPath: string): boolean {
+  const normalizedPath = (upstreamPath.split('?')[0] || '/').replace(/\.json$/i, '');
+  return /^\/r\/[^/]+\/comments\/[^/]+(?:\/.*)?$/i.test(normalizedPath);
+}
+
+function inferCommentThreadId(upstreamPath: string): string {
+  const normalizedPath = (upstreamPath.split('?')[0] || '/').replace(/\.json$/i, '');
+  const match = normalizedPath.match(/^\/r\/[^/]+\/comments\/([^/]+)/i);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function getRequestedListingLimit(upstreamPath: string): number {
+  const [, rawQuery = ''] = upstreamPath.split('?');
+  const params = new URLSearchParams(rawQuery);
+  const parsed = Number(params.get('limit') ?? 25);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 25;
+  }
+
+  return Math.min(Math.max(Math.floor(parsed), 1), 100);
+}
+
 function getSearchQuery(upstreamPath: string): string {
   const [, rawQuery = ''] = upstreamPath.split('?');
   const params = new URLSearchParams(rawQuery);
@@ -451,14 +479,14 @@ function matchesSearchQuery(value: string, query: string): boolean {
   return !query || value.toLowerCase().includes(query);
 }
 
-function listingChildren(payload: unknown): Array<{ data?: Record<string, unknown> }> {
+function listingChildren(payload: unknown): Array<{ kind?: string; data?: Record<string, unknown> }> {
   if (
     typeof payload === 'object' &&
     payload !== null &&
     (payload as { kind?: unknown }).kind === 'Listing' &&
     Array.isArray((payload as { data?: { children?: unknown[] } }).data?.children)
   ) {
-    return (payload as { data: { children: Array<{ data?: Record<string, unknown> }> } }).data.children;
+    return (payload as { data: { children: Array<{ kind?: string; data?: Record<string, unknown> }> } }).data.children;
   }
 
   return [];
@@ -553,6 +581,50 @@ function buildUserSearchPayload(names: string[]): unknown {
 function normalizePublicInstancePayload(payload: unknown, upstreamPath: string): unknown {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
 
+  if (isCommentThreadPath(upstreamPath)) {
+    if (isCompatibleRedditPayload(payload, upstreamPath)) {
+      return payload;
+    }
+
+    const threadId = inferCommentThreadId(upstreamPath);
+    const postChild = listingChildren(payload).find((child) => {
+      const data = child.data;
+
+      if (!data) {
+        return false;
+      }
+
+      const id = typeof data.id === 'string' ? data.id : '';
+      const name = typeof data.name === 'string' ? data.name : '';
+      const permalink = typeof data.permalink === 'string' ? data.permalink : '';
+
+      return id === threadId || name === `t3_${threadId}` || permalink.includes(`/comments/${threadId}`);
+    });
+
+    if (!postChild) {
+      return null;
+    }
+
+    return [
+      {
+        kind: 'Listing',
+        data: {
+          after: null,
+          before: null,
+          children: [postChild],
+        },
+      },
+      {
+        kind: 'Listing',
+        data: {
+          after: null,
+          before: null,
+          children: [],
+        },
+      },
+    ];
+  }
+
   if (normalizedPath === '/api/search_reddit_names.json') {
     const names = collectSubredditNamesFromListing(payload, upstreamPath);
 
@@ -588,16 +660,27 @@ function normalizePublicInstancePayload(payload: unknown, upstreamPath: string):
 }
 
 function decodeXmlEntities(value: string): string {
-  return value
-    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-    .replace(/&amp;/g, '&')
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
-    .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number.parseInt(code, 10)))
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'");
+  let decoded = value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = decoded
+      .replace(/&amp;/g, '&')
+      .replace(/&#x([0-9a-f]+);/gi, (_match, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+      .replace(/&#(\d+);/g, (_match, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'");
+
+    if (next === decoded) {
+      break;
+    }
+
+    decoded = next;
+  }
+
+  return decoded;
 }
 
 function stripHtml(value: string): string {
@@ -924,6 +1007,242 @@ function stableIdFromUrl(url: string, fallbackIndex: number): string {
   return `rss_${hash.toString(36)}_${fallbackIndex}`;
 }
 
+function getSyntheticRssAfter(
+  children: Array<{ data?: { name?: unknown } }>,
+  upstreamPath: string,
+  pageSize: number,
+): string | null {
+  if (isCommentThreadPath(upstreamPath) || children.length < pageSize) {
+    return null;
+  }
+
+  const name = children[children.length - 1]?.data?.name;
+  return typeof name === 'string' && name ? name : null;
+}
+
+function parseRssPostChild(
+  itemXml: string,
+  upstreamPath: string,
+  sourceBase: string,
+  fallbackIndex: number,
+): { kind: 't3'; data: Record<string, unknown> } {
+  const subreddit = inferSubredditFromPath(upstreamPath);
+  const user = inferUserFromPath(upstreamPath);
+  const title = stripHtml(readXmlTag(itemXml, 'title')) || 'Untitled post';
+  const link = readXmlAttribute(itemXml, 'link', 'href') || readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
+  const author = normalizeUserName(readXmlAuthor(itemXml)) || user || '[unknown]';
+  const content =
+    readXmlTag(itemXml, 'content:encoded') ||
+    readXmlTag(itemXml, 'content') ||
+    readXmlTag(itemXml, 'summary') ||
+    readXmlTag(itemXml, 'description');
+  const enclosureUrl = normalizeUrlCandidate(
+    readXmlAttribute(itemXml, 'enclosure', 'url') ||
+      readXmlAttribute(itemXml, 'media:content', 'url') ||
+      readXmlAttribute(itemXml, 'media:thumbnail', 'url'),
+    sourceBase,
+  );
+  const created = Date.parse(readXmlTag(itemXml, 'pubDate') || readXmlTag(itemXml, 'updated') || readXmlTag(itemXml, 'published'));
+  const id = stableIdFromUrl(link || title, fallbackIndex);
+  const permalink = (() => {
+    try {
+      return new URL(link).pathname;
+    } catch {
+      return link.startsWith('/') ? link : `/r/${subreddit}/comments/${id}`;
+    }
+  })();
+  const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
+  const sourceUrls = firstDistinctUrl(
+    [
+      enclosureUrl,
+      ...readHtmlAttributes(content, 'src'),
+    ],
+    sourceBase,
+  );
+  const hrefUrls = firstDistinctUrl(
+    [
+      ...readHtmlAttributes(content, 'href'),
+      link,
+    ],
+    sourceBase,
+  );
+  const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
+  const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
+  const videoUrl = hrefUrls.find(isLikelyVideoUrl) ?? sourceUrls.find(isLikelyVideoUrl) ?? '';
+  const embed = hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
+  const externalUrl =
+    hrefUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
+    contentUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
+    '';
+  const outboundUrl = videoUrl || externalUrl || imageUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
+  const thumbnailUrl = imageUrl || enclosureUrl;
+  const selftext = cleanRssSelfText(content, title, outboundUrl);
+  const domain = getUrlHostname(outboundUrl);
+  const isMediaPost = Boolean(imageUrl || videoUrl || embed || externalUrl);
+
+  return {
+    kind: 't3',
+    data: {
+      id,
+      name: `t3_${id}`,
+      title,
+      author,
+      subreddit: itemSubreddit,
+      permalink,
+      score: 0,
+      ups: 0,
+      num_comments: 0,
+      created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
+      selftext,
+      over_18: false,
+      url: outboundUrl,
+      url_overridden_by_dest: outboundUrl,
+      domain,
+      is_self: !isMediaPost,
+      post_hint: videoUrl ? 'hosted:video' : embed ? 'rich:video' : imageUrl ? 'image' : externalUrl ? 'link' : undefined,
+      thumbnail: thumbnailUrl || undefined,
+      media: embed
+        ? {
+            oembed: {
+              provider_name: embed.provider,
+              thumbnail_url: thumbnailUrl || undefined,
+              html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
+            },
+          }
+        : videoUrl
+          ? {
+              reddit_video: {
+                fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
+                hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+              },
+            }
+          : null,
+      secure_media: embed
+        ? {
+            oembed: {
+              provider_name: embed.provider,
+              thumbnail_url: thumbnailUrl || undefined,
+              html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
+            },
+          }
+        : videoUrl
+          ? {
+              reddit_video: {
+                fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
+                hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+              },
+            }
+          : null,
+      preview: thumbnailUrl
+        ? {
+            images: [
+              {
+                source: {
+                  url: thumbnailUrl,
+                },
+              },
+            ],
+          }
+        : undefined,
+    },
+  };
+}
+
+function parseRssCommentId(link: string, postId: string): string | null {
+  const escapedPostId = postId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  try {
+    const path = new URL(link).pathname;
+    return path.match(new RegExp(`/comments/${escapedPostId}/[^/]+/([^/?#]+)`, 'i'))?.[1] ?? null;
+  } catch {
+    return link.match(new RegExp(`/comments/${escapedPostId}/[^/]+/([^/?#]+)`, 'i'))?.[1] ?? null;
+  }
+}
+
+function readRssCommentAuthor(itemXml: string): string {
+  const author = normalizeUserName(readXmlAuthor(itemXml));
+
+  if (author) {
+    return author;
+  }
+
+  const title = stripHtml(readXmlTag(itemXml, 'title'));
+  return title.match(/^\/?u\/([A-Za-z0-9_-]+)/i)?.[1] ?? '[unknown]';
+}
+
+function readRssCommentBody(itemXml: string): string {
+  const content =
+    readXmlTag(itemXml, 'content:encoded') ||
+    readXmlTag(itemXml, 'content') ||
+    readXmlTag(itemXml, 'summary') ||
+    readXmlTag(itemXml, 'description');
+
+  return stripHtmlLines(content).join('\n\n');
+}
+
+function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
+  const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
+  const postId = inferCommentThreadId(upstreamPath);
+
+  if (items.length === 0 || !postId) {
+    return null;
+  }
+
+  const postIndex = items.findIndex((item, index) => {
+    const itemXml = item[2];
+    const link = readXmlAttribute(itemXml, 'link', 'href') || readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
+
+    return stableIdFromUrl(link || readXmlTag(itemXml, 'title'), index) === postId && !parseRssCommentId(link, postId);
+  });
+  const resolvedPostIndex = postIndex >= 0 ? postIndex : 0;
+  const postChild = parseRssPostChild(items[resolvedPostIndex][2], upstreamPath, sourceBase, resolvedPostIndex);
+  const comments = items
+    .map((item, index) => {
+      if (index === resolvedPostIndex) {
+        return null;
+      }
+
+      const itemXml = item[2];
+      const link = readXmlAttribute(itemXml, 'link', 'href') || readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
+      const id = parseRssCommentId(link, postId);
+      const body = readRssCommentBody(itemXml);
+
+      if (!id || !body) {
+        return null;
+      }
+
+      return {
+        kind: 't1',
+        data: {
+          id,
+          author: readRssCommentAuthor(itemXml),
+          body,
+          replies: '',
+        },
+      };
+    })
+    .filter((item): item is { kind: 't1'; data: { id: string; author: string; body: string; replies: '' } } => item !== null);
+
+  return [
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: [postChild],
+      },
+    },
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: comments,
+      },
+    },
+  ];
+}
+
 function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
 
@@ -931,134 +1250,17 @@ function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https:
     return null;
   }
 
-  const subreddit = inferSubredditFromPath(upstreamPath);
-  const user = inferUserFromPath(upstreamPath);
+  const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const children = items
+    .slice(0, pageSize)
+    .map((item, index) => parseRssPostChild(item[2], upstreamPath, sourceBase, index));
 
   return {
     kind: 'Listing',
     data: {
-      after: null,
-      children: items.slice(0, 25).map((item, index) => {
-        const itemXml = item[2];
-        const title = stripHtml(readXmlTag(itemXml, 'title')) || 'Untitled post';
-        const link = readXmlAttribute(itemXml, 'link', 'href') || readXmlTag(itemXml, 'link') || readXmlTag(itemXml, 'guid');
-        const author = normalizeUserName(readXmlAuthor(itemXml)) || user || '[unknown]';
-        const content =
-          readXmlTag(itemXml, 'content:encoded') ||
-          readXmlTag(itemXml, 'content') ||
-          readXmlTag(itemXml, 'summary') ||
-          readXmlTag(itemXml, 'description');
-        const enclosureUrl = normalizeUrlCandidate(
-          readXmlAttribute(itemXml, 'enclosure', 'url') ||
-            readXmlAttribute(itemXml, 'media:content', 'url') ||
-            readXmlAttribute(itemXml, 'media:thumbnail', 'url'),
-          sourceBase,
-        );
-        const created = Date.parse(readXmlTag(itemXml, 'pubDate') || readXmlTag(itemXml, 'updated') || readXmlTag(itemXml, 'published'));
-        const id = stableIdFromUrl(link || title, index);
-        const permalink = (() => {
-          try {
-            return new URL(link).pathname;
-          } catch {
-            return link.startsWith('/') ? link : `/r/${subreddit}/comments/${id}`;
-          }
-        })();
-        const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
-        const sourceUrls = firstDistinctUrl(
-          [
-            enclosureUrl,
-            ...readHtmlAttributes(content, 'src'),
-          ],
-          sourceBase,
-        );
-        const hrefUrls = firstDistinctUrl(
-          [
-            ...readHtmlAttributes(content, 'href'),
-            link,
-          ],
-          sourceBase,
-        );
-        const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
-        const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
-        const videoUrl = hrefUrls.find(isLikelyVideoUrl) ?? sourceUrls.find(isLikelyVideoUrl) ?? '';
-        const embed = hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
-        const externalUrl =
-          hrefUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
-          contentUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
-          '';
-        const outboundUrl = videoUrl || externalUrl || imageUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
-        const thumbnailUrl = imageUrl || enclosureUrl;
-        const selftext = cleanRssSelfText(content, title, outboundUrl);
-        const domain = getUrlHostname(outboundUrl);
-        const isMediaPost = Boolean(imageUrl || videoUrl || embed || externalUrl);
-
-        return {
-          kind: 't3',
-          data: {
-            id,
-            name: `t3_${id}`,
-            title,
-            author,
-            subreddit: itemSubreddit,
-            permalink,
-            score: 0,
-            ups: 0,
-            num_comments: 0,
-            created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
-            selftext,
-            over_18: false,
-            url: outboundUrl,
-            url_overridden_by_dest: outboundUrl,
-            domain,
-            is_self: !isMediaPost,
-            post_hint: videoUrl ? 'hosted:video' : embed ? 'rich:video' : imageUrl ? 'image' : externalUrl ? 'link' : undefined,
-            thumbnail: thumbnailUrl || undefined,
-            media: embed
-              ? {
-                  oembed: {
-                    provider_name: embed.provider,
-                    thumbnail_url: thumbnailUrl || undefined,
-                    html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
-                  },
-                }
-              : videoUrl
-                ? {
-                    reddit_video: {
-                      fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
-                      hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
-                    },
-                  }
-                : null,
-            secure_media: embed
-              ? {
-                  oembed: {
-                    provider_name: embed.provider,
-                    thumbnail_url: thumbnailUrl || undefined,
-                    html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
-                  },
-                }
-              : videoUrl
-                ? {
-                    reddit_video: {
-                      fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
-                      hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
-                    },
-                  }
-                : null,
-            preview: thumbnailUrl
-              ? {
-                  images: [
-                    {
-                      source: {
-                        url: thumbnailUrl,
-                      },
-                    },
-                  ],
-                }
-              : undefined,
-          },
-        };
-      }),
+      after: getSyntheticRssAfter(children, upstreamPath, pageSize),
+      before: null,
+      children,
     },
   };
 }
@@ -1198,7 +1400,11 @@ async function fetchFromPublicInstance(
         ? looksRss
           ? parseRssDiscoveryListing(body, upstreamPath)
           : parseHtmlDiscoveryListing(body, upstreamPath)
-        : normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
+        : isCommentThreadPath(upstreamPath)
+          ? looksRss
+            ? parseRssCommentsResponse(body, upstreamPath, base)
+            : null
+          : normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
@@ -1270,7 +1476,10 @@ async function fetchViaRedditRss(
       return null;
     }
 
-    const normalizedPayload = parseRssListing(await response.text(), upstreamPath);
+    const body = await response.text();
+    const normalizedPayload = isCommentThreadPath(upstreamPath)
+      ? parseRssCommentsResponse(body, upstreamPath)
+      : parseRssListing(body, upstreamPath);
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;

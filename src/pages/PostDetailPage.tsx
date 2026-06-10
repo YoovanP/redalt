@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { MarkdownText } from '../components/MarkdownText';
 import { RenderMedia } from '../components/media/RenderMedia';
 import { SkeletonLoader } from '../components/SkeletonLoader';
@@ -7,9 +7,13 @@ import { StateView } from '../components/StateView';
 import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchPostDetail } from '../lib/redditApi';
-import type { PostDetailResult, RedditComment } from '../types/reddit';
+import type { NormalizedPost, PostDetailResult, RedditComment } from '../types/reddit';
 
 const TOP_LEVEL_COMMENTS_STEP = 5;
+
+type PostDetailRouteState = {
+  fallbackPost?: NormalizedPost;
+};
 
 type CommentItemProps = {
   comment: RedditComment;
@@ -73,12 +77,23 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
 
 export function PostDetailPage() {
   const { name = 'mildlyinfuriating', id = '' } = useParams();
+  const location = useLocation();
   const [data, setData] = useState<PostDetailResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [saved, setSaved] = useState(false);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
+  const fallbackPost = useMemo(() => {
+    const state = location.state as PostDetailRouteState | null;
+    const post = state?.fallbackPost;
+
+    if (!post || post.id !== id) {
+      return null;
+    }
+
+    return post;
+  }, [id, location.state]);
 
   useEffect(() => {
     let ignore = false;
@@ -96,7 +111,11 @@ export function PostDetailPage() {
       })
       .catch((err) => {
         if (!ignore) {
-          setError(err instanceof Error ? err.message : 'Unable to load post detail.');
+          if (fallbackPost) {
+            setError(null);
+          } else {
+            setError(err instanceof Error ? err.message : 'Unable to load post detail.');
+          }
         }
       })
       .finally(() => {
@@ -108,15 +127,11 @@ export function PostDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [name, id]);
+  }, [name, id, fallbackPost]);
 
   const normalized = useMemo(() => {
-    if (!data) {
-      return null;
-    }
-
-    return normalizePost(data.post);
-  }, [data]);
+    return data ? normalizePost(data.post) : fallbackPost;
+  }, [data, fallbackPost]);
   const comments = data?.comments ?? [];
   const visibleComments = comments.slice(0, visibleTopLevelComments);
   const hasMoreComments = comments.length > visibleComments.length;
@@ -130,7 +145,7 @@ export function PostDetailPage() {
     setSaved(isPostSaved(normalized.id));
   }, [normalized]);
 
-  if (loading) {
+  if (loading && !normalized) {
     return (
       <section className="detail-page">
         <SkeletonLoader kind="text" count={1} />

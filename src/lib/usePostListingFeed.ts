@@ -86,6 +86,7 @@ export function usePostListingFeed({
       let attempts = 0;
       const maxAttempts = videoFeedMode ? 4 : 1;
       const collected: RedditPostData[] = [];
+      const existingNames = new Set(posts.map((post) => post.name));
 
       while (cursor && attempts < maxAttempts) {
         const result = await fetchPage({ after: cursor });
@@ -101,17 +102,32 @@ export function usePostListingFeed({
         cursor = result.after;
       }
 
-      if (collected.length > 0) {
-        setPosts((previous) => [...previous, ...collected]);
+      const uniqueCollected = collected.filter((post) => {
+        if (existingNames.has(post.name)) {
+          return false;
+        }
+
+        existingNames.add(post.name);
+        return true;
+      });
+
+      if (uniqueCollected.length > 0) {
+        setPosts((previous) => {
+          const previousNames = new Set(previous.map((post) => post.name));
+          return [
+            ...previous,
+            ...uniqueCollected.filter((post) => !previousNames.has(post.name)),
+          ];
+        });
       }
 
-      setAfter(nextAfter);
+      setAfter(uniqueCollected.length === 0 && nextAfter === after ? null : nextAfter);
     } catch (err) {
       setLoadMoreError(err instanceof Error ? err.message : loadMoreErrorMessage);
     } finally {
       setLoadingMore(false);
     }
-  }, [after, fetchPage, loadMoreErrorMessage, loadingMore, videoFeedMode]);
+  }, [after, fetchPage, loadMoreErrorMessage, loadingMore, posts, videoFeedMode]);
 
   return {
     posts,

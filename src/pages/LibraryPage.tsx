@@ -10,6 +10,7 @@ import {
   removeSavedPost,
   type LibraryItem,
 } from '../lib/localLibrary';
+import type { NormalizedPost } from '../types/reddit';
 
 type LibraryPageProps = {
   mode: 'saved' | 'history';
@@ -27,6 +28,24 @@ function formatRecordedAt(item: LibraryItem, mode: 'saved' | 'history'): string 
   }
 
   return new Date(stamp).toLocaleString();
+}
+
+function getFallbackPost(item: LibraryItem): NormalizedPost {
+  return {
+    id: item.id,
+    name: item.name,
+    title: item.title,
+    author: item.author,
+    subreddit: item.subreddit,
+    permalink: item.permalink,
+    score: item.score,
+    numComments: item.numComments,
+    createdUtc: item.createdUtc,
+    selfText: '',
+    isNsfw: item.isNsfw,
+    outboundUrl: item.outboundUrl,
+    media: { type: 'link', outboundUrl: item.outboundUrl },
+  };
 }
 
 export function LibraryPage({ mode }: LibraryPageProps) {
@@ -84,6 +103,7 @@ export function LibraryPage({ mode }: LibraryPageProps) {
             <h3>
               <Link
                 to={`/r/${item.subreddit}/comments/${item.id}`}
+                state={{ fallbackPost: getFallbackPost(item) }}
                 target={openInNewTab ? '_blank' : undefined}
                 rel={openInNewTab ? 'noopener noreferrer' : undefined}
               >
@@ -101,6 +121,7 @@ export function LibraryPage({ mode }: LibraryPageProps) {
               <Link
                 className="post-action-button"
                 to={`/r/${item.subreddit}/comments/${item.id}`}
+                state={{ fallbackPost: getFallbackPost(item) }}
                 target={openInNewTab ? '_blank' : undefined}
                 rel={openInNewTab ? 'noopener noreferrer' : undefined}
               >

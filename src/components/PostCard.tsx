@@ -35,6 +35,7 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
       ? 'self-text-markdown self-text-collapsed self-text-preview'
       : 'self-text-markdown self-text-preview';
   const postDetailPath = `/r/${post.subreddit}/comments/${post.id}`;
+  const postRouteState = { fromSubreddit: post.subreddit, fallbackPost: post };
 
   const rememberSubredditScroll = () => {
     if (openInNewTab) {
@@ -77,7 +78,7 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
           <h2>
             <Link
               to={postDetailPath}
-              state={{ fromSubreddit: post.subreddit }}
+              state={postRouteState}
               onClick={rememberSubredditScroll}
               target={openInNewTab ? '_blank' : undefined}
               rel={openInNewTab ? 'noopener noreferrer' : undefined}
@@ -125,7 +126,7 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
           <Link
             className="post-action-button"
             to={postDetailPath}
-            state={{ fromSubreddit: post.subreddit }}
+            state={postRouteState}
             onClick={rememberSubredditScroll}
             target={openInNewTab ? '_blank' : undefined}
             rel={openInNewTab ? 'noopener noreferrer' : undefined}

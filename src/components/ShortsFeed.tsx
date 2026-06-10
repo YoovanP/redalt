@@ -220,7 +220,9 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
       return;
     }
 
-    navigate(`/r/${post.subreddit}/comments/${post.id}`);
+    navigate(`/r/${post.subreddit}/comments/${post.id}`, {
+      state: { fallbackPost: post },
+    });
   };
 
   const onTouchPointerDown = (index: number, event: React.PointerEvent<HTMLElement>) => {
