@@ -850,6 +850,83 @@ function readHtmlAttributes(html: string, attribute: 'href' | 'src'): string[] {
   );
 }
 
+function readHtmlAttribute(openTag: string, attribute: string): string {
+  const quoted = openTag.match(new RegExp(`\\s${attribute}=(["'])([\\s\\S]*?)\\1`, 'i'));
+
+  if (quoted) {
+    return decodeXmlEntities(quoted[2] ?? '').trim();
+  }
+
+  const unquoted = openTag.match(new RegExp(`\\s${attribute}=([^\\s>]+)`, 'i'));
+  return decodeXmlEntities(unquoted?.[1] ?? '').trim();
+}
+
+function hasHtmlClass(openTag: string, className: string): boolean {
+  return readHtmlAttribute(openTag, 'class')
+    .split(/\s+/)
+    .some((value) => value === className);
+}
+
+type HtmlTagBlock = {
+  openTag: string;
+  innerHtml: string;
+  innerStart: number;
+  innerEnd: number;
+  end: number;
+};
+
+function findHtmlTagBlockAt(html: string, tagName: string, openTagStart: number): HtmlTagBlock | null {
+  const openMatch = html.slice(openTagStart).match(new RegExp(`^<${tagName}\\b[^>]*>`, 'i'));
+
+  if (!openMatch) {
+    return null;
+  }
+
+  const openTag = openMatch[0];
+  const tagPattern = new RegExp(`<\\/?${tagName}\\b[^>]*>`, 'gi');
+  let depth = 0;
+  tagPattern.lastIndex = openTagStart;
+
+  for (let match = tagPattern.exec(html); match; match = tagPattern.exec(html)) {
+    const tag = match[0];
+
+    if (/^<\//.test(tag)) {
+      depth -= 1;
+
+      if (depth === 0) {
+        const innerStart = openTagStart + openTag.length;
+        const innerEnd = match.index;
+
+        return {
+          openTag,
+          innerHtml: html.slice(innerStart, innerEnd),
+          innerStart,
+          innerEnd,
+          end: match.index + tag.length,
+        };
+      }
+    } else if (!/\/>$/.test(tag)) {
+      depth += 1;
+    }
+  }
+
+  return null;
+}
+
+function findFirstHtmlTagBlock(html: string, tagName: string, className: string): HtmlTagBlock | null {
+  const tagPattern = new RegExp(`<${tagName}\\b[^>]*>`, 'gi');
+
+  for (let match = tagPattern.exec(html); match; match = tagPattern.exec(html)) {
+    if (!hasHtmlClass(match[0], className)) {
+      continue;
+    }
+
+    return findHtmlTagBlockAt(html, tagName, match.index);
+  }
+
+  return null;
+}
+
 function normalizeUrlCandidate(value: string, baseUrl: string): string {
   const candidate = decodeXmlEntities(value).trim();
 
@@ -1151,6 +1228,82 @@ function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string
   };
 }
 
+function readHtmlCommentAuthor(commentHtml: string): string {
+  const authorMatch = commentHtml.match(/<a\b[^>]*\bclass=["'][^"']*\bcomment_author\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+  return normalizeUserName(stripHtml(authorMatch?.[1] ?? '')) || '[unknown]';
+}
+
+function readHtmlCommentBody(commentHtml: string): string {
+  const bodyBlock = findFirstHtmlTagBlock(commentHtml, 'div', 'comment_body');
+  return bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+}
+
+function parseHtmlCommentChildren(html: string): Array<{ kind: 't1'; data: Record<string, unknown> }> {
+  const comments: Array<{ kind: 't1'; data: Record<string, unknown> }> = [];
+  const tagPattern = /<div\b[^>]*>/gi;
+
+  for (let match = tagPattern.exec(html); match; match = tagPattern.exec(html)) {
+    const openTag = match[0];
+
+    if (!hasHtmlClass(openTag, 'comment')) {
+      continue;
+    }
+
+    const id = readHtmlAttribute(openTag, 'id');
+    const commentBlock = id ? findHtmlTagBlockAt(html, 'div', match.index) : null;
+
+    if (!id || !commentBlock) {
+      continue;
+    }
+
+    const author = readHtmlCommentAuthor(commentBlock.innerHtml);
+    const body = readHtmlCommentBody(commentBlock.innerHtml);
+    const repliesBlock = findFirstHtmlTagBlock(commentBlock.innerHtml, 'blockquote', 'replies');
+    const replyChildren = repliesBlock ? parseHtmlCommentChildren(repliesBlock.innerHtml) : [];
+
+    if (body) {
+      comments.push({
+        kind: 't1',
+        data: {
+          id,
+          name: `t1_${id}`,
+          author,
+          body,
+          replies: replyChildren.length > 0
+            ? {
+                kind: 'Listing',
+                data: {
+                  after: null,
+                  before: null,
+                  children: replyChildren,
+                },
+              }
+            : '',
+        },
+      });
+    }
+
+    tagPattern.lastIndex = commentBlock.end;
+  }
+
+  return comments;
+}
+
+function readHtmlCommentCount(html: string): number {
+  const countMatch = html.match(/<[^>]+\bid=["']comment_count["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
+  const text = stripHtml(countMatch?.[1] ?? '');
+  const valueMatch = text.match(/([\d,.]+)\s*([km])?\s+comments?/i);
+
+  if (!valueMatch) {
+    return 0;
+  }
+
+  const parsed = Number((valueMatch[1] ?? '').replace(/,/g, ''));
+  const multiplier = valueMatch[2]?.toLowerCase() === 'm' ? 1_000_000 : valueMatch[2]?.toLowerCase() === 'k' ? 1_000 : 1;
+
+  return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
+}
+
 function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const postId = inferCommentThreadId(upstreamPath);
   const postChild = parseHtmlPostLinks(html, upstreamPath, sourceBase).find((child) => child.data.id === postId);
@@ -1158,6 +1311,10 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
   if (!postChild) {
     return null;
   }
+
+  const comments = parseHtmlCommentChildren(html);
+  const commentCount = readHtmlCommentCount(html);
+  postChild.data.num_comments = Math.max(commentCount, comments.length, Number(postChild.data.num_comments) || 0);
 
   return [
     {
@@ -1173,7 +1330,7 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
       data: {
         after: null,
         before: null,
-        children: [],
+        children: comments,
       },
     },
   ];
@@ -1758,6 +1915,14 @@ function getPublicInstanceAccept(method: PublicInstanceRequest['method']): strin
   return 'text/html, application/xhtml+xml';
 }
 
+function getPublicInstanceTimeoutMs(request: PublicInstanceRequest, upstreamPath: string): number {
+  if (!isCommentThreadPath(upstreamPath)) {
+    return 3000;
+  }
+
+  return request.method === 'html' ? 7000 : 5000;
+}
+
 function parsePublicInstancePayload(
   body: string,
   contentType: string | null,
@@ -1828,7 +1993,7 @@ async function fetchFromPublicInstance(
             'User-Agent': getProxyUserAgent(env, options),
           },
         },
-        3000,
+        getPublicInstanceTimeoutMs(request, upstreamPath),
       );
 
       if (!response.ok) {
