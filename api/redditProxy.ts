@@ -1596,6 +1596,90 @@ function isCompatibleRedditPayload(payload: unknown, upstreamPath: string): bool
   );
 }
 
+function getStringField(data: Record<string, unknown>, key: string): string {
+  const value = data[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function isRenderableObject(value: unknown): boolean {
+  return typeof value === 'object' && value !== null;
+}
+
+function isUsableThumbnail(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return /^https?:\/\//i.test(normalized) && !['default', 'self', 'nsfw', 'spoiler', 'image'].includes(normalized);
+}
+
+function isCommentPermalinkUrl(url: string, permalink: string, id: string): boolean {
+  const normalizedId = id.toLowerCase();
+  const normalizedPermalink = permalink.replace(/\/+$/g, '').toLowerCase();
+  const pathname = (() => {
+    try {
+      return new URL(url).pathname;
+    } catch {
+      return url;
+    }
+  })().replace(/\/+$/g, '').toLowerCase();
+
+  return (
+    Boolean(normalizedId && pathname.includes(`/comments/${normalizedId}`)) ||
+    Boolean(normalizedPermalink && pathname.startsWith(normalizedPermalink))
+  );
+}
+
+function hasRenderablePostData(data: Record<string, unknown>): boolean {
+  if (getStringField(data, 'selftext')) {
+    return true;
+  }
+
+  if (isRenderableObject(data.media) || isRenderableObject(data.secure_media) || isRenderableObject(data.preview)) {
+    return true;
+  }
+
+  if (isUsableThumbnail(data.thumbnail)) {
+    return true;
+  }
+
+  const postHint = getStringField(data, 'post_hint');
+
+  if (postHint && postHint !== 'link') {
+    return true;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+
+  if (!outboundUrl) {
+    return false;
+  }
+
+  return !isRedditNavigationUrl(outboundUrl) && !isCommentPermalinkUrl(
+    outboundUrl,
+    getStringField(data, 'permalink'),
+    getStringField(data, 'id'),
+  );
+}
+
+function hasRenderablePostPayload(payload: unknown, upstreamPath: string): boolean {
+  if (isCommentThreadPath(upstreamPath)) {
+    if (!Array.isArray(payload)) {
+      return false;
+    }
+
+    const postHasContent = listingChildren(payload[0]).some((child) =>
+      child.data ? hasRenderablePostData(child.data) : false,
+    );
+    const commentsHaveContent = listingChildren(payload[1]).some((child) => getStringField(child.data ?? {}, 'body'));
+
+    return postHasContent || commentsHaveContent;
+  }
+
+  return listingChildren(payload).some((child) => child.data ? hasRenderablePostData(child.data) : false);
+}
+
 function getPublicInstanceAccept(method: PublicInstanceRequest['method']): string {
   if (method === 'json') {
     return 'application/json';
@@ -1640,14 +1724,24 @@ function parsePublicInstancePayload(
       return parseRssCommentsResponse(body, upstreamPath, base);
     }
 
-    return looksHtml ? parseHtmlCommentsResponse(body, upstreamPath, base) : null;
+    if (looksHtml) {
+      const htmlPayload = parseHtmlCommentsResponse(body, upstreamPath, base);
+      return hasRenderablePostPayload(htmlPayload, upstreamPath) ? htmlPayload : null;
+    }
+
+    return null;
   }
 
   if (looksRss) {
     return normalizePublicInstancePayload(parseRssListing(body, upstreamPath, base), upstreamPath);
   }
 
-  return looksHtml ? normalizePublicInstancePayload(parseHtmlListing(body, upstreamPath, base), upstreamPath) : null;
+  if (looksHtml) {
+    const htmlPayload = normalizePublicInstancePayload(parseHtmlListing(body, upstreamPath, base), upstreamPath);
+    return hasRenderablePostPayload(htmlPayload, upstreamPath) ? htmlPayload : null;
+  }
+
+  return null;
 }
 
 async function fetchFromPublicInstance(
