@@ -391,12 +391,26 @@ function buildRssPath(upstreamPath: string): string | null {
   const path = rawPath.replace(/\.json$/i, '');
   const rssParams = new URLSearchParams(rawQuery);
   rssParams.delete('raw_json');
-  const query = rssParams.toString();
-  const withQuery = (rssPath: string) => `${rssPath}${query ? `?${query}` : ''}`;
   const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
   const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
   const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
   const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+  const isListingPath = Boolean(subredditSearchMatch || subredditMatch || userMatch || path === '/search');
+
+  if (isListingPath) {
+    const requestedLimit = Number(rssParams.get('limit') ?? 25);
+    const fallbackLimit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(Math.floor(requestedLimit) * 4, 50), 100)
+      : 50;
+
+    rssParams.set('limit', String(fallbackLimit));
+    rssParams.delete('after');
+    rssParams.delete('before');
+    rssParams.delete('count');
+  }
+
+  const query = rssParams.toString();
+  const withQuery = (rssPath: string) => `${rssPath}${query ? `?${query}` : ''}`;
 
   if (commentThreadMatch) {
     return withQuery(`/r/${commentThreadMatch[1]}/comments/${commentThreadMatch[2]}.rss`);
@@ -1114,7 +1128,14 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
 
 function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
-  const children = parseHtmlPostLinks(html, upstreamPath, sourceBase).slice(0, pageSize);
+  const allChildren = parseHtmlPostLinks(html, upstreamPath, sourceBase);
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+
+  if (startIndex === null) {
+    return null;
+  }
+
+  const children = allChildren.slice(startIndex, startIndex + pageSize);
 
   if (children.length === 0) {
     return null;
@@ -1123,7 +1144,7 @@ function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string
   return {
     kind: 'Listing',
     data: {
-      after: getSyntheticRssAfter(children, upstreamPath, pageSize),
+      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex),
       before: null,
       children,
     },
@@ -1247,16 +1268,56 @@ function stableIdFromUrl(url: string, fallbackIndex: number): string {
   return `rss_${hash.toString(36)}_${fallbackIndex}`;
 }
 
+function getRequestedAfter(upstreamPath: string): string {
+  const [, rawQuery = ''] = upstreamPath.split('?');
+  const params = new URLSearchParams(rawQuery);
+
+  return (params.get('after') ?? '').trim();
+}
+
+function getChildName(child: { data?: { name?: unknown } }): string {
+  const name = child.data?.name;
+  return typeof name === 'string' ? name : '';
+}
+
+function getChildId(child: { data?: { id?: unknown } }): string {
+  const id = child.data?.id;
+  return typeof id === 'string' ? id : '';
+}
+
+function getPaginatedStartIndex(
+  children: Array<{ data?: { id?: unknown; name?: unknown } }>,
+  upstreamPath: string,
+): number | null {
+  const after = getRequestedAfter(upstreamPath);
+
+  if (!after) {
+    return 0;
+  }
+
+  const normalizedAfter = after.toLowerCase();
+  const normalizedAfterId = normalizedAfter.replace(/^t3_/, '');
+  const afterIndex = children.findIndex((child) => {
+    const name = getChildName(child).toLowerCase();
+    const id = getChildId(child).toLowerCase();
+
+    return name === normalizedAfter || id === normalizedAfterId;
+  });
+
+  return afterIndex >= 0 ? afterIndex + 1 : null;
+}
+
 function getSyntheticRssAfter(
-  children: Array<{ data?: { name?: unknown } }>,
+  children: Array<{ data?: { id?: unknown; name?: unknown } }>,
   upstreamPath: string,
   pageSize: number,
+  startIndex: number,
 ): string | null {
-  if (isCommentThreadPath(upstreamPath) || children.length < pageSize) {
+  if (isCommentThreadPath(upstreamPath) || children.length <= startIndex + pageSize) {
     return null;
   }
 
-  const name = children[children.length - 1]?.data?.name;
+  const name = children[startIndex + pageSize - 1]?.data?.name;
   return typeof name === 'string' && name ? name : null;
 }
 
@@ -1491,14 +1552,19 @@ function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https:
   }
 
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
-  const children = items
-    .slice(0, pageSize)
-    .map((item, index) => parseRssPostChild(item[2], upstreamPath, sourceBase, index));
+  const allChildren = items.map((item, index) => parseRssPostChild(item[2], upstreamPath, sourceBase, index));
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+
+  if (startIndex === null) {
+    return null;
+  }
+
+  const children = allChildren.slice(startIndex, startIndex + pageSize);
 
   return {
     kind: 'Listing',
     data: {
-      after: getSyntheticRssAfter(children, upstreamPath, pageSize),
+      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex),
       before: null,
       children,
     },
