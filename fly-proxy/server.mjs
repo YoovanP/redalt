@@ -12,6 +12,8 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
+const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
+const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
 const STATIC_PUBLIC_INSTANCES = [
   'https://redlib.perennialte.ch',
   'https://redlib.r4fo.com',
@@ -2442,6 +2444,148 @@ function hasRenderablePostPayload(payload, upstreamPath) {
   return listingChildren(payload).some((child) => child.data ? hasRenderablePostData(child.data) : false);
 }
 
+function hasPreviewMedia(data) {
+  return Array.isArray(data.preview?.images) && data.preview.images.length > 0;
+}
+
+function hasGalleryMedia(data) {
+  return Boolean(data.is_gallery && Array.isArray(data.gallery_data?.items) && isRenderableObject(data.media_metadata));
+}
+
+function hasUsableMediaFields(data) {
+  if (
+    hasGalleryMedia(data) ||
+    hasPreviewMedia(data) ||
+    isRenderableObject(data.media) ||
+    isRenderableObject(data.secure_media) ||
+    isUsableThumbnail(data.thumbnail)
+  ) {
+    return true;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+  return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+}
+
+function getRedlibDetailPath(data) {
+  for (const value of [getStringField(data, 'permalink'), getStringField(data, 'url')]) {
+    if (!value) {
+      continue;
+    }
+
+    const path = toPathname(normalizeUrlCandidate(value, 'https://www.reddit.com'));
+
+    if (/\/comments\//i.test(path)) {
+      return path;
+    }
+  }
+
+  const id = getStringField(data, 'id');
+  const subreddit = normalizeCommunityName(getStringField(data, 'subreddit'));
+
+  return id && subreddit && !subreddit.includes('/') ? `/r/${subreddit}/comments/${id}/` : '';
+}
+
+const REDLIB_MEDIA_FIELDS = [
+  'preview',
+  'thumbnail',
+  'gallery_data',
+  'media_metadata',
+  'media',
+  'secure_media',
+  'post_hint',
+  'is_gallery',
+  'is_video',
+  'url',
+  'url_overridden_by_dest',
+  'domain',
+  'is_self',
+];
+
+function mergeRedlibMediaFields(target, source) {
+  if (!hasUsableMediaFields(source)) {
+    return;
+  }
+
+  for (const key of REDLIB_MEDIA_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      target[key] = source[key];
+    }
+  }
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex];
+        nextIndex += 1;
+        await worker(item);
+      }
+    }),
+  );
+}
+
+async function fetchRedlibDetailMediaData(base, detailPath) {
+  const response = await fetchWithTimeout(
+    `${base}${detailPath}`,
+    {
+      headers: {
+        Accept: getPublicInstanceAccept('html'),
+        'User-Agent': USER_AGENT,
+      },
+    },
+    REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const body = await response.text();
+
+  if (isAnubisChallenge(body) || !looksRedlibHtml(body)) {
+    return null;
+  }
+
+  const detailPayload = parseRedlibCommentsResponse(body, detailPath, base);
+  const detailData = listingChildren(Array.isArray(detailPayload) ? detailPayload[0] : null)[0]?.data;
+
+  return detailData && hasUsableMediaFields(detailData) ? detailData : null;
+}
+
+async function enrichRedlibListingMedia(payload, base, upstreamPath) {
+  if (isCommentThreadPath(upstreamPath) || isPublicDiscoveryPath(upstreamPath)) {
+    return payload;
+  }
+
+  const targets = listingChildren(payload)
+    .filter((child) => child.data && !hasUsableMediaFields(child.data))
+    .map((child) => ({ child, detailPath: getRedlibDetailPath(child.data) }))
+    .filter((item) => item.detailPath);
+
+  if (targets.length === 0) {
+    return payload;
+  }
+
+  await runWithConcurrency(targets, REDLIB_DETAIL_ENRICH_CONCURRENCY, async ({ child, detailPath }) => {
+    try {
+      const detailData = await fetchRedlibDetailMediaData(base, detailPath);
+
+      if (detailData) {
+        mergeRedlibMediaFields(child.data, detailData);
+      }
+    } catch {
+      // Detail enrichment is opportunistic; keep the original listing child on failure.
+    }
+  });
+
+  return payload;
+}
+
 function getPublicInstanceAccept(method) {
   if (method === 'json') {
     return 'application/json';
@@ -2511,10 +2655,7 @@ function parsePublicInstancePayload(body, contentType, request, base, upstreamPa
 
   if (looksRedlib) {
     const redlibPayload = normalizePublicInstancePayload(parseRedlibListing(body, upstreamPath, base), upstreamPath);
-
-    if (hasRenderablePostPayload(redlibPayload, upstreamPath)) {
-      return redlibPayload;
-    }
+    return redlibPayload;
   }
 
   if (looksRss) {
@@ -2556,13 +2697,22 @@ async function fetchFromPublicInstance(base, upstreamPath, mediaPref) {
       }
 
       const body = await response.text();
-      const normalizedPayload = parsePublicInstancePayload(
+      let normalizedPayload = parsePublicInstancePayload(
         body,
         response.headers.get('content-type'),
         request,
         base,
         upstreamPath,
       );
+
+      if (
+        request.method === 'html' &&
+        looksRedlibHtml(body) &&
+        !isCommentThreadPath(upstreamPath) &&
+        !isPublicDiscoveryPath(upstreamPath)
+      ) {
+        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath);
+      }
 
       if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
         continue;

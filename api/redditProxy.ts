@@ -29,6 +29,8 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
+const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
+const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
 const STATIC_PUBLIC_INSTANCES = [
   'https://redlib.perennialte.ch',
   'https://redlib.r4fo.com',
@@ -2620,6 +2622,167 @@ function hasRenderablePostPayload(payload: unknown, upstreamPath: string): boole
   return listingChildren(payload).some((child) => child.data ? hasRenderablePostData(child.data) : false);
 }
 
+function hasPreviewMedia(data: Record<string, unknown>): boolean {
+  const preview = data.preview as { images?: unknown[] } | undefined;
+  return Array.isArray(preview?.images) && preview.images.length > 0;
+}
+
+function hasGalleryMedia(data: Record<string, unknown>): boolean {
+  const galleryData = data.gallery_data as { items?: unknown[] } | undefined;
+  return Boolean(data.is_gallery && Array.isArray(galleryData?.items) && isRenderableObject(data.media_metadata));
+}
+
+function hasUsableMediaFields(data: Record<string, unknown>): boolean {
+  if (
+    hasGalleryMedia(data) ||
+    hasPreviewMedia(data) ||
+    isRenderableObject(data.media) ||
+    isRenderableObject(data.secure_media) ||
+    isUsableThumbnail(data.thumbnail)
+  ) {
+    return true;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+  return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+}
+
+function getRedlibDetailPath(data: Record<string, unknown>): string {
+  for (const value of [getStringField(data, 'permalink'), getStringField(data, 'url')]) {
+    if (!value) {
+      continue;
+    }
+
+    const path = toPathname(normalizeUrlCandidate(value, 'https://www.reddit.com'));
+
+    if (/\/comments\//i.test(path)) {
+      return path;
+    }
+  }
+
+  const id = getStringField(data, 'id');
+  const subreddit = normalizeCommunityName(getStringField(data, 'subreddit'));
+
+  return id && subreddit && !subreddit.includes('/') ? `/r/${subreddit}/comments/${id}/` : '';
+}
+
+const REDLIB_MEDIA_FIELDS = [
+  'preview',
+  'thumbnail',
+  'gallery_data',
+  'media_metadata',
+  'media',
+  'secure_media',
+  'post_hint',
+  'is_gallery',
+  'is_video',
+  'url',
+  'url_overridden_by_dest',
+  'domain',
+  'is_self',
+] as const;
+
+function mergeRedlibMediaFields(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  if (!hasUsableMediaFields(source)) {
+    return;
+  }
+
+  for (const key of REDLIB_MEDIA_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      target[key] = source[key];
+    }
+  }
+}
+
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex];
+        nextIndex += 1;
+        await worker(item);
+      }
+    }),
+  );
+}
+
+async function fetchRedlibDetailMediaData(
+  base: string,
+  detailPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<Record<string, unknown> | null> {
+  const response = await fetchWithTimeout(
+    `${base}${detailPath}`,
+    {
+      headers: {
+        Accept: getPublicInstanceAccept('html'),
+        'User-Agent': getProxyUserAgent(env, options),
+      },
+    },
+    REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const body = await response.text();
+
+  if (isAnubisChallenge(body) || !looksRedlibHtml(body)) {
+    return null;
+  }
+
+  const detailPayload = parseRedlibCommentsResponse(body, detailPath, base);
+  const detailData = listingChildren(Array.isArray(detailPayload) ? detailPayload[0] : null)[0]?.data;
+
+  return detailData && hasUsableMediaFields(detailData) ? detailData : null;
+}
+
+async function enrichRedlibListingMedia(
+  payload: unknown,
+  base: string,
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<unknown> {
+  if (isCommentThreadPath(upstreamPath) || isPublicDiscoveryPath(upstreamPath)) {
+    return payload;
+  }
+
+  const targets = listingChildren(payload)
+    .filter((child): child is { kind?: string; data: Record<string, unknown> } =>
+      Boolean(child.data && !hasUsableMediaFields(child.data)),
+    )
+    .map((child) => ({ child, detailPath: getRedlibDetailPath(child.data) }))
+    .filter((item) => item.detailPath);
+
+  if (targets.length === 0) {
+    return payload;
+  }
+
+  await runWithConcurrency(targets, REDLIB_DETAIL_ENRICH_CONCURRENCY, async ({ child, detailPath }) => {
+    try {
+      const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options);
+
+      if (detailData) {
+        mergeRedlibMediaFields(child.data, detailData);
+      }
+    } catch {
+      // Detail enrichment is opportunistic; keep the original listing child on failure.
+    }
+  });
+
+  return payload;
+}
+
 function getPublicInstanceAccept(method: PublicInstanceRequest['method']): string {
   if (method === 'json') {
     return 'application/json';
@@ -2695,10 +2858,7 @@ function parsePublicInstancePayload(
 
   if (looksRedlib) {
     const redlibPayload = normalizePublicInstancePayload(parseRedlibListing(body, upstreamPath, base), upstreamPath);
-
-    if (hasRenderablePostPayload(redlibPayload, upstreamPath)) {
-      return redlibPayload;
-    }
+    return redlibPayload;
   }
 
   if (looksRss) {
@@ -2746,13 +2906,22 @@ async function fetchFromPublicInstance(
       }
 
       const body = await response.text();
-      const normalizedPayload = parsePublicInstancePayload(
+      let normalizedPayload = parsePublicInstancePayload(
         body,
         response.headers.get('content-type'),
         request,
         base,
         upstreamPath,
       );
+
+      if (
+        request.method === 'html' &&
+        looksRedlibHtml(body) &&
+        !isCommentThreadPath(upstreamPath) &&
+        !isPublicDiscoveryPath(upstreamPath)
+      ) {
+        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options);
+      }
 
       if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
         continue;
