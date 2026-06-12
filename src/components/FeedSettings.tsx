@@ -180,6 +180,19 @@ export function FeedSettings() {
             />
             Open posts in new tab
           </label>
+
+          <label>
+            Image source
+            <select
+              value={settings.fallbackMediaSource}
+              onChange={(event) =>
+                updateSettings({ fallbackMediaSource: event.target.value as 'instance' | 'reddit' })
+              }
+            >
+              <option value="instance">Full quality (instance)</option>
+              <option value="reddit">Reddit CDN</option>
+            </select>
+          </label>
         </div>
       )}
     </section>

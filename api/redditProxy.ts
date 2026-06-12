@@ -20,6 +20,8 @@ type PublicInstanceRequest = {
   method: 'json' | 'rss' | 'html';
 };
 
+type MediaPref = 'instance' | 'reddit';
+
 const UPSTREAM_HOSTS = ['https://www.reddit.com', 'https://api.reddit.com', 'https://old.reddit.com'];
 const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
@@ -67,6 +69,136 @@ export function isAllowedRedditPath(upstreamPath: string): boolean {
   );
 }
 
+// The frontend appends `redalt_media=reddit` to request which media host to serve from.
+// It must be read once and stripped before any upstream/fallback URL is built so it never
+// leaks to Reddit/Redlib or fragments caches.
+function extractMediaPref(upstreamPath: string): { pref: MediaPref; cleanPath: string } {
+  const [path, rawQuery = ''] = upstreamPath.split('?');
+
+  if (!rawQuery.includes('redalt_media')) {
+    return { pref: 'instance', cleanPath: upstreamPath };
+  }
+
+  const params = new URLSearchParams(rawQuery);
+  const pref: MediaPref = params.get('redalt_media') === 'reddit' ? 'reddit' : 'instance';
+  params.delete('redalt_media');
+  const query = params.toString();
+
+  return { pref, cleanPath: query ? `${path}?${query}` : path };
+}
+
+// Maps a Redlib-served media path back to the original Reddit CDN, preserving the signed
+// query. Only same-instance still-image paths are rewritten; video/stream paths (/vid, /hls)
+// and anything not hosted on the serving instance are left untouched.
+function rewriteRedlibImageUrl(url: string, instanceHost: string): string {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  if (parsed.hostname.toLowerCase() !== instanceHost) {
+    return url;
+  }
+
+  const path = parsed.pathname;
+  const search = parsed.search;
+
+  if (/^\/(?:vid|hls)\//i.test(path)) {
+    return url;
+  }
+
+  const externalPre = path.match(/^\/preview\/external-pre\/(.+)$/i);
+  if (externalPre) {
+    return `https://external-preview.redd.it/${externalPre[1]}${search}`;
+  }
+
+  const pre = path.match(/^\/preview\/pre\/(.+)$/i);
+  if (pre) {
+    return `https://preview.redd.it/${pre[1]}${search}`;
+  }
+
+  const img = path.match(/^\/img\/(.+)$/i);
+  if (img) {
+    return `https://i.redd.it/${img[1]}${search}`;
+  }
+
+  return url;
+}
+
+// When the user prefers the Reddit CDN, rewrite still-image fields in the reconstructed
+// payload. Video (reddit_video) and embeds (oembed) are intentionally left on the instance.
+function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaPref): unknown {
+  if (pref !== 'reddit' || !payload) {
+    return payload;
+  }
+
+  let instanceHost: string;
+
+  try {
+    instanceHost = new URL(base).hostname.toLowerCase();
+  } catch {
+    return payload;
+  }
+
+  const rewrite = (value: unknown): unknown =>
+    typeof value === 'string' && value ? rewriteRedlibImageUrl(value, instanceHost) : value;
+
+  const rewriteData = (data: Record<string, unknown> | undefined): void => {
+    if (!data) {
+      return;
+    }
+
+    if (typeof data.url === 'string') {
+      data.url = rewrite(data.url) as string;
+    }
+
+    if (typeof data.url_overridden_by_dest === 'string') {
+      data.url_overridden_by_dest = rewrite(data.url_overridden_by_dest) as string;
+    }
+
+    if (typeof data.thumbnail === 'string') {
+      data.thumbnail = rewrite(data.thumbnail) as string;
+    }
+
+    const preview = data.preview as { images?: Array<{ source?: { url?: unknown } }> } | undefined;
+    if (preview?.images) {
+      for (const image of preview.images) {
+        if (image?.source && typeof image.source.url === 'string') {
+          image.source.url = rewrite(image.source.url) as string;
+        }
+      }
+    }
+
+    const mediaMetadata = data.media_metadata as
+      | Record<string, { s?: { u?: unknown; url?: unknown } }>
+      | undefined;
+    if (mediaMetadata) {
+      for (const meta of Object.values(mediaMetadata)) {
+        if (meta?.s) {
+          if (typeof meta.s.u === 'string') {
+            meta.s.u = rewrite(meta.s.u) as string;
+          }
+          if (typeof meta.s.url === 'string') {
+            meta.s.url = rewrite(meta.s.url) as string;
+          }
+        }
+      }
+    }
+  };
+
+  const listings = Array.isArray(payload) ? payload : [payload];
+  for (const listing of listings) {
+    for (const child of listingChildren(listing)) {
+      rewriteData(child.data);
+    }
+  }
+
+  return payload;
+}
+
 export async function handleRedditProxyRequest(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
@@ -81,9 +213,11 @@ export async function handleRedditProxyRequest(
     });
   }
 
+  const { pref: mediaPref, cleanPath } = extractMediaPref(upstreamPath);
+
   if (options.cloudflareProxyBase) {
     const cloudflareResponse = await fetchWithTimeout(
-      `${options.cloudflareProxyBase}${upstreamPath}`,
+      `${options.cloudflareProxyBase}${cleanPath}`,
       {
         headers: {
           Accept: 'application/json',
@@ -98,7 +232,7 @@ export async function handleRedditProxyRequest(
     }
   }
 
-  const publicInstanceResponse = await fetchViaPublicInstances(upstreamPath, env, options);
+  const publicInstanceResponse = await fetchViaPublicInstances(cleanPath, env, options, mediaPref);
 
   if (publicInstanceResponse) {
     return publicInstanceResponse;
@@ -108,7 +242,7 @@ export async function handleRedditProxyRequest(
 
   for (const host of UPSTREAM_HOSTS) {
     const upstreamResponse = await fetchWithTimeout(
-      `${host}${upstreamPath}`,
+      `${host}${cleanPath}`,
       {
         headers: {
           Accept: 'application/json',
@@ -150,13 +284,13 @@ export async function handleRedditProxyRequest(
     }
   }
 
-  const mirrorResponse = await fetchViaAllOrigins(upstreamPath, env, options).catch(() => null);
+  const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options).catch(() => null);
 
   if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
     return responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120');
   }
 
-  const redditRssResponse = await fetchViaRedditRss(upstreamPath, env, options);
+  const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options);
 
   if (redditRssResponse) {
     return redditRssResponse;
@@ -571,11 +705,13 @@ function buildPublicInstanceRequests(base: string, upstreamPath: string): Public
     addPublicInstanceRequest(requests, seen, 'json', buildTedditPath(upstreamPath));
   }
 
+  // HTML first: Redlib renders full-quality media (video/image/gallery/comments) in HTML.
+  // RSS is a text-only last resort (Redlib RSS has no media), skipped for Troddit.
+  addPublicInstanceRequest(requests, seen, 'html', buildPublicHtmlPath(upstreamPath));
+
   if (!isTrodditInstance(base)) {
     addPublicInstanceRequest(requests, seen, 'rss', buildRssPath(upstreamPath));
   }
-
-  addPublicInstanceRequest(requests, seen, 'html', buildPublicHtmlPath(upstreamPath));
 
   return requests;
 }
@@ -1226,6 +1362,587 @@ function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string
       children,
     },
   };
+}
+
+function isEddritInstance(base: string): boolean {
+  try {
+    return new URL(base).hostname.toLowerCase().includes('eddrit');
+  } catch {
+    return false;
+  }
+}
+
+// Eddrit and some Redlib mirrors sit behind the Anubis proof-of-work wall, which answers
+// with an HTTP 200 HTML challenge page. Detect it so it is treated as a failure, never parsed.
+function isAnubisChallenge(body: string): boolean {
+  return (
+    /making sure you(?:&#39;|')re not a bot/i.test(body) ||
+    body.includes('anubis_challenge') ||
+    body.includes('/.within.website/x/cmd/anubis')
+  );
+}
+
+function looksRedlibHtml(body: string): boolean {
+  return (
+    /\bclass=["'][^"']*\bpost_header\b/i.test(body) ||
+    /\bclass=["'][^"']*\bpost_media_content\b/i.test(body) ||
+    /\bid=["']comment_count["']/i.test(body) ||
+    /<div\b[^>]*\bclass=["'][^"']*\bpost\b[^"']*["'][^>]*\bid=/i.test(body)
+  );
+}
+
+function toPathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '';
+  }
+}
+
+function urlWidthParam(url: string): number | undefined {
+  try {
+    const width = Number(new URL(url).searchParams.get('width'));
+    return Number.isFinite(width) && width > 0 ? width : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function mimeFromUrl(url: string): string {
+  const path = getUrlPathname(url);
+
+  if (/\.png(?:[?#]|$)/i.test(path)) {
+    return 'image/png';
+  }
+  if (/\.gif(?:[?#]|$)/i.test(path)) {
+    return 'image/gif';
+  }
+  if (/\.webp(?:[?#]|$)/i.test(path)) {
+    return 'image/webp';
+  }
+
+  return 'image/jpeg';
+}
+
+function findRedlibPostBlocks(html: string): Array<{ openTag: string; block: HtmlTagBlock }> {
+  const blocks: Array<{ openTag: string; block: HtmlTagBlock }> = [];
+  const tagPattern = /<div\b[^>]*>/gi;
+
+  for (let match = tagPattern.exec(html); match; match = tagPattern.exec(html)) {
+    const openTag = match[0];
+
+    // Listing posts are `<div class="post" id="...">`; the detail-page post is
+    // `<div class="post highlighted">` with no id, so don't require an id here.
+    if (!hasHtmlClass(openTag, 'post')) {
+      continue;
+    }
+
+    const block = findHtmlTagBlockAt(html, 'div', match.index);
+
+    if (!block) {
+      continue;
+    }
+
+    blocks.push({ openTag, block });
+    tagPattern.lastIndex = block.end;
+  }
+
+  return blocks;
+}
+
+function redlibVideoMedia(
+  innerHtml: string,
+  sourceBase: string,
+): { fallbackUrl: string; hlsUrl?: string; width?: number; height?: number } | null {
+  const videoBlock = findFirstHtmlTagBlock(innerHtml, 'video', 'post_media_video');
+
+  if (!videoBlock) {
+    return null;
+  }
+
+  let mp4 = '';
+  let hls = '';
+
+  for (const match of videoBlock.innerHtml.matchAll(/<source\b[^>]*>/gi)) {
+    const tag = match[0];
+    const src = normalizeUrlCandidate(readHtmlAttribute(tag, 'src'), sourceBase);
+
+    if (!src) {
+      continue;
+    }
+
+    const type = readHtmlAttribute(tag, 'type').toLowerCase();
+
+    if (type.includes('mpegurl') || /\.m3u8(?:[?#]|$)/i.test(src) || /\/hls\//i.test(src)) {
+      hls = hls || src;
+    } else {
+      mp4 = mp4 || src;
+    }
+  }
+
+  // Redlib serves a muxed CMAF MP4 at /vid/<id>/CMAF. Derive it from the HLS id when the
+  // <source type="video/mp4"> isn't present, so fallback_url is always a cross-browser MP4.
+  if (!mp4 && hls) {
+    const idMatch = hls.match(/\/hls\/([^/?#]+)\//i);
+
+    if (idMatch) {
+      try {
+        mp4 = `${new URL(hls).origin}/vid/${idMatch[1]}/CMAF`;
+      } catch {
+        // Keep HLS as the only source if the URL cannot be parsed.
+      }
+    }
+  }
+
+  if (!mp4 && !hls) {
+    return null;
+  }
+
+  const width = Number(readHtmlAttribute(videoBlock.openTag, 'width')) || undefined;
+  const height = Number(readHtmlAttribute(videoBlock.openTag, 'height')) || undefined;
+
+  return { fallbackUrl: mp4 || hls, hlsUrl: hls || undefined, width, height };
+}
+
+function redlibImageSource(
+  innerHtml: string,
+  sourceBase: string,
+): { url: string; width?: number; height?: number } | null {
+  const anchorBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_media_image');
+  let href = anchorBlock ? readHtmlAttribute(anchorBlock.openTag, 'href') : '';
+
+  if (!href) {
+    const contentBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'post_media_content');
+    const imgTag = contentBlock ? contentBlock.innerHtml.match(/<img\b[^>]*>/i)?.[0] ?? '' : '';
+    href = imgTag ? readHtmlAttribute(imgTag, 'src') : '';
+  }
+
+  const url = normalizeUrlCandidate(href, sourceBase);
+
+  if (!url) {
+    return null;
+  }
+
+  if (!/^\/(?:preview|img)\//i.test(toPathname(url)) && !isLikelyImageUrl(url)) {
+    return null;
+  }
+
+  return { url, width: urlWidthParam(url) };
+}
+
+function redlibGalleryItems(
+  innerHtml: string,
+  sourceBase: string,
+): Array<{ mediaId: string; url: string; width?: number; mimeType: string }> {
+  const galleryBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'gallery');
+
+  if (!galleryBlock) {
+    return [];
+  }
+
+  const items: Array<{ mediaId: string; url: string; width?: number; mimeType: string }> = [];
+  const seen = new Set<string>();
+
+  for (const match of galleryBlock.innerHtml.matchAll(/<figure\b[^>]*>([\s\S]*?)<\/figure>/gi)) {
+    const figureHtml = match[1] ?? '';
+    const anchorTag = figureHtml.match(/<a\b[^>]*>/i)?.[0] ?? '';
+    let href = anchorTag ? readHtmlAttribute(anchorTag, 'href') : '';
+
+    if (!href) {
+      const imgTag = figureHtml.match(/<img\b[^>]*>/i)?.[0] ?? '';
+      href = imgTag ? readHtmlAttribute(imgTag, 'src') : '';
+    }
+
+    const url = normalizeUrlCandidate(href, sourceBase);
+
+    if (!url || seen.has(url)) {
+      continue;
+    }
+
+    seen.add(url);
+    const slug = toPathname(url).split('/').filter(Boolean).at(-1) ?? '';
+    const mediaId = slug.replace(/\.[a-z0-9]+$/i, '') || `g${items.length}`;
+    items.push({ mediaId, url, width: urlWidthParam(url), mimeType: mimeFromUrl(url) });
+  }
+
+  return items;
+}
+
+function redlibThumbnail(innerHtml: string, sourceBase: string): string {
+  const videoTag = innerHtml.match(/<video\b[^>]*>/i)?.[0] ?? '';
+  const poster = videoTag ? normalizeUrlCandidate(readHtmlAttribute(videoTag, 'poster'), sourceBase) : '';
+
+  if (poster) {
+    return poster;
+  }
+
+  const thumbBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_thumbnail');
+  const contentBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'post_media_content');
+  const imgTag =
+    (thumbBlock ? thumbBlock.innerHtml.match(/<img\b[^>]*>/i)?.[0] : undefined) ??
+    (contentBlock ? contentBlock.innerHtml.match(/<img\b[^>]*>/i)?.[0] : undefined) ??
+    '';
+  const src = imgTag ? readHtmlAttribute(imgTag, 'src') : '';
+
+  return normalizeUrlCandidate(src, sourceBase);
+}
+
+function redlibOutboundCandidates(innerHtml: string, sourceBase: string): string[] {
+  const candidates: string[] = [];
+  const thumbBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_thumbnail');
+
+  if (thumbBlock) {
+    candidates.push(readHtmlAttribute(thumbBlock.openTag, 'href'));
+  }
+
+  const linkTag = innerHtml.match(/<a\b[^>]*\bclass=["'][^"']*\bpost_(?:url|link)\b[^"']*["'][^>]*>/i)?.[0] ?? '';
+
+  if (linkTag) {
+    candidates.push(readHtmlAttribute(linkTag, 'href'));
+  }
+
+  return candidates.map((href) => normalizeUrlCandidate(href, sourceBase)).filter(Boolean);
+}
+
+function redlibKnownEmbed(
+  innerHtml: string,
+  sourceBase: string,
+): { provider: string; embedUrl: string; sourceUrl: string } | null {
+  for (const url of redlibOutboundCandidates(innerHtml, sourceBase)) {
+    const embed = buildKnownEmbed(url);
+
+    if (embed) {
+      return { provider: embed.provider, embedUrl: embed.embedUrl, sourceUrl: url };
+    }
+  }
+
+  return null;
+}
+
+function redlibOutboundUrl(innerHtml: string, sourceBase: string, instanceHost: string): string {
+  for (const url of redlibOutboundCandidates(innerHtml, sourceBase)) {
+    const host = getUrlHostname(url);
+
+    if (!host || host === instanceHost || isRedditNavigationUrl(url)) {
+      continue;
+    }
+
+    return url;
+  }
+
+  return '';
+}
+
+function redlibListingCommentCount(innerHtml: string): number {
+  const linkMatch = innerHtml.match(/<a\b[^>]*\bclass=["'][^"']*\bpost_comments\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+  const text = stripHtml(linkMatch?.[1] ?? '');
+  const valueMatch = text.match(/([\d,.]+)\s*([km])?/i);
+
+  if (!valueMatch) {
+    return 0;
+  }
+
+  const parsed = Number((valueMatch[1] ?? '').replace(/,/g, ''));
+  const multiplier = valueMatch[2]?.toLowerCase() === 'm' ? 1_000_000 : valueMatch[2]?.toLowerCase() === 'k' ? 1_000 : 1;
+
+  return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
+}
+
+function findRedlibTitleLink(
+  titleHtml: string,
+  sourceBase: string,
+): { permalink: string; title: string } | null {
+  let fallback: { permalink: string; title: string } | null = null;
+
+  for (const match of titleHtml.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const openTag = match[0].match(/^<a\b[^>]*>/i)?.[0] ?? '';
+
+    if (!openTag || hasHtmlClass(openTag, 'post_flair')) {
+      continue;
+    }
+
+    const permalink = toPathname(normalizeUrlCandidate(readHtmlAttribute(openTag, 'href'), sourceBase));
+    const title = stripHtml(match[1] ?? '');
+
+    if (!permalink && !title) {
+      continue;
+    }
+
+    const candidate = { permalink, title };
+
+    if (/\/comments\//i.test(permalink)) {
+      return candidate;
+    }
+
+    fallback ??= candidate;
+  }
+
+  return fallback;
+}
+
+// Reconstruct a full Reddit `t3` post (with media) from a single Redlib `<div class="post">` block.
+function parseRedlibPostBlock(
+  openTag: string,
+  innerHtml: string,
+  upstreamPath: string,
+  sourceBase: string,
+  fallbackId = '',
+): { kind: 't3'; data: Record<string, unknown> } | null {
+  const id = readHtmlAttribute(openTag, 'id') || fallbackId;
+
+  if (!id) {
+    return null;
+  }
+
+  const fallbackSubreddit = inferSubredditFromPath(upstreamPath);
+  const subredditMatch = innerHtml.match(
+    /<a\b[^>]*\bclass=["'][^"']*\bpost_subreddit\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i,
+  );
+  const subreddit = normalizeCommunityName(stripHtml(subredditMatch?.[1] ?? '')) || fallbackSubreddit;
+
+  const authorMatch = innerHtml.match(
+    /<a\b[^>]*\bclass=["'][^"']*\bpost_author\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i,
+  );
+  const author = normalizeUserName(stripHtml(authorMatch?.[1] ?? '')) || '[unknown]';
+
+  let title = '';
+  let permalink = '';
+  const titleBlock =
+    findFirstHtmlTagBlock(innerHtml, 'h1', 'post_title') ?? findFirstHtmlTagBlock(innerHtml, 'h2', 'post_title');
+
+  if (titleBlock) {
+    const titleLink = findRedlibTitleLink(titleBlock.innerHtml, sourceBase);
+
+    if (titleLink) {
+      permalink = titleLink.permalink;
+      title = titleLink.title;
+    }
+
+    if (!title) {
+      title = stripHtml(titleBlock.innerHtml);
+    }
+  } else {
+    const anchorBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_title');
+
+    if (anchorBlock) {
+      permalink = toPathname(normalizeUrlCandidate(readHtmlAttribute(anchorBlock.openTag, 'href'), sourceBase));
+      title = stripHtml(anchorBlock.innerHtml);
+    }
+  }
+
+  if (!/\/comments\//i.test(permalink)) {
+    permalink = `/r/${subreddit}/comments/${id}/`;
+  }
+
+  if (!title) {
+    title = titleFromPermalink(permalink);
+  }
+
+  const scoreTag = innerHtml.match(/<[^>]*\bclass=["'][^"']*\bpost_score\b[^"']*["'][^>]*>/i)?.[0] ?? '';
+  const scoreTitle = scoreTag ? readHtmlAttribute(scoreTag, 'title').replace(/,/g, '') : '';
+  const score = /^\d+$/.test(scoreTitle) ? Number(scoreTitle) : 0;
+
+  const flairMatch = innerHtml.match(/<[^>]*\bclass=["'][^"']*\bpost_flair\b[^"']*["'][^>]*>([\s\S]*?)<\//i);
+  const flair = stripHtml(flairMatch?.[1] ?? '');
+
+  const over18 = /\bclass=["'][^"']*\bnsfw\b/i.test(innerHtml) || hasHtmlClass(openTag, 'nsfw');
+
+  const createdTag = innerHtml.match(/<[^>]*\bclass=["'][^"']*\bcreated\b[^"']*["'][^>]*>/i)?.[0] ?? '';
+  const createdMs = Date.parse(createdTag ? readHtmlAttribute(createdTag, 'title') : '');
+
+  const bodyBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'post_body');
+  const selftext = bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+  const thumbnail = redlibThumbnail(innerHtml, sourceBase);
+  const instanceHost = getUrlHostname(sourceBase);
+
+  const data: Record<string, unknown> = {
+    id,
+    name: `t3_${id}`,
+    title,
+    author,
+    subreddit,
+    permalink,
+    score,
+    ups: score,
+    num_comments: redlibListingCommentCount(innerHtml),
+    created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : Math.floor(Date.now() / 1000),
+    selftext,
+    over_18: over18,
+    is_self: false,
+  };
+
+  if (flair && !/^(?:nsfw|oc|spoiler)$/i.test(flair)) {
+    data.link_flair_text = flair;
+  }
+
+  if (thumbnail) {
+    data.thumbnail = thumbnail;
+  }
+
+  const embed = redlibKnownEmbed(innerHtml, sourceBase);
+  const video = redlibVideoMedia(innerHtml, sourceBase);
+  const gallery = redlibGalleryItems(innerHtml, sourceBase);
+  const image = redlibImageSource(innerHtml, sourceBase);
+
+  if (embed) {
+    const mediaObject = {
+      oembed: {
+        provider_name: embed.provider,
+        thumbnail_url: thumbnail || undefined,
+        html: `<iframe src="${embed.embedUrl}" allowfullscreen></iframe>`,
+      },
+    };
+    data.url = embed.sourceUrl;
+    data.url_overridden_by_dest = embed.sourceUrl;
+    data.domain = getUrlHostname(embed.sourceUrl);
+    data.post_hint = 'rich:video';
+    data.media = mediaObject;
+    data.secure_media = mediaObject;
+  } else if (video) {
+    const redditVideo = {
+      fallback_url: video.fallbackUrl,
+      hls_url: video.hlsUrl,
+      width: video.width,
+      height: video.height,
+      is_gif: false,
+    };
+    data.is_video = true;
+    data.post_hint = 'hosted:video';
+    data.url = video.fallbackUrl;
+    data.url_overridden_by_dest = video.fallbackUrl;
+    data.domain = 'v.redd.it';
+    data.media = { reddit_video: redditVideo };
+    data.secure_media = { reddit_video: redditVideo };
+  } else if (gallery.length > 0) {
+    const mediaMetadata: Record<string, unknown> = {};
+
+    for (const item of gallery) {
+      mediaMetadata[item.mediaId] = {
+        status: 'valid',
+        e: 'Image',
+        m: item.mimeType,
+        s: { u: item.url, x: item.width },
+        p: [],
+      };
+    }
+
+    data.is_gallery = true;
+    data.gallery_data = { items: gallery.map((item, index) => ({ media_id: item.mediaId, id: index })) };
+    data.media_metadata = mediaMetadata;
+    data.url = `https://www.reddit.com${permalink}`;
+    data.domain = 'reddit.com';
+    data.preview = {
+      enabled: true,
+      images: [{ source: { url: gallery[0].url, width: gallery[0].width }, resolutions: [] }],
+    };
+  } else if (image) {
+    data.post_hint = 'image';
+    data.url = image.url;
+    data.url_overridden_by_dest = image.url;
+    data.domain = getUrlHostname(image.url);
+    data.preview = {
+      enabled: true,
+      images: [{ source: { url: image.url, width: image.width, height: image.height }, resolutions: [] }],
+    };
+  } else {
+    const outbound = redlibOutboundUrl(innerHtml, sourceBase, instanceHost);
+
+    if (outbound) {
+      data.url = outbound;
+      data.url_overridden_by_dest = outbound;
+      data.domain = getUrlHostname(outbound);
+      data.post_hint = 'link';
+    } else if (thumbnail) {
+      // Redlib collapsed a media post to a thumbnail in the listing; show the thumbnail and
+      // let the detail page load full media on click.
+      data.post_hint = 'image';
+      data.url = `https://www.reddit.com${permalink}`;
+      data.preview = {
+        enabled: true,
+        images: [{ source: { url: thumbnail }, resolutions: [] }],
+      };
+    } else {
+      data.is_self = true;
+      data.url = `https://www.reddit.com${permalink}`;
+      data.domain = 'reddit.com';
+    }
+  }
+
+  return { kind: 't3', data };
+}
+
+function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
+  const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const allChildren = findRedlibPostBlocks(html)
+    .map(({ openTag, block }) => parseRedlibPostBlock(openTag, block.innerHtml, upstreamPath, sourceBase))
+    .filter((child): child is { kind: 't3'; data: Record<string, unknown> } => child !== null);
+
+  if (allChildren.length === 0) {
+    return null;
+  }
+
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+
+  if (startIndex === null) {
+    return null;
+  }
+
+  const children = allChildren.slice(startIndex, startIndex + pageSize);
+
+  if (children.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: 'Listing',
+    data: {
+      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex),
+      before: null,
+      children,
+    },
+  };
+}
+
+function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
+  const postId = inferCommentThreadId(upstreamPath);
+  const blocks = findRedlibPostBlocks(html);
+
+  if (blocks.length === 0) {
+    return null;
+  }
+
+  const chosen =
+    blocks.find(({ openTag }) => readHtmlAttribute(openTag, 'id') === postId) ??
+    blocks.find(({ openTag }) => hasHtmlClass(openTag, 'highlighted')) ??
+    blocks[0];
+  const postChild = parseRedlibPostBlock(chosen.openTag, chosen.block.innerHtml, upstreamPath, sourceBase, postId);
+
+  if (!postChild) {
+    return null;
+  }
+
+  const comments = parseHtmlCommentChildren(html);
+  const commentCount = readHtmlCommentCount(html);
+  postChild.data.num_comments = Math.max(commentCount, comments.length, Number(postChild.data.num_comments) || 0);
+
+  return [
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: [postChild],
+      },
+    },
+    {
+      kind: 'Listing',
+      data: {
+        after: null,
+        before: null,
+        children: comments,
+      },
+    },
+  ];
 }
 
 function readHtmlCommentAuthor(commentHtml: string): string {
@@ -1930,6 +2647,10 @@ function parsePublicInstancePayload(
   base: string,
   upstreamPath: string,
 ): unknown | null {
+  if (isAnubisChallenge(body)) {
+    return null;
+  }
+
   const looksJson = request.method === 'json' || isJsonContentType(contentType) || /^[\s\r\n]*[\[{]/.test(body);
   const looksRss =
     request.method === 'rss' ||
@@ -1937,6 +2658,7 @@ function parsePublicInstancePayload(
     (contentType ?? '').toLowerCase().includes('atom') ||
     /<rss\b|<feed\b|<item\b/i.test(body);
   const looksHtml = request.method === 'html' || (contentType ?? '').toLowerCase().includes('html') || /<html\b|<a\s/i.test(body);
+  const looksRedlib = looksHtml && looksRedlibHtml(body);
 
   if (looksJson) {
     return normalizePublicInstancePayload(JSON.parse(body), upstreamPath);
@@ -1951,6 +2673,14 @@ function parsePublicInstancePayload(
   }
 
   if (isCommentThreadPath(upstreamPath)) {
+    if (looksRedlib) {
+      const redlibPayload = parseRedlibCommentsResponse(body, upstreamPath, base);
+
+      if (hasRenderablePostPayload(redlibPayload, upstreamPath)) {
+        return redlibPayload;
+      }
+    }
+
     if (looksRss) {
       return parseRssCommentsResponse(body, upstreamPath, base);
     }
@@ -1961,6 +2691,14 @@ function parsePublicInstancePayload(
     }
 
     return null;
+  }
+
+  if (looksRedlib) {
+    const redlibPayload = normalizePublicInstancePayload(parseRedlibListing(body, upstreamPath, base), upstreamPath);
+
+    if (hasRenderablePostPayload(redlibPayload, upstreamPath)) {
+      return redlibPayload;
+    }
   }
 
   if (looksRss) {
@@ -1980,7 +2718,14 @@ async function fetchFromPublicInstance(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
+  mediaPref: MediaPref,
 ): Promise<Response | null> {
+  // Eddrit now sits behind an Anubis proof-of-work wall; requests only return a challenge
+  // page, so skip it entirely to avoid wasted latency.
+  if (isEddritInstance(base)) {
+    return null;
+  }
+
   const requests = buildPublicInstanceRequests(base, upstreamPath);
 
   for (const request of requests) {
@@ -2013,7 +2758,9 @@ async function fetchFromPublicInstance(
         continue;
       }
 
-      return new Response(JSON.stringify(normalizedPayload), {
+      const finalPayload = applyMediaSourcePreference(normalizedPayload, base, mediaPref);
+
+      return new Response(JSON.stringify(finalPayload), {
         status: 200,
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -2035,6 +2782,7 @@ async function fetchViaPublicInstances(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
+  mediaPref: MediaPref,
 ): Promise<Response | null> {
   if (!publicInstanceFallbackEnabled(env) || !isPublicFallbackPath(upstreamPath)) {
     return null;
@@ -2051,7 +2799,7 @@ async function fetchViaPublicInstances(
     const results = await Promise.all(
       batch.map(async (base) => ({
         base,
-        response: await fetchFromPublicInstance(base, upstreamPath, env, options),
+        response: await fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref),
       })),
     );
     const successfulResult = results.find((result) => result.response !== null);

@@ -16,6 +16,7 @@ const DEFAULT_REDDIT_BASES = [
 ];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
+const UI_SETTINGS_KEY = 'redalt.uiSettings';
 const PAGE_SIZE = 8;
 const REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS = 30 * 1000;
 const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
@@ -299,9 +300,41 @@ function getRedditBaseCandidates(): string[] {
   return activeCandidates.length > 0 ? activeCandidates : candidates;
 }
 
+// Reads the persisted UI preference directly (this module is not a React component).
+// `reddit` asks the proxy to rewrite still-image media to the Reddit CDN; `instance`
+// (default) keeps Redlib-served media URLs.
+function getFallbackMediaPref(): 'instance' | 'reddit' {
+  if (typeof window === 'undefined') {
+    return 'instance';
+  }
+
+  try {
+    const raw = window.localStorage.getItem(UI_SETTINGS_KEY);
+
+    if (!raw) {
+      return 'instance';
+    }
+
+    const parsed = JSON.parse(raw) as { fallbackMediaSource?: unknown };
+    return parsed.fallbackMediaSource === 'reddit' ? 'reddit' : 'instance';
+  } catch {
+    return 'instance';
+  }
+}
+
+function appendMediaPref(path: string): string {
+  if (getFallbackMediaPref() !== 'reddit') {
+    return path;
+  }
+
+  const separator = path.includes('?') ? '&' : '?';
+  return `${path}${separator}redalt_media=reddit`;
+}
+
 async function fetchReddit<T>(path: string): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
+  const requestPath = appendMediaPref(path);
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
     for (const base of getRedditBaseCandidates()) {
@@ -309,7 +342,7 @@ async function fetchReddit<T>(path: string): Promise<T> {
         const controller = new AbortController();
         const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
 
-        const response = await fetch(`${base}${path}`, {
+        const response = await fetch(`${base}${requestPath}`, {
           signal: controller.signal,
           headers: {
             Accept: 'application/json',

@@ -15,6 +15,8 @@ export type ThemeName =
 
 export type CardMode = 'default' | 'compact' | 'content-only';
 
+export type FallbackMediaSource = 'instance' | 'reddit';
+
 type UiSettings = {
   theme: ThemeName;
   autoplayVideos: boolean;
@@ -24,6 +26,7 @@ type UiSettings = {
   cardMode: CardMode;
   persistentHeader: boolean;
   openInNewTab: boolean;
+  fallbackMediaSource: FallbackMediaSource;
 };
 
 type UiSettingsContextType = {
@@ -42,6 +45,7 @@ const defaultSettings: UiSettings = {
   cardMode: 'default',
   persistentHeader: false,
   openInNewTab: false,
+  fallbackMediaSource: 'instance',
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
@@ -92,6 +96,7 @@ function normalizeSettings(input: unknown): UiSettings {
       typeof value.openInNewTab === 'boolean'
         ? value.openInNewTab
         : defaultSettings.openInNewTab,
+    fallbackMediaSource: value.fallbackMediaSource === 'reddit' ? 'reddit' : 'instance',
   };
 }
 
