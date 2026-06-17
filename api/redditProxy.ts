@@ -397,22 +397,65 @@ function markPublicInstanceFailure(base: string, now = Date.now()): void {
   });
 }
 
+function getPublicInstanceFailureCount(base: string): number {
+  return publicInstanceHealth.get(getPublicInstanceHealthKey(base))?.failureCount ?? 0;
+}
+
+// Lower rank is tried first. Redlib/Libreddit serve full-fidelity HTML (media, comments, real
+// scores), so they lead; teddit is JSON-only and frequently down; troddit is heavy; eddrit is
+// skipped entirely in fetchFromPublicInstance and only ranks last as a defensive default.
+function rankPublicInstance(base: string): number {
+  if (isEddritInstance(base)) {
+    return 3;
+  }
+
+  if (isTrodditInstance(base)) {
+    return 2;
+  }
+
+  if (isTedditInstance(base)) {
+    return 1;
+  }
+
+  return 0;
+}
+
 function getPublicInstanceCandidates(urls: string[]): { candidates: string[]; skipped: string[] } {
   const skipped: string[] = [];
-  const candidates: string[] = [];
+  const candidates: Array<{ url: string; index: number }> = [];
   const now = Date.now();
 
-  for (const url of urls) {
+  urls.forEach((url, index) => {
     if (isPublicInstanceCoolingDown(url, now)) {
       skipped.push(url);
     } else {
-      candidates.push(url);
+      candidates.push({ url, index });
     }
-  }
+  });
+
+  // Stable sort: Redlib-capable instances first, then those with fewer recent failures, then
+  // the original list order so configured/static preferences are preserved within a tier.
+  candidates.sort((a, b) => {
+    const rankDiff = rankPublicInstance(a.url) - rankPublicInstance(b.url);
+
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+
+    const failureDiff = getPublicInstanceFailureCount(a.url) - getPublicInstanceFailureCount(b.url);
+
+    if (failureDiff !== 0) {
+      return failureDiff;
+    }
+
+    return a.index - b.index;
+  });
+
+  const ordered = candidates.map((entry) => entry.url);
 
   return {
-    candidates: candidates.length > 0 ? candidates : urls,
-    skipped: candidates.length > 0 ? skipped : [],
+    candidates: ordered.length > 0 ? ordered : urls,
+    skipped: ordered.length > 0 ? skipped : [],
   };
 }
 
@@ -1381,6 +1424,20 @@ function isAnubisChallenge(body: string): boolean {
     /making sure you(?:&#39;|')re not a bot/i.test(body) ||
     body.includes('anubis_challenge') ||
     body.includes('/.within.website/x/cmd/anubis')
+  );
+}
+
+// Public instances increasingly hide behind anti-bot walls that answer with an interstitial
+// instead of Reddit-shaped content: Anubis (above), go-away (Angie/HTTP 418), and Cloudflare's
+// "Just a moment" challenge. Treat any of them as a failure so the instance is skipped and
+// cooled down rather than parsed into a bogus post.
+function isInstanceChallenge(body: string): boolean {
+  return (
+    isAnubisChallenge(body) ||
+    /\bgo-away\b/i.test(body) ||
+    /checking (?:you are|if you are|if the site connection is secure)/i.test(body) ||
+    /just a moment\b/i.test(body) ||
+    /cf-browser-verification|challenge-platform|__cf_chl/i.test(body)
   );
 }
 
@@ -2736,7 +2793,7 @@ async function fetchRedlibDetailMediaData(
 
   const body = await response.text();
 
-  if (isAnubisChallenge(body) || !looksRedlibHtml(body)) {
+  if (isInstanceChallenge(body) || !looksRedlibHtml(body)) {
     return null;
   }
 
@@ -2810,7 +2867,7 @@ function parsePublicInstancePayload(
   base: string,
   upstreamPath: string,
 ): unknown | null {
-  if (isAnubisChallenge(body)) {
+  if (isInstanceChallenge(body)) {
     return null;
   }
 
@@ -2947,6 +3004,53 @@ async function fetchFromPublicInstance(
   return null;
 }
 
+function raceUsablePublicInstance(
+  bases: string[],
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  mediaPref: MediaPref,
+): Promise<{ base: string; response: Response } | null> {
+  return new Promise((resolve) => {
+    if (bases.length === 0) {
+      resolve(null);
+      return;
+    }
+
+    let remaining = bases.length;
+    let settled = false;
+
+    const finish = (value: { base: string; response: Response } | null) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+
+    for (const base of bases) {
+      fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref)
+        .then((response) => {
+          if (response) {
+            markPublicInstanceSuccess(base);
+            finish({ base, response });
+          } else {
+            markPublicInstanceFailure(base);
+          }
+        })
+        .catch(() => {
+          markPublicInstanceFailure(base);
+        })
+        .finally(() => {
+          remaining -= 1;
+
+          if (remaining === 0) {
+            finish(null);
+          }
+        });
+    }
+  });
+}
+
 async function fetchViaPublicInstances(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
@@ -2965,30 +3069,17 @@ async function fetchViaPublicInstances(
   for (let index = 0; index < candidates.length; index += batchSize) {
     const batch = candidates.slice(index, index + batchSize);
     attempted.push(...batch);
-    const results = await Promise.all(
-      batch.map(async (base) => ({
-        base,
-        response: await fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref),
-      })),
-    );
-    const successfulResult = results.find((result) => result.response !== null);
 
-    for (const result of results) {
-      if (result.response) {
-        markPublicInstanceSuccess(result.base);
-      } else {
-        markPublicInstanceFailure(result.base);
-      }
-    }
+    const winner = await raceUsablePublicInstance(batch, upstreamPath, env, options, mediaPref);
 
-    if (successfulResult?.response) {
-      successfulResult.response.headers.set('X-RedAlt-Instance-Attempts', formatInstanceHeader(attempted));
+    if (winner?.response) {
+      winner.response.headers.set('X-RedAlt-Instance-Attempts', formatInstanceHeader(attempted));
 
       if (skipped.length > 0) {
-        successfulResult.response.headers.set('X-RedAlt-Skipped-Instances', formatInstanceHeader(skipped));
+        winner.response.headers.set('X-RedAlt-Skipped-Instances', formatInstanceHeader(skipped));
       }
 
-      return successfulResult.response;
+      return winner.response;
     }
   }
 
