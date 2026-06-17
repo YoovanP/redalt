@@ -130,8 +130,52 @@ function rewriteRedlibImageUrl(url: string, instanceHost: string): string {
   return url;
 }
 
-// When the user prefers the Reddit CDN, rewrite still-image fields in the reconstructed
-// payload. Video (reddit_video) and embeds (oembed) are intentionally left on the instance.
+function rewriteRedlibVideoUrl(url: string, instanceHost: string): string {
+  let path = url;
+  let search = '';
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.toLowerCase() !== instanceHost) {
+      return url;
+    }
+    path = parsed.pathname;
+    search = parsed.search;
+  } catch {
+    const qIdx = url.indexOf('?');
+    if (qIdx >= 0) {
+      path = url.slice(0, qIdx);
+      search = url.slice(qIdx);
+    }
+  }
+
+  // Rewrite HLS: /hls/foo/HLSPlaylist.m3u8 -> https://v.redd.it/foo/HLSPlaylist.m3u8
+  const hlsMatch = path.match(/^\/hls\/([^/]+)\/(.+)$/i);
+  if (hlsMatch) {
+    return `https://v.redd.it/${hlsMatch[1]}/${hlsMatch[2]}${search}`;
+  }
+
+  // Rewrite /vid/ (3-segment new Redlib): /vid/foo/DASH/360.mp4 -> https://v.redd.it/foo/DASH_360.mp4
+  const vid3Match = path.match(/^\/vid\/([^/]+)\/([^/]+)\/([^/]+)$/i);
+  if (vid3Match) {
+    return `https://v.redd.it/${vid3Match[1]}/${vid3Match[2]}_${vid3Match[3]}${search}`;
+  }
+
+  // Rewrite /vid/ (2-segment old Redlib): /vid/foo/360.mp4 -> https://v.redd.it/foo/DASH_360.mp4
+  const vid2Match = path.match(/^\/vid\/([^/]+)\/([^/]+)$/i);
+  if (vid2Match) {
+    const segment2 = vid2Match[2].toLowerCase();
+    const prefix = segment2 === 'cmaf' ? 'CMAF' : 'DASH';
+    const size = segment2 === 'cmaf' ? '1080.mp4' : vid2Match[2];
+    const separator = segment2.startsWith('dash_') || segment2.startsWith('cmaf_') ? '' : '_';
+    return `https://v.redd.it/${vid2Match[1]}/${prefix}${separator}${size}${search}`;
+  }
+
+  return url;
+}
+
+// When the user prefers the Reddit CDN, rewrite still-image fields and video fields
+// in the reconstructed payload.
 function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaPref): unknown {
   if (pref !== 'reddit' || !payload) {
     return payload;
@@ -148,17 +192,28 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
   const rewrite = (value: unknown): unknown =>
     typeof value === 'string' && value ? rewriteRedlibImageUrl(value, instanceHost) : value;
 
+  const isVideoPath = (urlStr: string): boolean => {
+    try {
+      const pathname = new URL(urlStr, base).pathname;
+      return pathname.startsWith('/vid/') || pathname.startsWith('/hls/');
+    } catch {
+      return false;
+    }
+  };
+
   const rewriteData = (data: Record<string, unknown> | undefined): void => {
     if (!data) {
       return;
     }
 
     if (typeof data.url === 'string') {
-      data.url = rewrite(data.url) as string;
+      data.url = (isVideoPath(data.url) ? rewriteRedlibVideoUrl(data.url, instanceHost) : rewrite(data.url)) as string;
     }
 
     if (typeof data.url_overridden_by_dest === 'string') {
-      data.url_overridden_by_dest = rewrite(data.url_overridden_by_dest) as string;
+      data.url_overridden_by_dest = (isVideoPath(data.url_overridden_by_dest)
+        ? rewriteRedlibVideoUrl(data.url_overridden_by_dest, instanceHost)
+        : rewrite(data.url_overridden_by_dest)) as string;
     }
 
     if (typeof data.thumbnail === 'string') {
@@ -187,6 +242,32 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
             meta.s.url = rewrite(meta.s.url) as string;
           }
         }
+      }
+    }
+
+    const media = data.media as { reddit_video?: Record<string, unknown> } | undefined;
+    if (media?.reddit_video) {
+      if (typeof media.reddit_video.fallback_url === 'string') {
+        media.reddit_video.fallback_url = rewriteRedlibVideoUrl(media.reddit_video.fallback_url, instanceHost);
+      }
+      if (typeof media.reddit_video.hls_url === 'string') {
+        media.reddit_video.hls_url = rewriteRedlibVideoUrl(media.reddit_video.hls_url, instanceHost);
+      }
+      if (typeof media.reddit_video.dash_url === 'string') {
+        media.reddit_video.dash_url = rewriteRedlibVideoUrl(media.reddit_video.dash_url, instanceHost);
+      }
+    }
+
+    const secureMedia = data.secure_media as { reddit_video?: Record<string, unknown> } | undefined;
+    if (secureMedia?.reddit_video) {
+      if (typeof secureMedia.reddit_video.fallback_url === 'string') {
+        secureMedia.reddit_video.fallback_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.fallback_url, instanceHost);
+      }
+      if (typeof secureMedia.reddit_video.hls_url === 'string') {
+        secureMedia.reddit_video.hls_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.hls_url, instanceHost);
+      }
+      if (typeof secureMedia.reddit_video.dash_url === 'string') {
+        secureMedia.reddit_video.dash_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.dash_url, instanceHost);
       }
     }
   };
@@ -1387,7 +1468,7 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
 function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
   const allChildren = parseHtmlPostLinks(html, upstreamPath, sourceBase);
-  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath, true);
 
   if (startIndex === null) {
     return null;
@@ -1940,7 +2021,7 @@ function parseRedlibListing(html: string, upstreamPath: string, sourceBase: stri
     return null;
   }
 
-  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath, true);
 
   if (startIndex === null) {
     return null;
@@ -2221,6 +2302,7 @@ function getChildId(child: { data?: { id?: unknown } }): string {
 function getPaginatedStartIndex(
   children: Array<{ data?: { id?: unknown; name?: unknown } }>,
   upstreamPath: string,
+  isNativePagination = false,
 ): number | null {
   const after = getRequestedAfter(upstreamPath);
 
@@ -2237,7 +2319,11 @@ function getPaginatedStartIndex(
     return name === normalizedAfter || id === normalizedAfterId;
   });
 
-  return afterIndex >= 0 ? afterIndex + 1 : null;
+  if (afterIndex >= 0) {
+    return afterIndex + 1;
+  }
+
+  return isNativePagination ? 0 : null;
 }
 
 function getSyntheticRssAfter(
@@ -2486,7 +2572,7 @@ function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https:
 
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
   const allChildren = items.map((item, index) => parseRssPostChild(item[2], upstreamPath, sourceBase, index));
-  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath);
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath, false);
 
   if (startIndex === null) {
     return null;

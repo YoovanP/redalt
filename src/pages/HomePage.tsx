@@ -27,6 +27,7 @@ export function HomePage() {
   const [query, setQuery] = useState('');
   const [trendingPosts, setTrendingPosts] = useState<NormalizedPost[]>([]);
   const [trendingLoading, setTrendingLoading] = useState(true);
+  const [visibleCount, setVisibleCount] = useState(3);
 
   useEffect(() => {
     let ignore = false;
@@ -50,7 +51,7 @@ export function HomePage() {
         }
 
         if (!ignore) {
-          setTrendingPosts(result.posts.slice(0, 6).map(normalizePost));
+          setTrendingPosts(result.posts.map(normalizePost));
         }
       } catch {
         if (!ignore) {
@@ -148,7 +149,7 @@ export function HomePage() {
         ) : trendingPosts.length > 0 ? (
           <>
             <div className="home-trending-grid">
-              {trendingPosts.slice(0, 3).map((post) => (
+              {trendingPosts.slice(0, visibleCount).map((post) => (
                 <Link
                   key={post.id}
                   to={`/r/${post.subreddit}/comments/${post.id}`}
@@ -173,9 +174,21 @@ export function HomePage() {
                 </Link>
               ))}
             </div>
-            <Link to="/r/popular" className="home-trending-more">
-              Browse more popular posts →
-            </Link>
+            <div className="home-trending-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+              {visibleCount < trendingPosts.length && (
+                <button
+                  type="button"
+                  className="home-search-submit"
+                  style={{ margin: 0, padding: '0.5rem 1.5rem', height: 'auto' }}
+                  onClick={() => setVisibleCount((prev) => Math.min(prev + 6, trendingPosts.length))}
+                >
+                  Load more posts
+                </button>
+              )}
+              <Link to="/r/popular" className="home-trending-more" style={{ margin: 0 }}>
+                Browse more popular posts →
+              </Link>
+            </div>
           </>
         ) : (
           <p className="home-trending-empty">Could not load trending posts. Try browsing a community above.</p>
