@@ -28,34 +28,46 @@ export function HomePage() {
   const [trendingPosts, setTrendingPosts] = useState<NormalizedPost[]>([]);
   const [trendingLoading, setTrendingLoading] = useState(true);
   const [visibleCount, setVisibleCount] = useState(3);
+  const [after, setAfter] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentSource, setCurrentSource] = useState<'popular' | 'all'>('popular');
 
   useEffect(() => {
     let ignore = false;
-
-    async function fetchTrendingSource() {
-      try {
-        return await fetchSubredditListing('popular', { sort: 'hot' });
-      } catch {
-        return fetchSubredditListing('all', { sort: 'hot' });
-      }
-    }
 
     async function loadTrendingPosts() {
       setTrendingLoading(true);
 
       try {
-        let result = await fetchTrendingSource();
+        let result = await fetchSubredditListing('popular', { sort: 'hot' });
+        if (!ignore) {
+          setCurrentSource('popular');
+        }
 
         if (result.posts.length === 0) {
           result = await fetchSubredditListing('all', { sort: 'hot' });
+          if (!ignore) {
+            setCurrentSource('all');
+          }
         }
 
         if (!ignore) {
           setTrendingPosts(result.posts.map(normalizePost));
+          setAfter(result.after);
         }
       } catch {
-        if (!ignore) {
-          setTrendingPosts([]);
+        try {
+          const result = await fetchSubredditListing('all', { sort: 'hot' });
+          if (!ignore) {
+            setCurrentSource('all');
+            setTrendingPosts(result.posts.map(normalizePost));
+            setAfter(result.after);
+          }
+        } catch {
+          if (!ignore) {
+            setTrendingPosts([]);
+            setAfter(null);
+          }
         }
       } finally {
         if (!ignore) {
@@ -70,6 +82,34 @@ export function HomePage() {
       ignore = true;
     };
   }, []);
+
+  const loadMore = async () => {
+    if (!after || loadingMore) {
+      return;
+    }
+
+    setLoadingMore(true);
+
+    try {
+      const result = await fetchSubredditListing(currentSource, { sort: 'hot', after });
+      setTrendingPosts((prev) => [...prev, ...result.posts.map(normalizePost)]);
+      setAfter(result.after);
+      setVisibleCount((prev) => prev + 6);
+    } catch {
+      // Keep existing posts on error
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const handleLoadMore = () => {
+    const nextCount = visibleCount + 6;
+    if (nextCount > trendingPosts.length && after) {
+      loadMore();
+    } else {
+      setVisibleCount(nextCount);
+    }
+  };
 
   const recentSubreddits = useMemo(() => getRecentSubreddits(), []);
 
@@ -175,14 +215,15 @@ export function HomePage() {
               ))}
             </div>
             <div className="home-trending-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
-              {visibleCount < trendingPosts.length && (
+              {(visibleCount < trendingPosts.length || after) && (
                 <button
                   type="button"
                   className="home-search-submit"
                   style={{ margin: 0, padding: '0.5rem 1.5rem', height: 'auto' }}
-                  onClick={() => setVisibleCount((prev) => Math.min(prev + 6, trendingPosts.length))}
+                  disabled={loadingMore}
+                  onClick={handleLoadMore}
                 >
-                  Load more posts
+                  {loadingMore ? 'Loading...' : 'Load more posts'}
                 </button>
               )}
               <Link to="/r/popular" className="home-trending-more" style={{ margin: 0 }}>
