@@ -1657,6 +1657,15 @@ function redlibVideoMedia(
 
   let mp4 = '';
   let hls = '';
+  const videoSrc = normalizeUrlCandidate(readHtmlAttribute(videoBlock.openTag, 'src'), sourceBase);
+
+  if (videoSrc) {
+    if (/\.m3u8(?:[?#]|$)/i.test(videoSrc) || /\/hls\//i.test(videoSrc)) {
+      hls = videoSrc;
+    } else {
+      mp4 = videoSrc;
+    }
+  }
 
   for (const match of videoBlock.innerHtml.matchAll(/<source\b[^>]*>/gi)) {
     const tag = match[0];
@@ -1675,20 +1684,6 @@ function redlibVideoMedia(
     }
   }
 
-  // Redlib serves a muxed CMAF MP4 at /vid/<id>/CMAF. Derive it from the HLS id when the
-  // <source type="video/mp4"> isn't present, so fallback_url is always a cross-browser MP4.
-  if (!mp4 && hls) {
-    const idMatch = hls.match(/\/hls\/([^/?#]+)\//i);
-
-    if (idMatch) {
-      try {
-        mp4 = `${new URL(hls).origin}/vid/${idMatch[1]}/CMAF`;
-      } catch {
-        // Keep HLS as the only source if the URL cannot be parsed.
-      }
-    }
-  }
-
   if (!mp4 && !hls) {
     return null;
   }
@@ -1697,6 +1692,31 @@ function redlibVideoMedia(
   const height = Number(readHtmlAttribute(videoBlock.openTag, 'height')) || undefined;
 
   return { fallbackUrl: mp4 || hls, hlsUrl: hls || undefined, width, height };
+}
+
+function redlibPostMediaHint(innerHtml: string): string {
+  const postTypeMatch = innerHtml.match(/<!--\s*post_type:\s*([a-z0-9:_-]+)\s*-->/i);
+
+  if (postTypeMatch?.[1]) {
+    return postTypeMatch[1].toLowerCase();
+  }
+
+  const thumbBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_thumbnail');
+  const thumbnailLabel = thumbBlock ? stripHtml(thumbBlock.innerHtml).toLowerCase() : '';
+
+  if (/\bvideo\b/.test(thumbnailLabel)) {
+    return 'video';
+  }
+
+  if (/\bgallery\b/.test(thumbnailLabel)) {
+    return 'gallery';
+  }
+
+  if (/\bimage\b/.test(thumbnailLabel)) {
+    return 'image';
+  }
+
+  return '';
 }
 
 function redlibImageSource(
@@ -1975,6 +1995,13 @@ function parseRedlibPostBlock(
     data.thumbnail = thumbnail;
   }
 
+  const mediaHint = redlibPostMediaHint(innerHtml);
+
+  if (mediaHint === 'video') {
+    data.is_video = true;
+    data.post_hint = 'hosted:video';
+  }
+
   const embed = redlibKnownEmbed(innerHtml, sourceBase);
   const video = redlibVideoMedia(innerHtml, sourceBase);
   const gallery = redlibGalleryItems(innerHtml, sourceBase);
@@ -2050,7 +2077,7 @@ function parseRedlibPostBlock(
       data.url_overridden_by_dest = outbound;
       data.domain = getUrlHostname(outbound);
       data.post_hint = 'link';
-    } else if (thumbnail) {
+    } else if (thumbnail && mediaHint !== 'video') {
       // Redlib sometimes collapses media posts to 140px preview thumbnails in listings.
       // Upgrade Reddit-hosted previews to the full image path before exposing them as media.
       const fullImageUrl = fullSizeRedditImageUrl(thumbnail);
@@ -3016,10 +3043,7 @@ async function fetchRedlibDetailMediaData(
   const response = await fetchWithTimeout(
     `${base}${detailPath}`,
     {
-      headers: {
-        Accept: getPublicInstanceAccept('html'),
-        'User-Agent': getProxyUserAgent(env, options),
-      },
+      headers: getPublicInstanceRequestHeaders(base, 'html', env, options),
     },
     REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
   );
@@ -3102,7 +3126,7 @@ async function enrichRedlibListingMedia(
 
   const targets = listingChildren(payload)
     .filter((child): child is { kind?: string; data: Record<string, unknown> } =>
-      Boolean(child.data && !hasUsableMediaFields(child.data)),
+      Boolean(child.data && needsRedlibDetailMediaEnrichment(child.data)),
     )
     .map((child) => ({ child, detailPath: getRedlibDetailPath(child.data) }))
     .filter((item) => item.detailPath);
@@ -3136,6 +3160,36 @@ function getPublicInstanceAccept(method: PublicInstanceRequest['method']): strin
   }
 
   return 'text/html, application/xhtml+xml';
+}
+
+function getPublicInstanceRequestHeaders(
+  base: string,
+  method: PublicInstanceRequest['method'],
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: getPublicInstanceAccept(method),
+    'User-Agent': getProxyUserAgent(env, options),
+  };
+
+  if (method === 'html' && !isTedditInstance(base) && !isTrodditInstance(base)) {
+    headers.Cookie = 'use_hls=on';
+  }
+
+  return headers;
+}
+
+function needsRedlibDetailMediaEnrichment(data: Record<string, unknown>): boolean {
+  if (hasPlayableMediaFields(data)) {
+    return false;
+  }
+
+  return Boolean(
+    data.is_video ||
+      getStringField(data, 'post_hint') === 'hosted:video' ||
+      isUsableThumbnail(data.thumbnail),
+  );
 }
 
 function getPublicInstanceTimeoutMs(request: PublicInstanceRequest, upstreamPath: string): number {
@@ -3237,10 +3291,7 @@ async function fetchFromPublicInstance(
       const response = await fetchWithTimeout(
         `${base}${request.path}`,
         {
-          headers: {
-            Accept: getPublicInstanceAccept(request.method),
-            'User-Agent': getProxyUserAgent(env, options),
-          },
+          headers: getPublicInstanceRequestHeaders(base, request.method, env, options),
         },
         getPublicInstanceTimeoutMs(request, upstreamPath),
       );

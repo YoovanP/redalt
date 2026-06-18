@@ -185,6 +185,10 @@ function getThumbnailUrl(post: RedditPostData): string {
   return isLikelyThumbnailUrl(post.thumbnail) ? fullSizeRedditImageUrl(normalizeUrl(post.thumbnail)) : '';
 }
 
+function isHostedVideoPost(post: RedditPostData): boolean {
+  return Boolean(post.is_video || post.post_hint === 'hosted:video');
+}
+
 function isRedditMediaHost(hostname: string): boolean {
   return (
     hostname === 'i.redd.it' ||
@@ -342,9 +346,15 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
         if (external) {
           media = external;
         } else {
-          const imageFallbackUrl = isLikelyImageUrl(outboundUrl) ? outboundUrl : thumbnailUrl;
+          const canUseImageFallback = !isHostedVideoPost(post);
+          const imageFallbackUrl = canUseImageFallback
+            ? (isLikelyImageUrl(outboundUrl) ? outboundUrl : thumbnailUrl)
+            : '';
 
-          if (imageSource?.url || imageSource?.u || imageFallbackUrl || post.post_hint === 'image') {
+          if (
+            canUseImageFallback &&
+            (imageSource?.url || imageSource?.u || imageFallbackUrl || post.post_hint === 'image')
+          ) {
             media = {
               type: 'image',
               ...getBestImage(imageSource, imageFallbackUrl || outboundUrl),
