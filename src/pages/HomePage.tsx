@@ -5,6 +5,8 @@ import { normalizePost } from '../lib/normalizePost';
 import { fetchSubredditListing } from '../lib/redditApi';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 import { RenderMedia } from '../components/media/RenderMedia';
+import { useUiSettings } from '../lib/uiSettings';
+import { useNearEndLoadMore } from '../lib/usePostListingFeed';
 import type { NormalizedPost } from '../types/reddit';
 
 const QUICK_SUBREDDITS = [
@@ -31,6 +33,10 @@ export function HomePage() {
   const [after, setAfter] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [currentSource, setCurrentSource] = useState<'popular' | 'all'>('popular');
+
+  const {
+    settings: { loadMoreMode },
+  } = useUiSettings();
 
   useEffect(() => {
     let ignore = false;
@@ -111,6 +117,14 @@ export function HomePage() {
     }
   };
 
+  const { nearEndRef, triggerIndex } = useNearEndLoadMore({
+    after: (after || visibleCount < trendingPosts.length) ? 'has-more' : null,
+    loadingMore,
+    disabled: loadMoreMode === 'button',
+    itemCount: Math.min(visibleCount, trendingPosts.length),
+    loadMore: handleLoadMore,
+  });
+
   const recentSubreddits = useMemo(() => getRecentSubreddits(), []);
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -189,13 +203,16 @@ export function HomePage() {
         ) : trendingPosts.length > 0 ? (
           <>
             <div className="home-trending-grid">
-              {trendingPosts.slice(0, visibleCount).map((post) => (
+              {trendingPosts.slice(0, visibleCount).map((post, index) => (
                 <Link
                   key={post.id}
                   to={`/r/${post.subreddit}/comments/${post.id}`}
                   className="home-trending-card"
                   state={{ fallbackPost: post }}
                 >
+                  {index === triggerIndex && (after || visibleCount < trendingPosts.length) && (
+                    <div ref={nearEndRef} className="near-end-trigger" />
+                  )}
                   <div className="home-trending-media">
                     {post.media.type !== 'text' && post.media.type !== 'link' ? (
                       <RenderMedia post={post} mode="shorts" />

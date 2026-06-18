@@ -11,7 +11,7 @@ import { useNearEndLoadMore, usePostListingFeed } from '../lib/usePostListingFee
 
 export function UserPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode },
   } = useUiSettings();
   const { username = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -51,7 +51,7 @@ export function UserPage() {
   const { nearEndRef, triggerIndex } = useNearEndLoadMore({
     after,
     loadingMore,
-    disabled: videoFeedMode,
+    disabled: videoFeedMode || loadMoreMode === 'button',
     itemCount: visiblePosts.length,
     loadMore,
   });

@@ -22,7 +22,7 @@ function getSubredditRestoreFlagKey(name: string): string {
 
 export function SubredditPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode },
   } = useUiSettings();
   const navigate = useNavigate();
   const { name = 'mildlyinfuriating' } = useParams();
@@ -108,7 +108,7 @@ export function SubredditPage() {
   const { nearEndRef, triggerIndex } = useNearEndLoadMore({
     after,
     loadingMore,
-    disabled: videoFeedMode,
+    disabled: videoFeedMode || loadMoreMode === 'button',
     itemCount: visiblePosts.length,
     loadMore,
   });

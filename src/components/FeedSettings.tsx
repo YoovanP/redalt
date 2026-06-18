@@ -193,6 +193,19 @@ export function FeedSettings() {
               <option value="reddit">Direct from Reddit CDN / Embeds (Performance)</option>
             </select>
           </label>
+
+          <label>
+            Load more posts
+            <select
+              value={settings.loadMoreMode}
+              onChange={(event) =>
+                updateSettings({ loadMoreMode: event.target.value as 'scroll' | 'button' })
+              }
+            >
+              <option value="scroll">Automatically (Infinite scroll)</option>
+              <option value="button">With a button (Click to load)</option>
+            </select>
+          </label>
         </div>
       )}
     </section>

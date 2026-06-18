@@ -17,6 +17,8 @@ export type CardMode = 'default' | 'compact' | 'content-only';
 
 export type FallbackMediaSource = 'instance' | 'reddit';
 
+export type LoadMoreMode = 'scroll' | 'button';
+
 type UiSettings = {
   theme: ThemeName;
   autoplayVideos: boolean;
@@ -27,6 +29,7 @@ type UiSettings = {
   persistentHeader: boolean;
   openInNewTab: boolean;
   fallbackMediaSource: FallbackMediaSource;
+  loadMoreMode: LoadMoreMode;
 };
 
 type UiSettingsContextType = {
@@ -46,6 +49,7 @@ const defaultSettings: UiSettings = {
   persistentHeader: false,
   openInNewTab: false,
   fallbackMediaSource: 'instance',
+  loadMoreMode: 'scroll',
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
@@ -81,6 +85,11 @@ function normalizeSettings(input: unknown): UiSettings {
       ? value.cardMode
       : defaultSettings.cardMode;
 
+  const loadMoreMode =
+    value.loadMoreMode === 'scroll' || value.loadMoreMode === 'button'
+      ? value.loadMoreMode
+      : defaultSettings.loadMoreMode;
+
   return {
     theme,
     autoplayVideos: Boolean(value.autoplayVideos),
@@ -97,6 +106,7 @@ function normalizeSettings(input: unknown): UiSettings {
         ? value.openInNewTab
         : defaultSettings.openInNewTab,
     fallbackMediaSource: value.fallbackMediaSource === 'reddit' ? 'reddit' : 'instance',
+    loadMoreMode,
   };
 }
 
