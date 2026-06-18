@@ -2875,6 +2875,15 @@ function hasGalleryMedia(data: Record<string, unknown>): boolean {
   return Boolean(data.is_gallery && Array.isArray(galleryData?.items) && isRenderableObject(data.media_metadata));
 }
 
+function hasPlayableMediaFields(data: Record<string, unknown>): boolean {
+  if (hasGalleryMedia(data) || isRenderableObject(data.media) || isRenderableObject(data.secure_media)) {
+    return true;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+  return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+}
+
 function hasUsableMediaFields(data: Record<string, unknown>): boolean {
   if (
     hasGalleryMedia(data) ||
@@ -2888,6 +2897,14 @@ function hasUsableMediaFields(data: Record<string, unknown>): boolean {
 
   const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
   return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+}
+
+function getCommentThreadPostData(payload: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(payload)) {
+    return null;
+  }
+
+  return listingChildren(payload[0])[0]?.data ?? null;
 }
 
 function getRedlibDetailPath(data: Record<string, unknown>): string {
@@ -2988,6 +3005,54 @@ async function fetchRedlibDetailMediaData(
   const detailData = listingChildren(Array.isArray(detailPayload) ? detailPayload[0] : null)[0]?.data;
 
   return detailData && hasUsableMediaFields(detailData) ? detailData : null;
+}
+
+async function enrichCommentThreadMediaFromOldReddit(
+  payload: unknown,
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+): Promise<unknown> {
+  const postData = getCommentThreadPostData(payload);
+
+  if (!postData || hasPlayableMediaFields(postData)) {
+    return payload;
+  }
+
+  const detailPath = buildPublicHtmlPath(upstreamPath);
+
+  if (!detailPath) {
+    return payload;
+  }
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://old.reddit.com${detailPath}`,
+      {
+        headers: {
+          Accept: getPublicInstanceAccept('html'),
+          'User-Agent': getProxyUserAgent(env, options),
+        },
+      },
+      REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
+    );
+
+    if (!response.ok) {
+      return payload;
+    }
+
+    const body = await response.text();
+
+    if (isInstanceChallenge(body)) {
+      return payload;
+    }
+
+    applyRedditHtmlVideoMedia(postData, body, 'https://old.reddit.com');
+  } catch {
+    // Keep the original fallback payload when old Reddit media enrichment fails.
+  }
+
+  return payload;
 }
 
 async function enrichRedlibListingMedia(
@@ -3160,6 +3225,10 @@ async function fetchFromPublicInstance(
         upstreamPath,
         mediaPref,
       );
+
+      if (isCommentThreadPath(upstreamPath)) {
+        normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options);
+      }
 
       if (
         request.method === 'html' &&
