@@ -22,7 +22,7 @@ function getSubredditRestoreFlagKey(name: string): string {
 
 export function SubredditPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode, loadMoreMode },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
   const navigate = useNavigate();
   const { name = 'mildlyinfuriating' } = useParams();
@@ -49,7 +49,7 @@ export function SubredditPage() {
     loadMoreError,
     loadMore,
   } = usePostListingFeed({
-    sourceKey: `${name}:${sort}:${topTimeRange}`,
+    sourceKey: `${name}:${sort}:${topTimeRange}:${fallbackMediaSource}`,
     fetchPage,
     videoFeedMode,
     initialErrorMessage: 'Unable to load subreddit.',

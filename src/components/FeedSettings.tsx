@@ -182,15 +182,15 @@ export function FeedSettings() {
           </label>
 
           <label>
-            Media & Embed source
+            Media source
             <select
               value={settings.fallbackMediaSource}
               onChange={(event) =>
                 updateSettings({ fallbackMediaSource: event.target.value as 'instance' | 'reddit' })
               }
             >
-              <option value="instance">Proxy through instance (Privacy)</option>
-              <option value="reddit">Direct from Reddit CDN / Embeds (Performance)</option>
+              <option value="instance">Redlib instance HLS/proxy (privacy)</option>
+              <option value="reddit">Original CDN/provider embeds</option>
             </select>
           </label>
 

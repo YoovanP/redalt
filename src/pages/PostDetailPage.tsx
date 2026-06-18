@@ -7,6 +7,7 @@ import { StateView } from '../components/StateView';
 import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchPostDetail } from '../lib/redditApi';
+import { useUiSettings } from '../lib/uiSettings';
 import type { NormalizedPost, PostDetailResult, RedditComment } from '../types/reddit';
 
 const TOP_LEVEL_COMMENTS_STEP = 5;
@@ -78,6 +79,9 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
 export function PostDetailPage() {
   const { name = 'mildlyinfuriating', id = '' } = useParams();
   const location = useLocation();
+  const {
+    settings: { fallbackMediaSource },
+  } = useUiSettings();
   const [data, setData] = useState<PostDetailResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +131,7 @@ export function PostDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [name, id, fallbackPost]);
+  }, [name, id, fallbackPost, fallbackMediaSource]);
 
   const normalized = useMemo(() => {
     return data ? normalizePost(data.post) : fallbackPost;

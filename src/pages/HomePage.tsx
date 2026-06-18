@@ -35,7 +35,7 @@ export function HomePage() {
   const [currentSource, setCurrentSource] = useState<'popular' | 'all'>('popular');
 
   const {
-    settings: { loadMoreMode },
+    settings: { loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
 
   useEffect(() => {
@@ -87,7 +87,7 @@ export function HomePage() {
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [fallbackMediaSource]);
 
   const loadMore = async () => {
     if (!after || loadingMore) {

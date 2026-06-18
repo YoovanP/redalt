@@ -57,7 +57,7 @@ export function SearchPage() {
   const includeNsfw = searchParams.get('nsfw') !== '0';
   const mediaFilter = getValidatedMediaFilter(searchParams.get('media'));
   const {
-    settings: { cardMode },
+    settings: { cardMode, fallbackMediaSource },
   } = useUiSettings();
 
   const [posts, setPosts] = useState<RedditPostData[]>([]);
@@ -70,7 +70,7 @@ export function SearchPage() {
   const [subredditLimit, setSubredditLimit] = useState(DEFAULT_SUBREDDIT_LIMIT);
   const [userLimit, setUserLimit] = useState(DEFAULT_USER_LIMIT);
   const prevSearchKeyRef = useRef<string | null>(null);
-  const searchKey = `${query}|${sort}|${topTimeRange}|${subredditScope}|${includeNsfw}`;
+  const searchKey = `${query}|${sort}|${topTimeRange}|${subredditScope}|${includeNsfw}|${fallbackMediaSource}`;
 
   useEffect(() => {
     let ignore = false;
@@ -166,6 +166,7 @@ export function SearchPage() {
     subredditLimit,
     userLimit,
     searchKey,
+    fallbackMediaSource,
   ]);
 
   const normalizedPosts = useMemo(

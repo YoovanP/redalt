@@ -1837,6 +1837,7 @@ function parseRedlibPostBlock(
   innerHtml: string,
   upstreamPath: string,
   sourceBase: string,
+  mediaPref: MediaPref,
   fallbackId = '',
 ): { kind: 't3'; data: Record<string, unknown> } | null {
   const id = readHtmlAttribute(openTag, 'id') || fallbackId;
@@ -1934,8 +1935,10 @@ function parseRedlibPostBlock(
   const video = redlibVideoMedia(innerHtml, sourceBase);
   const gallery = redlibGalleryItems(innerHtml, sourceBase);
   const image = redlibImageSource(innerHtml, sourceBase);
+  const shouldUseEmbed = Boolean(embed && (!video || mediaPref === 'reddit'));
+  const shouldUseVideo = Boolean(video && (!embed || mediaPref !== 'reddit'));
 
-  if (embed) {
+  if (shouldUseEmbed && embed) {
     const mediaObject = {
       oembed: {
         provider_name: embed.provider,
@@ -1949,7 +1952,7 @@ function parseRedlibPostBlock(
     data.post_hint = 'rich:video';
     data.media = mediaObject;
     data.secure_media = mediaObject;
-  } else if (video) {
+  } else if (shouldUseVideo && video) {
     const redditVideo = {
       fallback_url: video.fallbackUrl,
       hls_url: video.hlsUrl,
@@ -2022,11 +2025,11 @@ function parseRedlibPostBlock(
   return { kind: 't3', data };
 }
 
-function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
+function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
   const nativeAfter = getHtmlListingNextAfter(html, upstreamPath, sourceBase);
   const allChildren = findRedlibPostBlocks(html)
-    .map(({ openTag, block }) => parseRedlibPostBlock(openTag, block.innerHtml, upstreamPath, sourceBase))
+    .map(({ openTag, block }) => parseRedlibPostBlock(openTag, block.innerHtml, upstreamPath, sourceBase, mediaPref))
     .filter((child): child is { kind: 't3'; data: Record<string, unknown> } => child !== null);
 
   if (allChildren.length === 0) {
@@ -2055,7 +2058,7 @@ function parseRedlibListing(html: string, upstreamPath: string, sourceBase: stri
   };
 }
 
-function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
+function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
   const postId = inferCommentThreadId(upstreamPath);
   const blocks = findRedlibPostBlocks(html);
 
@@ -2067,7 +2070,7 @@ function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceB
     blocks.find(({ openTag }) => readHtmlAttribute(openTag, 'id') === postId) ??
     blocks.find(({ openTag }) => hasHtmlClass(openTag, 'highlighted')) ??
     blocks[0];
-  const postChild = parseRedlibPostBlock(chosen.openTag, chosen.block.innerHtml, upstreamPath, sourceBase, postId);
+  const postChild = parseRedlibPostBlock(chosen.openTag, chosen.block.innerHtml, upstreamPath, sourceBase, mediaPref, postId);
 
   if (!postChild) {
     return null;
@@ -2901,6 +2904,7 @@ async function fetchRedlibDetailMediaData(
   detailPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
+  mediaPref: MediaPref,
 ): Promise<Record<string, unknown> | null> {
   const response = await fetchWithTimeout(
     `${base}${detailPath}`,
@@ -2923,7 +2927,7 @@ async function fetchRedlibDetailMediaData(
     return null;
   }
 
-  const detailPayload = parseRedlibCommentsResponse(body, detailPath, base);
+  const detailPayload = parseRedlibCommentsResponse(body, detailPath, base, mediaPref);
   const detailData = listingChildren(Array.isArray(detailPayload) ? detailPayload[0] : null)[0]?.data;
 
   return detailData && hasUsableMediaFields(detailData) ? detailData : null;
@@ -2935,6 +2939,7 @@ async function enrichRedlibListingMedia(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
+  mediaPref: MediaPref,
 ): Promise<unknown> {
   if (isCommentThreadPath(upstreamPath) || isPublicDiscoveryPath(upstreamPath)) {
     return payload;
@@ -2953,7 +2958,7 @@ async function enrichRedlibListingMedia(
 
   await runWithConcurrency(targets, REDLIB_DETAIL_ENRICH_CONCURRENCY, async ({ child, detailPath }) => {
     try {
-      const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options);
+      const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref);
 
       if (detailData) {
         mergeRedlibMediaFields(child.data, detailData);
@@ -2992,6 +2997,7 @@ function parsePublicInstancePayload(
   request: PublicInstanceRequest,
   base: string,
   upstreamPath: string,
+  mediaPref: MediaPref,
 ): unknown | null {
   if (isInstanceChallenge(body)) {
     return null;
@@ -3020,7 +3026,7 @@ function parsePublicInstancePayload(
 
   if (isCommentThreadPath(upstreamPath)) {
     if (looksRedlib) {
-      const redlibPayload = parseRedlibCommentsResponse(body, upstreamPath, base);
+      const redlibPayload = parseRedlibCommentsResponse(body, upstreamPath, base, mediaPref);
 
       if (hasRenderablePostPayload(redlibPayload, upstreamPath)) {
         return redlibPayload;
@@ -3040,7 +3046,7 @@ function parsePublicInstancePayload(
   }
 
   if (looksRedlib) {
-    const redlibPayload = normalizePublicInstancePayload(parseRedlibListing(body, upstreamPath, base), upstreamPath);
+    const redlibPayload = normalizePublicInstancePayload(parseRedlibListing(body, upstreamPath, base, mediaPref), upstreamPath);
     return redlibPayload;
   }
 
@@ -3095,6 +3101,7 @@ async function fetchFromPublicInstance(
         request,
         base,
         upstreamPath,
+        mediaPref,
       );
 
       if (
@@ -3103,7 +3110,7 @@ async function fetchFromPublicInstance(
         !isCommentThreadPath(upstreamPath) &&
         !isPublicDiscoveryPath(upstreamPath)
       ) {
-        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options);
+        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options, mediaPref);
       }
 
       if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {

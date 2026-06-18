@@ -11,7 +11,7 @@ import { useNearEndLoadMore, usePostListingFeed } from '../lib/usePostListingFee
 
 export function UserPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode, loadMoreMode },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
   const { username = '' } = useParams();
   const [searchParams] = useSearchParams();
@@ -35,7 +35,7 @@ export function UserPage() {
     loadMoreError,
     loadMore,
   } = usePostListingFeed({
-    sourceKey: `${username}:${sort}:${topTimeRange}`,
+    sourceKey: `${username}:${sort}:${topTimeRange}:${fallbackMediaSource}`,
     fetchPage,
     videoFeedMode,
     initialErrorMessage: 'Unable to load user feed.',

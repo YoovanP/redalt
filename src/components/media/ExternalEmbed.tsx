@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useUiSettings } from '../../lib/uiSettings';
 
 type ExternalEmbedProps = {
   embedUrl?: string;
@@ -90,9 +91,13 @@ export function ExternalEmbed({
   provider,
   showOutboundLink = true,
 }: ExternalEmbedProps) {
+  const {
+    settings: { fallbackMediaSource },
+  } = useUiSettings();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [showEmbed, setShowEmbed] = useState(true);
+  const allowOriginalEmbed = fallbackMediaSource === 'reddit';
   const providerType = useMemo(
     () => getEmbedProviderType(embedUrl, outboundUrl, provider),
     [embedUrl, outboundUrl, provider],
@@ -104,16 +109,17 @@ export function ExternalEmbed({
 
     return providerType === 'youtube' ? withYouTubeApi(embedUrl) : embedUrl;
   }, [embedUrl, providerType]);
+  const activeEmbedUrl = allowOriginalEmbed ? resolvedEmbedUrl : undefined;
   const vertical = isLikelyVerticalEmbed(embedUrl, outboundUrl, provider);
 
   useEffect(() => {
     setShowEmbed(true);
-  }, [resolvedEmbedUrl]);
+  }, [activeEmbedUrl]);
 
   useEffect(() => {
     const target = containerRef.current;
 
-    if (!target || !resolvedEmbedUrl) {
+    if (!target || !activeEmbedUrl) {
       return;
     }
 
@@ -141,15 +147,15 @@ export function ExternalEmbed({
     return () => {
       observer.disconnect();
     };
-  }, [providerType, resolvedEmbedUrl]);
+  }, [providerType, activeEmbedUrl]);
 
   return (
     <div className="media-block external-media" ref={containerRef}>
-      {resolvedEmbedUrl && showEmbed ? (
+      {activeEmbedUrl && showEmbed ? (
         <iframe
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
-          src={resolvedEmbedUrl}
+          src={activeEmbedUrl}
           title={provider ?? 'External embed'}
           loading="lazy"
           allow="autoplay; fullscreen; picture-in-picture"
