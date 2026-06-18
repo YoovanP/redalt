@@ -1134,6 +1134,21 @@ function readHtmlAttribute(openTag: string, attribute: string): string {
   return decodeXmlEntities(unquoted?.[1] ?? '').trim();
 }
 
+function readHtmlMetaContent(html: string, key: string): string {
+  const normalizedKey = key.toLowerCase();
+
+  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
+    const tag = match[0];
+    const name = (readHtmlAttribute(tag, 'property') || readHtmlAttribute(tag, 'name')).toLowerCase();
+
+    if (name === normalizedKey) {
+      return readHtmlAttribute(tag, 'content');
+    }
+  }
+
+  return '';
+}
+
 function hasHtmlClass(openTag: string, className: string): boolean {
   return readHtmlAttribute(openTag, 'class')
     .split(/\s+/)
@@ -2176,6 +2191,47 @@ function readHtmlCommentCount(html: string): number {
   return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
 }
 
+function extractVRedditIdFromHtml(html: string): string {
+  const decoded = decodeXmlEntities(html);
+  const match = decoded.match(/https?:\\?\/\\?\/v\.redd\.it\\?\/([A-Za-z0-9]+)/i);
+
+  return match?.[1] ?? '';
+}
+
+function applyRedditHtmlVideoMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
+  const videoId = extractVRedditIdFromHtml(html);
+
+  if (!videoId) {
+    return;
+  }
+
+  const videoPageUrl = `https://v.redd.it/${videoId}`;
+  const hlsUrl = `https://v.redd.it/${videoId}/HLSPlaylist.m3u8`;
+  const thumbnail = normalizeUrlCandidate(readHtmlMetaContent(html, 'og:image'), sourceBase);
+  const redditVideo = {
+    fallback_url: hlsUrl,
+    hls_url: hlsUrl,
+    is_gif: false,
+  };
+
+  data.is_self = false;
+  data.is_video = true;
+  data.post_hint = 'hosted:video';
+  data.url = videoPageUrl;
+  data.url_overridden_by_dest = videoPageUrl;
+  data.domain = 'v.redd.it';
+  data.media = { reddit_video: redditVideo };
+  data.secure_media = { reddit_video: redditVideo };
+
+  if (thumbnail) {
+    data.thumbnail = thumbnail;
+    data.preview = {
+      enabled: true,
+      images: [{ source: { url: thumbnail }, resolutions: [] }],
+    };
+  }
+}
+
 function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const postId = inferCommentThreadId(upstreamPath);
   const postChild = parseHtmlPostLinks(html, upstreamPath, sourceBase).find((child) => child.data.id === postId);
@@ -2186,6 +2242,7 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
 
   const comments = parseHtmlCommentChildren(html);
   const commentCount = readHtmlCommentCount(html);
+  applyRedditHtmlVideoMedia(postChild.data, html, sourceBase);
   postChild.data.num_comments = Math.max(commentCount, comments.length, Number(postChild.data.num_comments) || 0);
 
   return [
