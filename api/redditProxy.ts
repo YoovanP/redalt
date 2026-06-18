@@ -245,7 +245,7 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
       }
     }
 
-    const media = data.media as { reddit_video?: Record<string, unknown> } | undefined;
+    const media = data.media as { reddit_video?: Record<string, unknown>; oembed?: Record<string, unknown> } | undefined;
     if (media?.reddit_video) {
       if (typeof media.reddit_video.fallback_url === 'string') {
         media.reddit_video.fallback_url = rewriteRedlibVideoUrl(media.reddit_video.fallback_url, instanceHost);
@@ -258,7 +258,11 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
       }
     }
 
-    const secureMedia = data.secure_media as { reddit_video?: Record<string, unknown> } | undefined;
+    if (media?.oembed && typeof media.oembed.thumbnail_url === 'string') {
+      media.oembed.thumbnail_url = rewrite(media.oembed.thumbnail_url) as string;
+    }
+
+    const secureMedia = data.secure_media as { reddit_video?: Record<string, unknown>; oembed?: Record<string, unknown> } | undefined;
     if (secureMedia?.reddit_video) {
       if (typeof secureMedia.reddit_video.fallback_url === 'string') {
         secureMedia.reddit_video.fallback_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.fallback_url, instanceHost);
@@ -269,6 +273,10 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
       if (typeof secureMedia.reddit_video.dash_url === 'string') {
         secureMedia.reddit_video.dash_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.dash_url, instanceHost);
       }
+    }
+
+    if (secureMedia?.oembed && typeof secureMedia.oembed.thumbnail_url === 'string') {
+      secureMedia.oembed.thumbnail_url = rewrite(secureMedia.oembed.thumbnail_url) as string;
     }
   };
 

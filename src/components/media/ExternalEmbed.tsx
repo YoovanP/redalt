@@ -97,6 +97,7 @@ export function ExternalEmbed({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [showEmbed, setShowEmbed] = useState(true);
+  const [userAllowedEmbed, setUserAllowedEmbed] = useState(false);
   const allowOriginalEmbed = fallbackMediaSource === 'reddit';
   const providerType = useMemo(
     () => getEmbedProviderType(embedUrl, outboundUrl, provider),
@@ -109,12 +110,13 @@ export function ExternalEmbed({
 
     return providerType === 'youtube' ? withYouTubeApi(embedUrl) : embedUrl;
   }, [embedUrl, providerType]);
-  const activeEmbedUrl = allowOriginalEmbed ? resolvedEmbedUrl : undefined;
+  const activeEmbedUrl = allowOriginalEmbed || userAllowedEmbed ? resolvedEmbedUrl : undefined;
   const vertical = isLikelyVerticalEmbed(embedUrl, outboundUrl, provider);
 
   useEffect(() => {
     setShowEmbed(true);
-  }, [activeEmbedUrl]);
+    setUserAllowedEmbed(false);
+  }, [resolvedEmbedUrl, fallbackMediaSource]);
 
   useEffect(() => {
     const target = containerRef.current;
@@ -161,6 +163,13 @@ export function ExternalEmbed({
           allow="autoplay; fullscreen; picture-in-picture"
           allowFullScreen
         />
+      ) : resolvedEmbedUrl && !allowOriginalEmbed ? (
+        <div className={`external-frame external-embed-consent${vertical ? ' external-frame-vertical' : ''}`}>
+          <p>{provider ?? 'External'} media is hosted by the original provider.</p>
+          <button type="button" className="post-action-button" onClick={() => setUserAllowedEmbed(true)}>
+            Load original {provider ?? 'embed'}
+          </button>
+        </div>
       ) : thumbnailUrl ? (
         <a href={outboundUrl} target="_blank" rel="noreferrer">
           <img
