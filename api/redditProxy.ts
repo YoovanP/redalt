@@ -1582,6 +1582,27 @@ function urlWidthParam(url: string): number | undefined {
   }
 }
 
+function fullSizeRedditImageUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname;
+    const previewMatch = pathname.match(/^\/preview\/pre\/(.+)$/i);
+
+    if (previewMatch) {
+      return `${parsed.origin}/img/${previewMatch[1]}`;
+    }
+
+    if (parsed.hostname.toLowerCase() === 'preview.redd.it') {
+      const imageName = pathname.split('/').filter(Boolean).at(-1);
+      return imageName ? `https://i.redd.it/${imageName}` : url;
+    }
+  } catch {
+    // Keep the original URL if it cannot be parsed.
+  }
+
+  return url;
+}
+
 function mimeFromUrl(url: string): string {
   const path = getUrlPathname(url);
 
@@ -1691,7 +1712,7 @@ function redlibImageSource(
     href = imgTag ? readHtmlAttribute(imgTag, 'src') : '';
   }
 
-  const url = normalizeUrlCandidate(href, sourceBase);
+  const url = fullSizeRedditImageUrl(normalizeUrlCandidate(href, sourceBase));
 
   if (!url) {
     return null;
@@ -1727,7 +1748,7 @@ function redlibGalleryItems(
       href = imgTag ? readHtmlAttribute(imgTag, 'src') : '';
     }
 
-    const url = normalizeUrlCandidate(href, sourceBase);
+    const url = fullSizeRedditImageUrl(normalizeUrlCandidate(href, sourceBase));
 
     if (!url || seen.has(url)) {
       continue;
@@ -2030,13 +2051,17 @@ function parseRedlibPostBlock(
       data.domain = getUrlHostname(outbound);
       data.post_hint = 'link';
     } else if (thumbnail) {
-      // Redlib collapsed a media post to a thumbnail in the listing; show the thumbnail and
-      // let the detail page load full media on click.
+      // Redlib sometimes collapses media posts to 140px preview thumbnails in listings.
+      // Upgrade Reddit-hosted previews to the full image path before exposing them as media.
+      const fullImageUrl = fullSizeRedditImageUrl(thumbnail);
+
       data.post_hint = 'image';
-      data.url = `https://www.reddit.com${permalink}`;
+      data.url = fullImageUrl;
+      data.url_overridden_by_dest = fullImageUrl;
+      data.domain = getUrlHostname(fullImageUrl);
       data.preview = {
         enabled: true,
-        images: [{ source: { url: thumbnail }, resolutions: [] }],
+        images: [{ source: { url: fullImageUrl, width: urlWidthParam(fullImageUrl) }, resolutions: [] }],
       };
     } else {
       data.is_self = true;

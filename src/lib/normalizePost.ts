@@ -26,7 +26,7 @@ function getSourceUrl(source: RedditImageSource | undefined): string {
     return '';
   }
 
-  return normalizeUrl(source.url || source.u);
+  return fullSizeRedditImageUrl(normalizeUrl(source.url || source.u));
 }
 
 function getUrlHostname(url: string): string {
@@ -45,12 +45,33 @@ function getUrlPathname(url: string): string {
   }
 }
 
+function fullSizeRedditImageUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const pathname = parsed.pathname;
+    const previewMatch = pathname.match(/^\/preview\/pre\/(.+)$/i);
+
+    if (previewMatch) {
+      return `${parsed.origin}/img/${previewMatch[1]}`;
+    }
+
+    if (parsed.hostname.toLowerCase() === 'preview.redd.it') {
+      const imageName = pathname.split('/').filter(Boolean).at(-1);
+      return imageName ? `https://i.redd.it/${imageName}` : url;
+    }
+  } catch {
+    // Use the original value when parsing fails.
+  }
+
+  return url;
+}
+
 function getBestImage(source: RedditImageSource | undefined, fallbackUrl: string): {
   url: string;
   width?: number;
   height?: number;
 } {
-  const url = getSourceUrl(source) || fallbackUrl;
+  const url = fullSizeRedditImageUrl(getSourceUrl(source) || fallbackUrl);
 
   return {
     url,
@@ -161,7 +182,7 @@ function getThumbnailUrl(post: RedditPostData): string {
     return previewUrl;
   }
 
-  return isLikelyThumbnailUrl(post.thumbnail) ? normalizeUrl(post.thumbnail) : '';
+  return isLikelyThumbnailUrl(post.thumbnail) ? fullSizeRedditImageUrl(normalizeUrl(post.thumbnail)) : '';
 }
 
 function isRedditMediaHost(hostname: string): boolean {
