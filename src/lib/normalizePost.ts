@@ -119,7 +119,7 @@ function buildGalleryItems(post: RedditPostData): GalleryItem[] {
   return items;
 }
 
-function getVideoMedia(post: RedditPostData) {
+function getVideoMedia(post: RedditPostData, includePreviewMp4 = true) {
   const media: RedditMedia | null | undefined = post.secure_media ?? post.media;
   const redditVideo = media?.reddit_video;
 
@@ -135,7 +135,7 @@ function getVideoMedia(post: RedditPostData) {
     };
   }
 
-  const previewMp4 = post.preview?.images?.[0]?.variants?.mp4?.source;
+  const previewMp4 = includePreviewMp4 ? post.preview?.images?.[0]?.variants?.mp4?.source : undefined;
 
   if (previewMp4?.url) {
     return {
@@ -244,8 +244,12 @@ function buildRedgifsEmbed(url: string): string | undefined {
       return undefined;
     }
 
-    const id = parsed.pathname.match(/\/(?:watch|ifr)\/([^/?]+)/i)?.[1] ?? '';
-    return id ? `https://www.redgifs.com/ifr/${id}` : undefined;
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    const id =
+      parsed.pathname.match(/\/(?:watch|ifr|gifs\/detail)\/([^/?#]+)/i)?.[1] ??
+      (pathParts.length === 1 ? pathParts[0] : '');
+
+    return id ? `https://www.redgifs.com/ifr/${encodeURIComponent(id)}` : undefined;
   } catch {
     return undefined;
   }
@@ -336,13 +340,12 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
     if (galleryItems.length > 0) {
       media = { type: 'gallery', items: galleryItems };
     } else {
-      const video = getVideoMedia(post);
+      const external = getExternalMedia(post);
+      const video = getVideoMedia(post, !external?.embedUrl);
 
       if (video) {
         media = video;
       } else {
-        const external = getExternalMedia(post);
-
         if (external) {
           media = external;
         } else {

@@ -1349,8 +1349,12 @@ function buildRedgifsEmbed(url: string): string | null {
       return null;
     }
 
-    const id = parsed.pathname.match(/\/(?:watch|ifr)\/([^/?]+)/i)?.[1] ?? '';
-    return id ? `https://www.redgifs.com/ifr/${id}` : null;
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    const id =
+      parsed.pathname.match(/\/(?:watch|ifr|gifs\/detail)\/([^/?#]+)/i)?.[1] ??
+      (pathParts.length === 1 ? pathParts[0] : '');
+
+    return id ? `https://www.redgifs.com/ifr/${encodeURIComponent(id)}` : null;
   } catch {
     return null;
   }
@@ -2006,8 +2010,9 @@ function parseRedlibPostBlock(
   const video = redlibVideoMedia(innerHtml, sourceBase);
   const gallery = redlibGalleryItems(innerHtml, sourceBase);
   const image = redlibImageSource(innerHtml, sourceBase);
-  const shouldUseEmbed = Boolean(embed && (!video || mediaPref === 'reddit'));
-  const shouldUseVideo = Boolean(video && (!embed || mediaPref !== 'reddit'));
+  const shouldPreferRedgifsEmbed = embed?.provider === 'Redgifs';
+  const shouldUseEmbed = Boolean(embed && (!video || mediaPref === 'reddit' || shouldPreferRedgifsEmbed));
+  const shouldUseVideo = Boolean(video && (!embed || (mediaPref !== 'reddit' && !shouldPreferRedgifsEmbed)));
 
   if (shouldUseEmbed && embed) {
     const mediaObject = {

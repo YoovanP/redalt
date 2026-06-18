@@ -1182,8 +1182,12 @@ function buildRedgifsEmbed(url) {
       return null;
     }
 
-    const id = parsed.pathname.match(/\/(?:watch|ifr)\/([^/?]+)/i)?.[1] ?? '';
-    return id ? `https://www.redgifs.com/ifr/${id}` : null;
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    const id =
+      parsed.pathname.match(/\/(?:watch|ifr|gifs\/detail)\/([^/?#]+)/i)?.[1] ??
+      (pathParts.length === 1 ? pathParts[0] : '');
+
+    return id ? `https://www.redgifs.com/ifr/${encodeURIComponent(id)}` : null;
   } catch {
     return null;
   }
