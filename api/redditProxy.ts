@@ -700,13 +700,24 @@ function buildPublicHtmlPath(upstreamPath: string): string | null {
   const [rawPath, rawQuery = ''] = upstreamPath.split('?');
   const path = rawPath.replace(/\.json$/i, '');
   const params = new URLSearchParams(rawQuery);
+  const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
+  const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
+  const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
+  const isListingPath = Boolean(subredditSearchMatch || subredditMatch || userMatch || path === '/search');
+
+  if (isListingPath) {
+    const requestedLimit = Number(params.get('limit') ?? 25);
+    const fallbackLimit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(Math.floor(requestedLimit) * 4, 50), 100)
+      : 50;
+
+    params.set('limit', String(fallbackLimit));
+  }
+
   params.delete('raw_json');
   const query = params.toString();
   const withQuery = (htmlPath: string) => `${htmlPath}${query ? `?${query}` : ''}`;
   const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
-  const subredditSearchMatch = path.match(/^\/r\/([^/]+)\/search$/i);
-  const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
-  const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
 
   if (commentThreadMatch) {
     return withQuery(`/r/${commentThreadMatch[1]}/comments/${commentThreadMatch[2]}`);
@@ -2013,6 +2024,7 @@ function parseRedlibPostBlock(
 
 function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const nativeAfter = getHtmlListingNextAfter(html, upstreamPath, sourceBase);
   const allChildren = findRedlibPostBlocks(html)
     .map(({ openTag, block }) => parseRedlibPostBlock(openTag, block.innerHtml, upstreamPath, sourceBase))
     .filter((child): child is { kind: 't3'; data: Record<string, unknown> } => child !== null);
@@ -2036,7 +2048,7 @@ function parseRedlibListing(html: string, upstreamPath: string, sourceBase: stri
   return {
     kind: 'Listing',
     data: {
-      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex),
+      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex) ?? nativeAfter,
       before: null,
       children,
     },
@@ -2338,6 +2350,34 @@ function getSyntheticRssAfter(
 
   const name = children[startIndex + pageSize - 1]?.data?.name;
   return typeof name === 'string' && name ? name : null;
+}
+
+function getHtmlListingNextAfter(html: string, upstreamPath: string, sourceBase: string): string | null {
+  const requestedAfter = getRequestedAfter(upstreamPath).toLowerCase();
+
+  for (const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)) {
+    const href = readHtmlAttribute(match[0], 'href');
+    const url = normalizeUrlCandidate(href, sourceBase);
+
+    if (!url) {
+      continue;
+    }
+
+    try {
+      const parsed = new URL(url);
+      const after = (parsed.searchParams.get('after') ?? '').trim();
+
+      if (!after || after.toLowerCase() === requestedAfter) {
+        continue;
+      }
+
+      return after;
+    } catch {
+      // Ignore malformed links and keep scanning pagination anchors.
+    }
+  }
+
+  return null;
 }
 
 function parseRssPostChild(
