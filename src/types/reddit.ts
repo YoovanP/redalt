@@ -61,6 +61,8 @@ export interface RedditPostData {
   >;
   media?: RedditMedia | null;
   secure_media?: RedditMedia | null;
+  media_embed?: RedditEmbedContent | null;
+  secure_media_embed?: RedditEmbedContent | null;
 }
 
 export interface RedditImageSource {
@@ -83,9 +85,25 @@ export interface RedditMedia {
   };
   oembed?: {
     provider_name?: string;
+    provider_url?: string;
+    author_name?: string;
+    author_url?: string;
+    title?: string;
     thumbnail_url?: string;
     html?: string;
+    width?: number;
+    height?: number;
+    type?: string;
+    version?: string;
   };
+}
+
+export interface RedditEmbedContent {
+  content?: string;
+  width?: number;
+  height?: number;
+  scrolling?: boolean;
+  media_domain_url?: string;
 }
 
 export type NormalizedMedia =
@@ -108,6 +126,8 @@ export type NormalizedMedia =
       embedHtml?: string;
       embedUrl?: string;
       thumbnailUrl?: string;
+      embedWidth?: number;
+      embedHeight?: number;
     }
   | { type: 'link'; outboundUrl: string };
 

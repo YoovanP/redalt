@@ -21,6 +21,45 @@ type CommentItemProps = {
   depth?: number;
 };
 
+function getMediaStrength(post: NormalizedPost | null): number {
+  if (!post) {
+    return -1;
+  }
+
+  switch (post.media.type) {
+    case 'video':
+    case 'external':
+    case 'gallery':
+      return 4;
+    case 'image':
+      return 3;
+    case 'text':
+      return 1;
+    case 'link':
+    default:
+      return 0;
+  }
+}
+
+function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPost | null): NormalizedPost {
+  if (!fallbackPost || fallbackPost.id !== detailPost.id) {
+    return detailPost;
+  }
+
+  if (getMediaStrength(detailPost) >= getMediaStrength(fallbackPost)) {
+    return detailPost;
+  }
+
+  return {
+    ...detailPost,
+    flairText: detailPost.flairText || fallbackPost.flairText,
+    isNsfw: detailPost.isNsfw || fallbackPost.isNsfw,
+    outboundUrl: fallbackPost.outboundUrl || detailPost.outboundUrl,
+    selfText: detailPost.selfText || fallbackPost.selfText,
+    media: fallbackPost.media,
+  };
+}
+
 function CommentItem({ comment, depth = 0 }: CommentItemProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showReplies, setShowReplies] = useState(true);
@@ -134,7 +173,11 @@ export function PostDetailPage() {
   }, [name, id, fallbackPost, fallbackMediaSource]);
 
   const normalized = useMemo(() => {
-    return data ? normalizePost(data.post) : fallbackPost;
+    if (!data) {
+      return fallbackPost;
+    }
+
+    return preferRicherPost(normalizePost(data.post), fallbackPost);
   }, [data, fallbackPost]);
   const comments = data?.comments ?? [];
   const visibleComments = comments.slice(0, visibleTopLevelComments);

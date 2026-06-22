@@ -3,6 +3,7 @@ export type RedditProxyEnv = Record<string, string | undefined>;
 type RedditProxyOptions = {
   cloudflareProxyBase?: string;
   userAgentFallback?: string;
+  enableMirrorFallback?: boolean;
 };
 
 type PublicInstanceCache = {
@@ -13,6 +14,13 @@ type PublicInstanceCache = {
 type PublicInstanceHealth = {
   failureCount: number;
   retryAfter: number;
+};
+
+type CachedSuccessResponse = {
+  body: string;
+  status: number;
+  headers: Record<string, string>;
+  expiresAt: number;
 };
 
 type PublicInstanceRequest = {
@@ -29,8 +37,14 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
+const SUCCESS_RESPONSE_CACHE_TTL_MS = 5 * 60 * 1000;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
 const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
+const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 4000;
+const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 25_000;
+const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
+const PUBLIC_INSTANCE_BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 const STATIC_PUBLIC_INSTANCES = [
   'https://redlib.perennialte.ch',
   'https://redlib.r4fo.com',
@@ -57,6 +71,45 @@ const STATIC_PUBLIC_INSTANCES = [
 
 let publicInstanceCache: PublicInstanceCache | null = null;
 const publicInstanceHealth = new Map<string, PublicInstanceHealth>();
+const successfulResponseCache = new Map<string, CachedSuccessResponse>();
+
+function getCachedSuccessResponse(cacheKey: string): Response | null {
+  const cached = successfulResponseCache.get(cacheKey);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (cached.expiresAt <= Date.now()) {
+    successfulResponseCache.delete(cacheKey);
+    return null;
+  }
+
+  const headers = new Headers(cached.headers);
+  headers.set('X-RedAlt-Cache', 'hit');
+  return new Response(cached.body, { status: cached.status, headers });
+}
+
+async function rememberSuccessfulResponse(cacheKey: string, response: Response): Promise<Response> {
+  if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+    return response;
+  }
+
+  const body = await response.text();
+  const headers = Object.fromEntries(response.headers.entries());
+  successfulResponseCache.set(cacheKey, {
+    body,
+    status: response.status,
+    headers,
+    expiresAt: Date.now() + SUCCESS_RESPONSE_CACHE_TTL_MS,
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(headers),
+  });
+}
 
 export function isAllowedRedditPath(upstreamPath: string): boolean {
   const normalizedPath = upstreamPath.split('?')[0] || '/';
@@ -305,6 +358,12 @@ export async function handleRedditProxyRequest(
   }
 
   const { pref: mediaPref, cleanPath } = extractMediaPref(upstreamPath);
+  const cacheKey = `${mediaPref}:${cleanPath}`;
+  const cachedResponse = getCachedSuccessResponse(cacheKey);
+
+  if (cachedResponse) {
+    return cachedResponse;
+  }
 
   if (options.cloudflareProxyBase) {
     const cloudflareResponse = await fetchWithTimeout(
@@ -323,10 +382,18 @@ export async function handleRedditProxyRequest(
     }
   }
 
+  if (isCommentThreadPath(cleanPath)) {
+    const oldRedditCommentResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref);
+
+    if (oldRedditCommentResponse) {
+      return rememberSuccessfulResponse(cacheKey, oldRedditCommentResponse);
+    }
+  }
+
   const publicInstanceResponse = await fetchViaPublicInstances(cleanPath, env, options, mediaPref);
 
   if (publicInstanceResponse) {
-    return publicInstanceResponse;
+    return rememberSuccessfulResponse(cacheKey, publicInstanceResponse);
   }
 
   let fallbackResponse: Response | null = null;
@@ -350,7 +417,7 @@ export async function handleRedditProxyRequest(
     const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
 
     if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
-      return responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120');
+      return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
     }
 
     if (blockedHtml) {
@@ -375,16 +442,24 @@ export async function handleRedditProxyRequest(
     }
   }
 
-  const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options).catch(() => null);
+  if (options.enableMirrorFallback !== false) {
+    const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options).catch(() => null);
 
-  if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
-    return responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120');
+    if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
+      return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120'));
+    }
+  }
+
+  const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref);
+
+  if (oldRedditHtmlResponse) {
+    return rememberSuccessfulResponse(cacheKey, oldRedditHtmlResponse);
   }
 
   const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options);
 
   if (redditRssResponse) {
-    return redditRssResponse;
+    return rememberSuccessfulResponse(cacheKey, redditRssResponse);
   }
 
   return (
@@ -723,9 +798,17 @@ function buildPublicHtmlPath(upstreamPath: string): string | null {
   }
 
   params.delete('raw_json');
+  const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
+
+  if (commentThreadMatch) {
+    params.delete('limit');
+    params.delete('after');
+    params.delete('before');
+    params.delete('count');
+  }
+
   const query = params.toString();
   const withQuery = (htmlPath: string) => `${htmlPath}${query ? `?${query}` : ''}`;
-  const commentThreadMatch = path.match(/^\/r\/([^/]+)\/comments\/([^/]+)(?:\/.*)?$/i);
 
   if (commentThreadMatch) {
     return withQuery(`/r/${commentThreadMatch[1]}/comments/${commentThreadMatch[2]}`);
@@ -1251,6 +1334,17 @@ function getUrlHostname(url: string): string {
   }
 }
 
+function isRedditMediaHost(hostname: string): boolean {
+  return (
+    hostname === 'i.redd.it' ||
+    hostname === 'preview.redd.it' ||
+    hostname === 'v.redd.it' ||
+    hostname.endsWith('.redd.it') ||
+    hostname.endsWith('redditmedia.com') ||
+    hostname.endsWith('reddit.com')
+  );
+}
+
 function getUrlPathname(url: string): string {
   try {
     return new URL(url).pathname.toLowerCase();
@@ -1360,23 +1454,268 @@ function buildRedgifsEmbed(url: string): string | null {
   }
 }
 
+function buildTikTokEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('tiktok.com')) {
+      return null;
+    }
+
+    const id =
+      parsed.pathname.match(/\/(?:@[^/]+\/video|v)\/(\d+)/i)?.[1] ??
+      parsed.pathname.match(/\/embed\/v2\/(\d+)/i)?.[1] ??
+      '';
+
+    return id ? `https://www.tiktok.com/embed/v2/${id}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildInstagramEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (!hostname.includes('instagram.com') && !hostname.includes('instagr.am')) {
+      return null;
+    }
+
+    const match = parsed.pathname.match(/\/(p|reel|tv)\/([^/?#]+)/i);
+
+    if (!match?.[1] || !match[2]) {
+      return null;
+    }
+
+    return `https://www.instagram.com/${match[1].toLowerCase()}/${match[2]}/embed/captioned/`;
+  } catch {
+    return null;
+  }
+}
+
+function buildTwitterEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (!hostname.includes('twitter.com') && hostname !== 'x.com' && !hostname.endsWith('.x.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.match(/\/status\/(\d+)/i)?.[1] ?? '';
+    return id ? `https://platform.twitter.com/embed/Tweet.html?id=${id}&dnt=true` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildStreamableEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('streamable.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.split('/').filter(Boolean).at(-1) ?? '';
+    return id ? `https://streamable.com/e/${encodeURIComponent(id)}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildDailymotionEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    let id = '';
+
+    if (hostname === 'dai.ly') {
+      id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    } else if (hostname.includes('dailymotion.com')) {
+      id = parsed.pathname.match(/\/(?:video|embed\/video)\/([^/?#]+)/i)?.[1] ?? '';
+    }
+
+    return id ? `https://www.dailymotion.com/embed/video/${id}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildSpotifyEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('spotify.com')) {
+      return null;
+    }
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+
+    if (segments.length < 2) {
+      return null;
+    }
+
+    const embedSegments = segments[0] === 'embed' ? segments : ['embed', ...segments];
+    return `https://open.spotify.com/${embedSegments.join('/')}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildSoundCloudEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (!hostname.includes('soundcloud.com') && !hostname.includes('sndcdn.com')) {
+      return null;
+    }
+
+    return `https://w.soundcloud.com/player/?url=${encodeURIComponent(parsed.toString())}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildLoomEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('loom.com')) {
+      return null;
+    }
+
+    const match = parsed.pathname.match(/\/(?:share|embed)\/([^/?#]+)/i);
+    return match?.[1] ? `https://www.loom.com/embed/${match[1]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildImgurEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('imgur.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.match(/\/(?:gallery\/|a\/)?([^/?#.]+)/i)?.[1] ?? '';
+    return id ? `https://imgur.com/${id}/embed?pub=true` : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildGfycatEmbed(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+
+    if (!parsed.hostname.toLowerCase().includes('gfycat.com')) {
+      return null;
+    }
+
+    const id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    return id ? `https://gfycat.com/ifr/${encodeURIComponent(id)}` : null;
+  } catch {
+    return null;
+  }
+}
+
+function inferProviderName(url: string): string {
+  const hostname = getUrlHostname(url);
+
+  if (!hostname) {
+    return 'External';
+  }
+
+  if (hostname.includes('youtube') || hostname.includes('youtu.be')) {
+    return 'YouTube';
+  }
+
+  if (hostname.includes('vimeo')) {
+    return 'Vimeo';
+  }
+
+  if (hostname.includes('redgifs')) {
+    return 'Redgifs';
+  }
+
+  if (hostname.includes('tiktok')) {
+    return 'TikTok';
+  }
+
+  if (hostname.includes('instagram') || hostname.includes('instagr.am')) {
+    return 'Instagram';
+  }
+
+  if (hostname.includes('twitter.com') || hostname === 'x.com' || hostname.endsWith('.x.com')) {
+    return 'X';
+  }
+
+  if (hostname.includes('streamable')) {
+    return 'Streamable';
+  }
+
+  if (hostname.includes('dailymotion') || hostname === 'dai.ly') {
+    return 'Dailymotion';
+  }
+
+  if (hostname.includes('spotify')) {
+    return 'Spotify';
+  }
+
+  if (hostname.includes('soundcloud')) {
+    return 'SoundCloud';
+  }
+
+  if (hostname.includes('loom.com')) {
+    return 'Loom';
+  }
+
+  if (hostname.includes('imgur.com')) {
+    return 'Imgur';
+  }
+
+  if (hostname.includes('gfycat.com')) {
+    return 'Gfycat';
+  }
+
+  const stripped = hostname.replace(/^www\./, '');
+  const first = stripped.split('.')[0] ?? '';
+  return first ? `${first.charAt(0).toUpperCase()}${first.slice(1)}` : 'External';
+}
+
+function findIframeEmbedUrl(html: string, baseUrl: string): string {
+  const iframeTag = html.match(/<iframe\b[^>]*>/i)?.[0] ?? '';
+  return iframeTag ? normalizeUrlCandidate(readHtmlAttribute(iframeTag, 'src'), baseUrl) : '';
+}
+
 function buildKnownEmbed(url: string): { provider: string; embedUrl: string } | null {
-  const youtubeEmbed = buildYouTubeEmbed(url);
+  const builders = [
+    ['YouTube', buildYouTubeEmbed],
+    ['Vimeo', buildVimeoEmbed],
+    ['Redgifs', buildRedgifsEmbed],
+    ['TikTok', buildTikTokEmbed],
+    ['Instagram', buildInstagramEmbed],
+    ['X', buildTwitterEmbed],
+    ['Streamable', buildStreamableEmbed],
+    ['Dailymotion', buildDailymotionEmbed],
+    ['Spotify', buildSpotifyEmbed],
+    ['SoundCloud', buildSoundCloudEmbed],
+    ['Loom', buildLoomEmbed],
+    ['Imgur', buildImgurEmbed],
+    ['Gfycat', buildGfycatEmbed],
+  ] as const;
 
-  if (youtubeEmbed) {
-    return { provider: 'YouTube', embedUrl: youtubeEmbed };
-  }
+  for (const [provider, build] of builders) {
+    const embedUrl = build(url);
 
-  const vimeoEmbed = buildVimeoEmbed(url);
-
-  if (vimeoEmbed) {
-    return { provider: 'Vimeo', embedUrl: vimeoEmbed };
-  }
-
-  const redgifsEmbed = buildRedgifsEmbed(url);
-
-  if (redgifsEmbed) {
-    return { provider: 'Redgifs', embedUrl: redgifsEmbed };
+    if (embedUrl) {
+      return { provider, embedUrl };
+    }
   }
 
   return null;
@@ -1443,6 +1782,112 @@ function titleFromPermalink(permalink: string): string {
   return decodeURIComponent(slug).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim() || 'Untitled post';
 }
 
+function parseOldRedditSearchResults(
+  html: string,
+  upstreamPath: string,
+  sourceBase: string,
+): Array<{ kind: 't3'; data: Record<string, unknown> }> {
+  const children: Array<{ kind: 't3'; data: Record<string, unknown> }> = [];
+  const seen = new Set<string>();
+  const fallbackSubreddit = inferSubredditFromPath(upstreamPath);
+
+  for (const match of html.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bsearch-result\b[^"']*["'][^>]*\bdata-fullname=["']t3_([^"']+)["'][^>]*>/gi)) {
+    const id = (match[1] ?? '').trim();
+    const key = id.toLowerCase();
+    const block = id ? findHtmlTagBlockAt(html, 'div', match.index ?? 0) : null;
+
+    if (!id || !block || seen.has(key)) {
+      continue;
+    }
+
+    const titleLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'search-title');
+    const commentsLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'search-comments');
+    const outboundLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'search-link');
+    const subredditLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'search-subreddit-link');
+    const authorLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'author');
+    const thumbnailLink = findFirstHtmlTagBlock(block.innerHtml, 'a', 'thumbnail');
+    const permalinkUrl = normalizeUrlCandidate(
+      readHtmlAttribute(titleLink?.openTag ?? '', 'href') || readHtmlAttribute(commentsLink?.openTag ?? '', 'href'),
+      sourceBase,
+    );
+    const permalink = toPathname(permalinkUrl);
+
+    if (!permalink || !/\/comments\//i.test(permalink)) {
+      continue;
+    }
+
+    const title = stripHtml(titleLink?.innerHtml ?? '') || titleFromPermalink(permalink);
+    const outboundUrl = normalizeUrlCandidate(readHtmlAttribute(outboundLink?.openTag ?? '', 'href'), sourceBase);
+    const thumbnailTag = thumbnailLink?.innerHtml.match(/<img\b[^>]*>/i)?.[0] ?? '';
+    const thumbnailUrl = fullSizeRedditImageUrl(normalizeUrlCandidate(readHtmlAttribute(thumbnailTag, 'src'), sourceBase));
+    const subreddit = normalizeCommunityName(stripHtml(subredditLink?.innerHtml ?? '')) || inferSubredditFromPermalink(permalink, fallbackSubreddit);
+    const author = normalizeUserName(stripHtml(authorLink?.innerHtml ?? '')) || '[unknown]';
+    const scoreText =
+      block.innerHtml.match(/<span\b[^>]*\bclass=["'][^"']*\bsearch-score\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] ?? '';
+    const score = Number((stripHtml(scoreText).match(/[\d,.]+/)?.[0] ?? '0').replace(/,/g, '')) || 0;
+    const commentsText = stripHtml(commentsLink?.innerHtml ?? '');
+    const numComments = Number((commentsText.match(/[\d,.]+/)?.[0] ?? '0').replace(/,/g, '')) || 0;
+    const createdTitle = block.innerHtml.match(/<time\b[^>]*title=["']([^"']+)["']/i)?.[1] ?? '';
+    const createdMs = Date.parse(createdTitle);
+    const knownEmbed = outboundUrl ? buildKnownEmbed(outboundUrl) : null;
+    const isImage = Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+    const isVideo = Boolean(outboundUrl && isLikelyVideoUrl(outboundUrl) && !knownEmbed);
+    const finalUrl = outboundUrl || permalinkUrl || `https://www.reddit.com${permalink}`;
+    const data: Record<string, unknown> = {
+      id,
+      name: `t3_${id}`,
+      title,
+      author,
+      subreddit,
+      permalink,
+      score,
+      ups: score,
+      num_comments: numComments,
+      created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : Math.floor(Date.now() / 1000),
+      selftext: '',
+      over_18: false,
+      url: finalUrl,
+      url_overridden_by_dest: finalUrl,
+      domain: getUrlHostname(finalUrl),
+      is_self: !outboundUrl,
+      post_hint: knownEmbed ? 'rich:video' : isVideo ? 'hosted:video' : isImage ? 'image' : outboundUrl ? 'link' : undefined,
+    };
+
+    if (thumbnailUrl) {
+      data.thumbnail = thumbnailUrl;
+      data.preview = {
+        images: [{ source: { url: thumbnailUrl } }],
+      };
+    }
+
+    if (knownEmbed && outboundUrl) {
+      const mediaObject = {
+        oembed: {
+          provider_name: knownEmbed.provider,
+          thumbnail_url: thumbnailUrl || undefined,
+          html: `<iframe src="${knownEmbed.embedUrl}" allowfullscreen></iframe>`,
+        },
+      };
+      data.media = mediaObject;
+      data.secure_media = mediaObject;
+    } else if (isVideo && outboundUrl) {
+      const videoUrl = /\.gifv(?:[?#]|$)/i.test(outboundUrl) ? outboundUrl.replace(/\.gifv(?=[?#]|$)/i, '.mp4') : outboundUrl;
+      const redditVideo = {
+        fallback_url: videoUrl,
+        hls_url: /\.m3u8(?:[?#]|$)/i.test(videoUrl) ? videoUrl : undefined,
+      };
+      data.is_video = true;
+      data.media = { reddit_video: redditVideo };
+      data.secure_media = { reddit_video: redditVideo };
+    }
+
+    seen.add(key);
+    children.push({ kind: 't3', data });
+  }
+
+  return children;
+}
+
 function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: string): Array<{ kind: 't3'; data: Record<string, unknown> }> {
   const children: Array<{ kind: 't3'; data: Record<string, unknown> }> = [];
   const seen = new Set<string>();
@@ -1505,14 +1950,15 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
 
 function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
-  const allChildren = parseHtmlPostLinks(html, upstreamPath, sourceBase);
-  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath, true);
+  const allChildren = parseOldRedditSearchResults(html, upstreamPath, sourceBase);
+  const childrenSource = allChildren.length > 0 ? allChildren : parseHtmlPostLinks(html, upstreamPath, sourceBase);
+  const startIndex = getPaginatedStartIndex(childrenSource, upstreamPath, true);
 
   if (startIndex === null) {
     return null;
   }
 
-  const children = allChildren.slice(startIndex, startIndex + pageSize);
+  const children = childrenSource.slice(startIndex, startIndex + pageSize);
 
   if (children.length === 0) {
     return null;
@@ -1521,7 +1967,7 @@ function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string
   return {
     kind: 'Listing',
     data: {
-      after: getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex),
+      after: getSyntheticRssAfter(childrenSource, upstreamPath, pageSize, startIndex),
       before: null,
       children,
     },
@@ -1688,6 +2134,18 @@ function redlibVideoMedia(
     }
   }
 
+  if (!mp4 && hls) {
+    const idMatch = hls.match(/\/hls\/([^/?#]+)\//i);
+
+    if (idMatch) {
+      try {
+        mp4 = `${new URL(hls).origin}/vid/${idMatch[1]}/CMAF`;
+      } catch {
+        // Keep HLS as the only source if the URL cannot be parsed.
+      }
+    }
+  }
+
   if (!mp4 && !hls) {
     return null;
   }
@@ -1820,7 +2278,13 @@ function redlibOutboundCandidates(innerHtml: string, sourceBase: string): string
     candidates.push(readHtmlAttribute(linkTag, 'href'));
   }
 
-  return candidates.map((href) => normalizeUrlCandidate(href, sourceBase)).filter(Boolean);
+  const detailLinkTag = innerHtml.match(/<a\b[^>]*\bid=["']post_url["'][^>]*>/i)?.[0] ?? '';
+
+  if (detailLinkTag) {
+    candidates.push(readHtmlAttribute(detailLinkTag, 'href'));
+  }
+
+  return [...new Set(candidates.map((href) => normalizeUrlCandidate(href, sourceBase)).filter(Boolean))];
 }
 
 function redlibKnownEmbed(
@@ -1835,7 +2299,18 @@ function redlibKnownEmbed(
     }
   }
 
-  return null;
+  const iframeEmbedUrl = findIframeEmbedUrl(innerHtml, sourceBase);
+
+  if (!iframeEmbedUrl) {
+    return null;
+  }
+
+  const sourceUrl = redlibOutboundCandidates(innerHtml, sourceBase)[0] || iframeEmbedUrl;
+  return {
+    provider: inferProviderName(sourceUrl || iframeEmbedUrl),
+    embedUrl: iframeEmbedUrl,
+    sourceUrl,
+  };
 }
 
 function redlibOutboundUrl(innerHtml: string, sourceBase: string, instanceHost: string): string {
@@ -2010,11 +2485,7 @@ function parseRedlibPostBlock(
   const video = redlibVideoMedia(innerHtml, sourceBase);
   const gallery = redlibGalleryItems(innerHtml, sourceBase);
   const image = redlibImageSource(innerHtml, sourceBase);
-  const shouldPreferRedgifsEmbed = embed?.provider === 'Redgifs';
-  const shouldUseEmbed = Boolean(embed && (!video || mediaPref === 'reddit' || shouldPreferRedgifsEmbed));
-  const shouldUseVideo = Boolean(video && (!embed || (mediaPref !== 'reddit' && !shouldPreferRedgifsEmbed)));
-
-  if (shouldUseEmbed && embed) {
+  if (embed) {
     const mediaObject = {
       oembed: {
         provider_name: embed.provider,
@@ -2028,7 +2499,7 @@ function parseRedlibPostBlock(
     data.post_hint = 'rich:video';
     data.media = mediaObject;
     data.secure_media = mediaObject;
-  } else if (shouldUseVideo && video) {
+  } else if (video) {
     const redditVideo = {
       fallback_url: video.fallbackUrl,
       hls_url: video.hlsUrl,
@@ -2263,30 +2734,44 @@ function extractVRedditIdFromHtml(html: string): string {
   return match?.[1] ?? '';
 }
 
-function applyRedditHtmlVideoMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
-  const videoId = extractVRedditIdFromHtml(html);
+function findRedditHtmlOutboundUrl(html: string, sourceBase: string): string {
+  for (const match of html.matchAll(/<a\b[^>]*>/gi)) {
+    const tag = match[0];
+    const className = readHtmlAttribute(tag, 'class');
 
-  if (!videoId) {
+    if (!/\b(?:title|thumbnail|outbound)\b/i.test(className)) {
+      continue;
+    }
+
+    const href = normalizeUrlCandidate(readHtmlAttribute(tag, 'href'), sourceBase);
+
+    if (href && !isRedditNavigationUrl(href)) {
+      return href;
+    }
+  }
+
+  return '';
+}
+
+function applyRedditHtmlExternalMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
+  const outboundUrl = findRedditHtmlOutboundUrl(html, sourceBase);
+
+  if (!outboundUrl) {
     return;
   }
 
-  const videoPageUrl = `https://v.redd.it/${videoId}`;
-  const hlsUrl = `https://v.redd.it/${videoId}/HLSPlaylist.m3u8`;
+  const iframeEmbedUrl =
+    findIframeEmbedUrl(html, sourceBase) ||
+    normalizeUrlCandidate(readHtmlMetaContent(html, 'twitter:player'), sourceBase);
+  const knownEmbed = buildKnownEmbed(outboundUrl);
+  const embedUrl = iframeEmbedUrl || knownEmbed?.embedUrl || '';
   const thumbnail = normalizeUrlCandidate(readHtmlMetaContent(html, 'og:image'), sourceBase);
-  const redditVideo = {
-    fallback_url: hlsUrl,
-    hls_url: hlsUrl,
-    is_gif: false,
-  };
 
   data.is_self = false;
-  data.is_video = true;
-  data.post_hint = 'hosted:video';
-  data.url = videoPageUrl;
-  data.url_overridden_by_dest = videoPageUrl;
-  data.domain = 'v.redd.it';
-  data.media = { reddit_video: redditVideo };
-  data.secure_media = { reddit_video: redditVideo };
+  data.url = outboundUrl;
+  data.url_overridden_by_dest = outboundUrl;
+  data.domain = getUrlHostname(outboundUrl);
+  data.post_hint = embedUrl ? 'rich:video' : 'link';
 
   if (thumbnail) {
     data.thumbnail = thumbnail;
@@ -2295,6 +2780,54 @@ function applyRedditHtmlVideoMedia(data: Record<string, unknown>, html: string, 
       images: [{ source: { url: thumbnail }, resolutions: [] }],
     };
   }
+
+  if (embedUrl) {
+    const mediaObject = {
+      oembed: {
+        provider_name: inferProviderName(outboundUrl),
+        thumbnail_url: thumbnail || undefined,
+        html: `<iframe src="${embedUrl}" allowfullscreen></iframe>`,
+      },
+    };
+    data.media = mediaObject;
+    data.secure_media = mediaObject;
+  }
+}
+
+function applyRedditHtmlMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
+  const videoId = extractVRedditIdFromHtml(html);
+
+  if (videoId) {
+    const videoPageUrl = `https://v.redd.it/${videoId}`;
+    const hlsUrl = `https://v.redd.it/${videoId}/HLSPlaylist.m3u8`;
+    const thumbnail = normalizeUrlCandidate(readHtmlMetaContent(html, 'og:image'), sourceBase);
+    const redditVideo = {
+      fallback_url: hlsUrl,
+      hls_url: hlsUrl,
+      is_gif: false,
+    };
+
+    data.is_self = false;
+    data.is_video = true;
+    data.post_hint = 'hosted:video';
+    data.url = videoPageUrl;
+    data.url_overridden_by_dest = videoPageUrl;
+    data.domain = 'v.redd.it';
+    data.media = { reddit_video: redditVideo };
+    data.secure_media = { reddit_video: redditVideo };
+
+    if (thumbnail) {
+      data.thumbnail = thumbnail;
+      data.preview = {
+        enabled: true,
+        images: [{ source: { url: thumbnail }, resolutions: [] }],
+      };
+    }
+
+    return;
+  }
+
+  applyRedditHtmlExternalMedia(data, html, sourceBase);
 }
 
 function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
@@ -2307,7 +2840,7 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
 
   const comments = parseHtmlCommentChildren(html);
   const commentCount = readHtmlCommentCount(html);
-  applyRedditHtmlVideoMedia(postChild.data, html, sourceBase);
+  applyRedditHtmlMedia(postChild.data, html, sourceBase);
   postChild.data.num_comments = Math.max(commentCount, comments.length, Number(postChild.data.num_comments) || 0);
 
   return [
@@ -2554,7 +3087,15 @@ function parseRssPostChild(
   const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
   const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
   const videoUrl = hrefUrls.find(isLikelyVideoUrl) ?? sourceUrls.find(isLikelyVideoUrl) ?? '';
-  const embed = hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ?? null;
+  const iframeEmbedUrl = findIframeEmbedUrl(content, sourceBase);
+  const embed =
+    hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ??
+    (iframeEmbedUrl
+      ? {
+          provider: inferProviderName(iframeEmbedUrl),
+          embedUrl: iframeEmbedUrl,
+        }
+      : null);
   const externalUrl =
     hrefUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
     contentUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
@@ -2964,6 +3505,66 @@ function hasUsableMediaFields(data: Record<string, unknown>): boolean {
   return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
 }
 
+function scoreCommentThreadPayload(payload: unknown): number {
+  if (!Array.isArray(payload)) {
+    return 0;
+  }
+
+  const postData = listingChildren(payload[0])[0]?.data;
+
+  if (!postData) {
+    return 0;
+  }
+
+  let score = 0;
+
+  if (hasGalleryMedia(postData)) {
+    score += 120;
+  }
+
+  if (hasPreviewMedia(postData)) {
+    score += 20;
+  }
+
+  if (isRenderableObject(postData.media) || isRenderableObject(postData.secure_media)) {
+    score += 100;
+  }
+
+  if (isUsableThumbnail(postData.thumbnail)) {
+    score += 10;
+  }
+
+  const postHint = getStringField(postData, 'post_hint');
+
+  if (postHint && postHint !== 'link') {
+    score += 20;
+  }
+
+  const outboundUrl = getStringField(postData, 'url_overridden_by_dest') || getStringField(postData, 'url');
+
+  if (
+    outboundUrl &&
+    !isRedditNavigationUrl(outboundUrl) &&
+    !isCommentPermalinkUrl(outboundUrl, getStringField(postData, 'permalink'), getStringField(postData, 'id'))
+  ) {
+    score += 60;
+
+    if (!isRedditMediaHost(getUrlHostname(outboundUrl))) {
+      score += 15;
+    }
+  }
+
+  if (listingChildren(payload[1]).some((child) => getStringField(child.data ?? {}, 'body'))) {
+    score += 5;
+  }
+
+  return score;
+}
+
+function getPayloadQualityScore(payload: unknown, upstreamPath: string): number {
+  return isCommentThreadPath(upstreamPath) ? scoreCommentThreadPayload(payload) : 0;
+}
+
 function getCommentThreadPostData(payload: unknown): Record<string, unknown> | null {
   if (!Array.isArray(payload)) {
     return null;
@@ -3093,10 +3694,10 @@ async function enrichCommentThreadMediaFromOldReddit(
       {
         headers: {
           Accept: getPublicInstanceAccept('html'),
-          'User-Agent': getProxyUserAgent(env, options),
+          'User-Agent': PUBLIC_INSTANCE_BROWSER_USER_AGENT,
         },
       },
-      REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
+      OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS,
     );
 
     if (!response.ok) {
@@ -3109,7 +3710,7 @@ async function enrichCommentThreadMediaFromOldReddit(
       return payload;
     }
 
-    applyRedditHtmlVideoMedia(postData, body, 'https://old.reddit.com');
+    applyRedditHtmlMedia(postData, body, 'https://old.reddit.com');
   } catch {
     // Keep the original fallback payload when old Reddit media enrichment fails.
   }
@@ -3175,7 +3776,7 @@ function getPublicInstanceRequestHeaders(
 ): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: getPublicInstanceAccept(method),
-    'User-Agent': getProxyUserAgent(env, options),
+    'User-Agent': method === 'html' ? PUBLIC_INSTANCE_BROWSER_USER_AGENT : getProxyUserAgent(env, options),
   };
 
   if (method === 'html' && !isTedditInstance(base) && !isTrodditInstance(base)) {
@@ -3203,6 +3804,10 @@ function getPublicInstanceTimeoutMs(request: PublicInstanceRequest, upstreamPath
   }
 
   return request.method === 'html' ? 7000 : 5000;
+}
+
+function getOldRedditHtmlFallbackTimeoutMs(upstreamPath: string): number {
+  return isCommentThreadPath(upstreamPath) ? 12_000 : OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS;
 }
 
 function parsePublicInstancePayload(
@@ -3333,8 +3938,10 @@ async function fetchFromPublicInstance(
       }
 
       const finalPayload = applyMediaSourcePreference(normalizedPayload, base, mediaPref);
+      const normalizedBody = JSON.stringify(finalPayload);
+      const quality = getPayloadQualityScore(finalPayload, upstreamPath);
 
-      return new Response(JSON.stringify(finalPayload), {
+      return new Response(normalizedBody, {
         status: 200,
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -3342,6 +3949,7 @@ async function fetchFromPublicInstance(
           'X-RedAlt-Fallback': 'public-instance',
           'X-RedAlt-Instance': base,
           'X-RedAlt-Instance-Method': request.method,
+          'X-RedAlt-Payload-Quality': String(quality),
         },
       });
     } catch {
@@ -3352,13 +3960,120 @@ async function fetchFromPublicInstance(
   return null;
 }
 
+async function fetchViaOldRedditHtml(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  mediaPref: MediaPref,
+): Promise<Response | null> {
+  const htmlPath = buildPublicHtmlPath(upstreamPath);
+
+  if (!htmlPath) {
+    return null;
+  }
+
+  const request: PublicInstanceRequest = {
+    method: 'html',
+    path: htmlPath,
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      `https://old.reddit.com${htmlPath}`,
+      {
+        headers: {
+          Accept: getPublicInstanceAccept('html'),
+          'User-Agent': PUBLIC_INSTANCE_BROWSER_USER_AGENT,
+        },
+      },
+      getOldRedditHtmlFallbackTimeoutMs(upstreamPath),
+    );
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const body = await response.text();
+    let normalizedPayload = parsePublicInstancePayload(
+      body,
+      response.headers.get('content-type'),
+      request,
+      'https://old.reddit.com',
+      upstreamPath,
+      mediaPref,
+    );
+
+    if (isCommentThreadPath(upstreamPath)) {
+      normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options);
+    }
+
+    if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
+      return null;
+    }
+
+    const finalPayload = applyMediaSourcePreference(normalizedPayload, 'https://old.reddit.com', mediaPref);
+    const normalizedBody = JSON.stringify(finalPayload);
+    const quality = getPayloadQualityScore(finalPayload, upstreamPath);
+
+    return new Response(normalizedBody, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'X-RedAlt-Fallback': 'old-reddit-html',
+        'X-RedAlt-Instance': 'https://old.reddit.com',
+        'X-RedAlt-Instance-Method': 'html',
+        'X-RedAlt-Payload-Quality': String(quality),
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
 function raceUsablePublicInstance(
   bases: string[],
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
   mediaPref: MediaPref,
-): Promise<{ base: string; response: Response } | null> {
+): Promise<{ base: string; response: Response; quality: number } | null> {
+  if (isCommentThreadPath(upstreamPath)) {
+    return Promise.all(
+      bases.map(async (base) => {
+        try {
+          const response = await fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref);
+
+          if (response) {
+            markPublicInstanceSuccess(base);
+            return {
+              base,
+              response,
+              quality: Number(response.headers.get('X-RedAlt-Payload-Quality') ?? '0') || 0,
+            };
+          }
+
+          markPublicInstanceFailure(base);
+        } catch {
+          markPublicInstanceFailure(base);
+        }
+
+        return null;
+      }),
+    ).then((results) => {
+      const winners = results.filter(
+        (result): result is { base: string; response: Response; quality: number } => Boolean(result),
+      );
+
+      if (winners.length === 0) {
+        return null;
+      }
+
+      winners.sort((left, right) => right.quality - left.quality);
+      return winners[0];
+    });
+  }
+
   return new Promise((resolve) => {
     if (bases.length === 0) {
       resolve(null);
@@ -3368,7 +4083,7 @@ function raceUsablePublicInstance(
     let remaining = bases.length;
     let settled = false;
 
-    const finish = (value: { base: string; response: Response } | null) => {
+    const finish = (value: { base: string; response: Response; quality: number } | null) => {
       if (!settled) {
         settled = true;
         resolve(value);
@@ -3380,7 +4095,11 @@ function raceUsablePublicInstance(
         .then((response) => {
           if (response) {
             markPublicInstanceSuccess(base);
-            finish({ base, response });
+            finish({
+              base,
+              response,
+              quality: Number(response.headers.get('X-RedAlt-Payload-Quality') ?? '0') || 0,
+            });
           } else {
             markPublicInstanceFailure(base);
           }
@@ -3413,6 +4132,7 @@ async function fetchViaPublicInstances(
   const { candidates, skipped } = getPublicInstanceCandidates(urls);
   const attempted: string[] = [];
   const batchSize = 8;
+  let bestWinner: { base: string; response: Response; quality: number } | null = null;
 
   for (let index = 0; index < candidates.length; index += batchSize) {
     const batch = candidates.slice(index, index + batchSize);
@@ -3420,7 +4140,11 @@ async function fetchViaPublicInstances(
 
     const winner = await raceUsablePublicInstance(batch, upstreamPath, env, options, mediaPref);
 
-    if (winner?.response) {
+    if (!winner?.response) {
+      continue;
+    }
+
+    if (!isCommentThreadPath(upstreamPath) || winner.quality >= COMMENT_THREAD_GOOD_PAYLOAD_SCORE) {
       winner.response.headers.set('X-RedAlt-Instance-Attempts', formatInstanceHeader(attempted));
 
       if (skipped.length > 0) {
@@ -3429,6 +4153,20 @@ async function fetchViaPublicInstances(
 
       return winner.response;
     }
+
+    if (!bestWinner || winner.quality > bestWinner.quality) {
+      bestWinner = winner;
+    }
+  }
+
+  if (bestWinner?.response) {
+    bestWinner.response.headers.set('X-RedAlt-Instance-Attempts', formatInstanceHeader(attempted));
+
+    if (skipped.length > 0) {
+      bestWinner.response.headers.set('X-RedAlt-Skipped-Instances', formatInstanceHeader(skipped));
+    }
+
+    return bestWinner.response;
   }
 
   return null;

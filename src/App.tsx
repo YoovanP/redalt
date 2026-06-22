@@ -141,6 +141,7 @@ function AppLayout() {
             <Route path="/" element={<HomePage />} />
             <Route path="/r/:name" element={<SubredditPage />} />
             <Route path="/r/:name/comments/:id" element={<PostDetailPage />} />
+            <Route path="/r/:name/comments/:id/:slug" element={<PostDetailPage />} />
             <Route path="/u/:username" element={<UserPage />} />
             <Route path="/user/:username" element={<UserPage />} />
             <Route path="/search" element={<SearchPage />} />

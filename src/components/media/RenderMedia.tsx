@@ -42,9 +42,12 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
     return (
       <ExternalEmbed
         embedUrl={media.embedUrl}
+        embedHtml={media.embedHtml}
         thumbnailUrl={media.thumbnailUrl}
         outboundUrl={media.outboundUrl}
         provider={media.provider}
+        embedWidth={media.embedWidth}
+        embedHeight={media.embedHeight}
         showOutboundLink={!isShorts}
       />
     );

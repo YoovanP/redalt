@@ -20,9 +20,17 @@ const UI_SETTINGS_KEY = 'redalt.uiSettings';
 const PAGE_SIZE = 8;
 const REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS = 30 * 1000;
 const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
+const POST_CACHE_KEY = 'redalt.postCache';
+const POST_CACHE_LIMIT = 120;
+const POST_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 12_000;
+const DETAIL_FETCH_TIMEOUT_MS = 40_000;
+const DETAIL_RECOVERY_TIMEOUT_MS = 25_000;
+const DETAIL_FALLBACK_PAGE_SIZE = 40;
 
 let sessionRedditBase = readSessionRedditBase();
 const redditBaseHealth = new Map<string, { failureCount: number; retryAfter: number }>();
+const postCache = readSessionPostCache();
 
 function normalizeBase(base: string): string {
   const trimmed = base.trim();
@@ -156,6 +164,11 @@ export type FetchListingOptions = {
   topTimeRange?: TopTimeRange;
 };
 
+type CachedPostEntry = {
+  savedAt: number;
+  post: RedditPostData;
+};
+
 function notifyApiStatus(level: 'ok' | 'warn' | 'error', message: string): void {
   if (typeof window === 'undefined') {
     return;
@@ -201,6 +214,437 @@ function canUseSessionStorage(): boolean {
   } catch {
     return false;
   }
+}
+
+function readSessionPostCache(): Map<string, CachedPostEntry> {
+  const cache = new Map<string, CachedPostEntry>();
+
+  if (!canUseSessionStorage()) {
+    return cache;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(POST_CACHE_KEY);
+
+    if (!raw) {
+      return cache;
+    }
+
+    const parsed = JSON.parse(raw) as Array<{ savedAt?: unknown; post?: RedditPostData }>;
+    const now = Date.now();
+
+    for (const entry of Array.isArray(parsed) ? parsed : []) {
+      const post = entry?.post;
+      const savedAt = typeof entry?.savedAt === 'number' ? entry.savedAt : 0;
+
+      if (!post?.id || !post.subreddit || now - savedAt > POST_CACHE_MAX_AGE_MS) {
+        continue;
+      }
+
+      cache.set(post.id, { savedAt, post });
+    }
+  } catch {
+    return new Map<string, CachedPostEntry>();
+  }
+
+  return cache;
+}
+
+function writeSessionPostCache(): void {
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    const entries = Array.from(postCache.values())
+      .sort((left, right) => right.savedAt - left.savedAt)
+      .slice(0, POST_CACHE_LIMIT);
+
+    postCache.clear();
+
+    for (const entry of entries) {
+      postCache.set(entry.post.id, entry);
+    }
+
+    window.sessionStorage.setItem(POST_CACHE_KEY, JSON.stringify(entries));
+  } catch {
+    // Ignore storage failures and keep using the in-memory cache.
+  }
+}
+
+function getUrlHostname(url: string | undefined): string {
+  try {
+    return new URL(url ?? '').hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isRedditMediaHost(hostname: string): boolean {
+  return (
+    hostname === 'i.redd.it' ||
+    hostname === 'preview.redd.it' ||
+    hostname === 'v.redd.it' ||
+    hostname.endsWith('.redd.it') ||
+    hostname.endsWith('redditmedia.com') ||
+    hostname.endsWith('reddit.com')
+  );
+}
+
+function isCommentPermalinkUrl(url: string | undefined, postId: string): boolean {
+  if (!url || !postId) {
+    return false;
+  }
+
+  try {
+    return new URL(url).pathname.toLowerCase().includes('/comments/' + postId.toLowerCase());
+  } catch {
+    return url.toLowerCase().includes('/comments/' + postId.toLowerCase());
+  }
+}
+
+function isKnownRedditHostedVideoUrl(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    return hostname === 'v.redd.it' || (hostname.endsWith('reddit.com') && /^\/video\/[^/?#]+/i.test(parsed.pathname));
+  } catch {
+    return /https?:\/\/v\.redd\.it\//i.test(url) || /https?:\/\/[^/]*reddit\.com\/video\//i.test(url);
+  }
+}
+
+function hasNonEmptyObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
+}
+
+function hasPreviewImages(post: RedditPostData): boolean {
+  return Array.isArray(post.preview?.images) && post.preview.images.length > 0;
+}
+
+function getPostOutboundUrl(post: RedditPostData | null | undefined): string {
+  return post ? post.url_overridden_by_dest ?? post.url ?? '' : '';
+}
+
+function hasPlayableVideoMedia(post: RedditPostData | null | undefined): boolean {
+  if (!post) {
+    return false;
+  }
+
+  const outboundUrl = getPostOutboundUrl(post);
+
+  return Boolean(
+    (Boolean(post.is_video || post.post_hint === 'hosted:video') &&
+      Boolean(post.secure_media?.reddit_video?.fallback_url || post.media?.reddit_video?.fallback_url)) ||
+      isKnownRedditHostedVideoUrl(outboundUrl),
+  );
+}
+
+function hasRenderableEmbed(post: RedditPostData | null | undefined): boolean {
+  if (!post) {
+    return false;
+  }
+
+  return Boolean(
+    post.secure_media?.oembed?.html ||
+      post.media?.oembed?.html ||
+      post.secure_media_embed?.content ||
+      post.media_embed?.content,
+  );
+}
+
+function hasGalleryMedia(post: RedditPostData | null | undefined): boolean {
+  return Boolean(post?.is_gallery && post.gallery_data?.items?.length && hasNonEmptyObject(post.media_metadata));
+}
+
+function hasRenderableExternalOutbound(post: RedditPostData | null | undefined): boolean {
+  if (!post) {
+    return false;
+  }
+
+  const outboundUrl = getPostOutboundUrl(post);
+  const hostname = getUrlHostname(outboundUrl);
+
+  return Boolean(
+    outboundUrl && !isRedditMediaHost(hostname) && !isCommentPermalinkUrl(outboundUrl, post.id),
+  );
+}
+
+function isPreviewOnlyPlaceholderDetail(post: RedditPostData | null | undefined): boolean {
+  if (!post || post.is_self) {
+    return false;
+  }
+
+  const outboundUrl = getPostOutboundUrl(post);
+  const hostname = getUrlHostname(outboundUrl);
+  const usesDiscussionUrl = isCommentPermalinkUrl(outboundUrl, post.id);
+  const pointsToRedditHost = Boolean(outboundUrl) && isRedditMediaHost(hostname);
+
+  return (
+    hasPreviewImages(post) &&
+    !hasPlayableVideoMedia(post) &&
+    !hasRenderableEmbed(post) &&
+    !hasGalleryMedia(post) &&
+    !hasRenderableExternalOutbound(post) &&
+    (!outboundUrl || usesDiscussionUrl || pointsToRedditHost)
+  );
+}
+
+function needsDetailMediaRecovery(post: RedditPostData | null | undefined): boolean {
+  if (!post) {
+    return true;
+  }
+
+  return getRawPostMediaStrength(post) < 3 || isPreviewOnlyPlaceholderDetail(post);
+}
+
+function candidateImprovesMedia(current: RedditPostData, candidate: RedditPostData): boolean {
+  const currentStrength = getRawPostMediaStrength(current);
+  const candidateStrength = getRawPostMediaStrength(candidate);
+
+  if (candidateStrength > currentStrength) {
+    return true;
+  }
+
+  if (candidateStrength < currentStrength && !isPreviewOnlyPlaceholderDetail(current)) {
+    return false;
+  }
+
+  if (hasPlayableVideoMedia(candidate) && !hasPlayableVideoMedia(current)) {
+    return true;
+  }
+
+  if (hasRenderableEmbed(candidate) && !hasRenderableEmbed(current)) {
+    return true;
+  }
+
+  if (hasGalleryMedia(candidate) && !hasGalleryMedia(current)) {
+    return true;
+  }
+
+  if (hasRenderableExternalOutbound(candidate) && !hasRenderableExternalOutbound(current)) {
+    return true;
+  }
+
+  return false;
+}
+
+function getRawPostMediaStrength(post: RedditPostData | null | undefined): number {
+  if (!post) {
+    return -1;
+  }
+
+  const outboundUrl = getPostOutboundUrl(post);
+  const hostname = getUrlHostname(outboundUrl);
+  const hasExternalOutbound = Boolean(
+    outboundUrl && !isRedditMediaHost(hostname) && !isCommentPermalinkUrl(outboundUrl, post.id),
+  );
+  const hasVideo = hasPlayableVideoMedia(post);
+  const hasEmbed = hasRenderableEmbed(post);
+  const hasGallery = hasGalleryMedia(post);
+  const hasImage =
+    post.post_hint === 'image' ||
+    hasPreviewImages(post) ||
+    Boolean(post.thumbnail && /^https?:\/\//i.test(post.thumbnail));
+
+  if (hasVideo) {
+    return 5;
+  }
+
+  if (hasEmbed) {
+    return 4;
+  }
+
+  if (hasGallery) {
+    return 4;
+  }
+
+  if (hasImage) {
+    return 3;
+  }
+
+  if (hasExternalOutbound) {
+    return 2;
+  }
+
+  return post.is_self || post.selftext.trim() ? 1 : 0;
+}
+
+function mergePostMediaFields(detailPost: RedditPostData, mediaPost: RedditPostData): RedditPostData {
+  return {
+    ...detailPost,
+    link_flair_text: detailPost.link_flair_text ?? mediaPost.link_flair_text,
+    url: mediaPost.url || detailPost.url,
+    url_overridden_by_dest: mediaPost.url_overridden_by_dest ?? detailPost.url_overridden_by_dest,
+    domain: mediaPost.domain || detailPost.domain,
+    thumbnail: mediaPost.thumbnail ?? detailPost.thumbnail,
+    preview: hasPreviewImages(mediaPost) ? mediaPost.preview : detailPost.preview,
+    gallery_data: mediaPost.gallery_data ?? detailPost.gallery_data,
+    media_metadata: mediaPost.media_metadata ?? detailPost.media_metadata,
+    media: hasNonEmptyObject(mediaPost.media) ? mediaPost.media : detailPost.media,
+    secure_media: hasNonEmptyObject(mediaPost.secure_media) ? mediaPost.secure_media : detailPost.secure_media,
+    media_embed: mediaPost.media_embed ?? detailPost.media_embed,
+    secure_media_embed: mediaPost.secure_media_embed ?? detailPost.secure_media_embed,
+    is_self: mediaPost.is_self,
+    is_gallery: mediaPost.is_gallery ?? detailPost.is_gallery,
+    is_video: mediaPost.is_video ?? detailPost.is_video,
+    post_hint: mediaPost.post_hint ?? detailPost.post_hint,
+  };
+}
+
+function chooseBetterCachedPost(current: RedditPostData, candidate: RedditPostData): RedditPostData {
+  const currentStrength = getRawPostMediaStrength(current);
+  const candidateStrength = getRawPostMediaStrength(candidate);
+
+  if (candidateImprovesMedia(current, candidate)) {
+    return candidate;
+  }
+
+  if (candidateStrength < currentStrength && !candidateImprovesMedia(candidate, current)) {
+    return current;
+  }
+
+  if ((candidate.num_comments ?? 0) > (current.num_comments ?? 0) || (candidate.score ?? 0) > (current.score ?? 0)) {
+    return candidate;
+  }
+
+  return current;
+}
+
+function rememberPosts(posts: RedditPostData[]): void {
+  let changed = false;
+  const now = Date.now();
+
+  for (const post of posts) {
+    if (!post?.id || !post.subreddit) {
+      continue;
+    }
+
+    const existing = postCache.get(post.id);
+    const best = existing ? chooseBetterCachedPost(existing.post, post) : post;
+
+    postCache.set(post.id, {
+      savedAt: now,
+      post: best,
+    });
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  writeSessionPostCache();
+}
+
+function getCachedPost(postId: string): RedditPostData | null {
+  const cached = postCache.get(postId);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - cached.savedAt > POST_CACHE_MAX_AGE_MS) {
+    postCache.delete(postId);
+    writeSessionPostCache();
+    return null;
+  }
+
+  return cached.post;
+}
+
+function useRicherPostMedia(detailPost: RedditPostData, candidate: RedditPostData | null): RedditPostData {
+  if (!candidate || candidate.id !== detailPost.id) {
+    return detailPost;
+  }
+
+  return candidateImprovesMedia(detailPost, candidate) ? mergePostMediaFields(detailPost, candidate) : detailPost;
+}
+
+async function fetchListingFallback(
+  subreddit: string,
+  sort: ListingSort,
+  postId: string,
+  topTimeRange: TopTimeRange = 'day',
+): Promise<RedditPostData | null> {
+  const queryParts = ['raw_json=1', 'limit=' + DETAIL_FALLBACK_PAGE_SIZE];
+
+  if (sort === 'top') {
+    queryParts.push('t=' + encodeURIComponent(topTimeRange));
+  }
+
+  const listing = await fetchReddit<RedditListingResponse>(
+    '/r/' + encodeURIComponent(subreddit) + '/' + sort + '.json?' + queryParts.join('&'),
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+  );
+  const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
+  rememberPosts(posts);
+
+  return posts.find((post) => post.id === postId) ?? null;
+}
+
+async function fetchUserFallback(author: string, postId: string): Promise<RedditPostData | null> {
+  const cleanedAuthor = normalizeUserName(author);
+
+  if (!cleanedAuthor || cleanedAuthor === '[deleted]' || cleanedAuthor === '[unknown]') {
+    return null;
+  }
+
+  const listing = await fetchReddit<RedditListingResponse>(
+    '/user/' + encodeURIComponent(cleanedAuthor) + '/submitted.json?raw_json=1&limit=' + DETAIL_FALLBACK_PAGE_SIZE + '&sort=new',
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+  );
+  const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
+  rememberPosts(posts);
+
+  return posts.find((post) => post.id === postId) ?? null;
+}
+
+async function fetchSearchFallback(subreddit: string, title: string, postId: string): Promise<RedditPostData | null> {
+  const query = title.trim();
+
+  if (!query) {
+    return null;
+  }
+
+  const listing = await fetchReddit<RedditListingResponse>(
+    '/r/' + encodeURIComponent(subreddit) + '/search.json?raw_json=1&restrict_sr=1&sort=relevance&limit=10&q=' + encodeURIComponent(query),
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+  );
+  const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
+  rememberPosts(posts);
+  return posts.find((post) => post.id === postId) ?? null;
+}
+
+async function recoverPostFromFallbackSources(
+  subreddit: string,
+  postId: string,
+  author?: string,
+  title?: string,
+): Promise<RedditPostData | null> {
+  const attempts = [
+    title ? () => fetchSearchFallback(subreddit, title, postId) : null,
+    () => fetchListingFallback(subreddit, 'new', postId),
+    () => fetchUserFallback(author ?? '', postId),
+    () => fetchListingFallback(subreddit, 'hot', postId),
+    () => fetchListingFallback(subreddit, 'top', postId, 'week'),
+  ].filter((attempt): attempt is () => Promise<RedditPostData | null> => Boolean(attempt));
+
+  const results = await Promise.all(
+    attempts.map(async (attempt) => {
+      try {
+        return await attempt();
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  return results.find((post): post is RedditPostData => Boolean(post)) ?? null;
 }
 
 function isConfiguredRedditBase(base: string): boolean {
@@ -331,16 +775,21 @@ function appendMediaPref(path: string): string {
   return `${path}${separator}redalt_media=reddit`;
 }
 
-async function fetchReddit<T>(path: string): Promise<T> {
+type FetchRedditOptions = {
+  timeoutMs?: number;
+};
+
+async function fetchReddit<T>(path: string, options: FetchRedditOptions = {}): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
   const requestPath = appendMediaPref(path);
+  const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
     for (const base of getRedditBaseCandidates()) {
       try {
         const controller = new AbortController();
-        const timeoutId = globalThis.setTimeout(() => controller.abort(), 12000);
+        const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
         const response = await fetch(`${base}${requestPath}`, {
           signal: controller.signal,
@@ -403,7 +852,7 @@ async function fetchReddit<T>(path: string): Promise<T> {
       }
     }
 
-    if (lastApiError && !shouldRetryApiError(lastApiError)) {
+    if (lastApiError && !shouldRetryApiError(lastApiError) && !isSourceSwitchableError(lastApiError)) {
       break;
     }
 
@@ -462,9 +911,12 @@ export async function fetchSubredditListing(
   const data = await fetchReddit<RedditListingResponse>(
     `/r/${encodeURIComponent(subreddit)}/${sort}.json?${queryParts.join('&')}`,
   );
+  const posts = data.data.children.map((item) => item.data);
+  rememberPosts(posts);
+
 
   return {
-    posts: data.data.children.map((item) => item.data),
+    posts,
     after: data.data.after,
   };
 }
@@ -490,9 +942,12 @@ export async function fetchUserListing(
   const data = await fetchReddit<RedditListingResponse>(
     `/user/${encodeURIComponent(user)}/submitted.json?${queryParts.join('&')}&sort=${encodeURIComponent(sort)}`,
   );
+  const posts = data.data.children.map((item) => item.data);
+  rememberPosts(posts);
+
 
   return {
-    posts: data.data.children.map((item) => item.data),
+    posts,
     after: data.data.after,
   };
 }
@@ -747,6 +1202,7 @@ export async function fetchGlobalSearch(
   const posts = (postsSource?.data.children ?? [])
     .filter((item) => item.kind === 't3')
     .map((item) => item.data);
+  rememberPosts(posts);
 
   const subreddits: SearchSubredditResult[] = [];
 
@@ -832,18 +1288,51 @@ export async function fetchPostDetail(
   postId: string,
 ): Promise<PostDetailResult> {
   const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
-  const response = await fetchReddit<RedditCommentsResponse>(
-    `/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}.json?raw_json=1&limit=100`,
-  );
+  const cachedPost = getCachedPost(postId);
+  const cachedTitle = cachedPost?.title;
 
-  const post = response[0]?.data?.children?.[0]?.data;
+  try {
+    const response = await fetchReddit<RedditCommentsResponse>(
+      `/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}.json?raw_json=1`,
+      { timeoutMs: DETAIL_FETCH_TIMEOUT_MS },
+    );
 
-  if (!post) {
-    throw new RedditApiError('Post not found.', 404);
+    const detailPost = response[0]?.data?.children?.[0]?.data;
+
+    if (!detailPost) {
+      throw new RedditApiError('Post not found.', 404);
+    }
+
+    let post = useRicherPostMedia(detailPost, cachedPost);
+
+    if (needsDetailMediaRecovery(post)) {
+      const recoveredPost = await recoverPostFromFallbackSources(
+        subreddit,
+        postId,
+        detailPost.author || cachedPost?.author,
+        detailPost.title || cachedTitle,
+      );
+
+      post = useRicherPostMedia(post, recoveredPost);
+    }
+
+    rememberPosts([post]);
+
+    return {
+      post,
+      comments: response[1] ? extractComments(response[1]) : [],
+    };
+  } catch (error) {
+    const fallbackPost = cachedPost ?? (await recoverPostFromFallbackSources(subreddit, postId, undefined, cachedTitle));
+
+    if (fallbackPost) {
+      rememberPosts([fallbackPost]);
+      return {
+        post: fallbackPost,
+        comments: [],
+      };
+    }
+
+    throw error;
   }
-
-  return {
-    post,
-    comments: response[1] ? extractComments(response[1]) : [],
-  };
 }
