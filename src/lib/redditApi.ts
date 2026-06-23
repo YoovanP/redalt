@@ -9,11 +9,11 @@ import type {
 } from '../types/reddit';
 
 const DEFAULT_REDDIT_BASE = '/api/reddit';
-const DEFAULT_REDDIT_BASES = [
-  'https://redalt.pages.dev/api/reddit',
+const REMOTE_REDDIT_BASES = [
   'https://redalt-vercel.onrender.com/api/reddit',
-  DEFAULT_REDDIT_BASE,
-];
+  'https://redalt.pages.dev/api/reddit',
+] as const;
+const DEFAULT_REDDIT_BASES = [...REMOTE_REDDIT_BASES, DEFAULT_REDDIT_BASE];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
 const UI_SETTINGS_KEY = 'redalt.uiSettings';
@@ -52,23 +52,62 @@ function isViteDevServer(): boolean {
   return import.meta.env.DEV;
 }
 
+function resolveBaseKey(base: string): string {
+  const normalized = normalizeBase(base);
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      return normalizeBase(new URL(normalized, window.location.origin).toString()).toLowerCase();
+    } catch {
+      return normalized.toLowerCase();
+    }
+  }
+
+  return normalized.toLowerCase();
+}
+
+function isSameOriginRedditBase(base: string): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return resolveBaseKey(base) === resolveBaseKey(DEFAULT_REDDIT_BASE);
+}
+
+function shouldAvoidPersistingRedditBase(base: string): boolean {
+  return isCloudflarePagesHost() && isSameOriginRedditBase(base);
+}
+
+function getDefaultRedditBases(): string[] {
+  if (isViteDevServer()) {
+    return [...REMOTE_REDDIT_BASES];
+  }
+
+  if (isCloudflarePagesHost()) {
+    return [REMOTE_REDDIT_BASES[0], DEFAULT_REDDIT_BASE];
+  }
+
+  return [...DEFAULT_REDDIT_BASES];
+}
+
 function resolveRedditBases(rawBases: string | undefined): string[] {
   const configuredBases = (rawBases ?? '')
     .split(',')
     .map((base) => normalizeBase(base))
     .filter((base) => base.length > 0);
-  const bases =
-    configuredBases.length === 0
-      ? DEFAULT_REDDIT_BASES.filter((base) => !isViteDevServer() || base !== DEFAULT_REDDIT_BASE)
-      : configuredBases;
+  const bases = configuredBases.length === 0 ? getDefaultRedditBases() : configuredBases;
   const seen = new Set<string>();
   const deduped: string[] = [];
 
   for (const base of bases) {
     const normalized = normalizeBase(base);
-    const key = normalized.toLowerCase();
+    const key = resolveBaseKey(normalized);
 
-    if (!normalized || seen.has(key)) {
+    if (!normalized || !key || seen.has(key)) {
       continue;
     }
 
@@ -654,8 +693,8 @@ async function recoverPostFromFallbackSources(
 }
 
 function isConfiguredRedditBase(base: string): boolean {
-  const normalized = normalizeBase(base).toLowerCase();
-  return REDDIT_BASES.some((candidate) => candidate.toLowerCase() === normalized);
+  const key = resolveBaseKey(base);
+  return key.length > 0 && REDDIT_BASES.some((candidate) => resolveBaseKey(candidate) === key);
 }
 
 function readSessionRedditBase(): string | null {
@@ -665,7 +704,13 @@ function readSessionRedditBase(): string | null {
 
   try {
     const storedBase = normalizeBase(window.sessionStorage.getItem(SESSION_REDDIT_BASE_KEY) ?? '');
-    return storedBase && isConfiguredRedditBase(storedBase) ? storedBase : null;
+
+    if (!storedBase || !isConfiguredRedditBase(storedBase) || shouldAvoidPersistingRedditBase(storedBase)) {
+      window.sessionStorage.removeItem(SESSION_REDDIT_BASE_KEY);
+      return null;
+    }
+
+    return storedBase;
   } catch {
     return null;
   }
@@ -674,7 +719,8 @@ function readSessionRedditBase(): string | null {
 function writeSessionRedditBase(base: string): void {
   const normalized = normalizeBase(base);
 
-  if (!normalized || !isConfiguredRedditBase(normalized)) {
+  if (!normalized || !isConfiguredRedditBase(normalized) || shouldAvoidPersistingRedditBase(normalized)) {
+    clearSessionRedditBase(base);
     return;
   }
 
@@ -692,17 +738,23 @@ function writeSessionRedditBase(base: string): void {
 }
 
 function clearSessionRedditBase(base: string): void {
-  if (sessionRedditBase !== normalizeBase(base)) {
-    return;
-  }
+  const key = resolveBaseKey(base);
 
-  sessionRedditBase = null;
+  if (sessionRedditBase && resolveBaseKey(sessionRedditBase) === key) {
+    sessionRedditBase = null;
+  }
 
   if (!canUseSessionStorage()) {
     return;
   }
 
   try {
+    const storedBase = normalizeBase(window.sessionStorage.getItem(SESSION_REDDIT_BASE_KEY) ?? '');
+
+    if (!storedBase || resolveBaseKey(storedBase) !== key) {
+      return;
+    }
+
     window.sessionStorage.removeItem(SESSION_REDDIT_BASE_KEY);
   } catch {
     // Nothing else to clear.
@@ -710,11 +762,11 @@ function clearSessionRedditBase(base: string): void {
 }
 
 function markRedditBaseSuccess(base: string): void {
-  redditBaseHealth.delete(normalizeBase(base).toLowerCase());
+  redditBaseHealth.delete(resolveBaseKey(base));
 }
 
 function markRedditBaseFailure(base: string): void {
-  const key = normalizeBase(base).toLowerCase();
+  const key = resolveBaseKey(base);
   const previous = redditBaseHealth.get(key);
   const failureCount = Math.min((previous?.failureCount ?? 0) + 1, 5);
   const cooldown = Math.min(
@@ -729,20 +781,21 @@ function markRedditBaseFailure(base: string): void {
 }
 
 function isRedditBaseCoolingDown(base: string): boolean {
-  const health = redditBaseHealth.get(normalizeBase(base).toLowerCase());
+  const health = redditBaseHealth.get(resolveBaseKey(base));
   return Boolean(health && health.retryAfter > Date.now());
 }
 
 function getRedditBaseCandidates(): string[] {
   let candidates: string[];
 
-  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase)) {
+  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase(sessionRedditBase)) {
     sessionRedditBase = null;
     candidates = REDDIT_BASES;
   } else {
+    const sessionKey = resolveBaseKey(sessionRedditBase);
     candidates = [
       sessionRedditBase,
-      ...REDDIT_BASES.filter((base) => base.toLowerCase() !== sessionRedditBase?.toLowerCase()),
+      ...REDDIT_BASES.filter((base) => resolveBaseKey(base) !== sessionKey),
     ];
   }
 

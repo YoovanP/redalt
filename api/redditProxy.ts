@@ -3670,6 +3670,39 @@ async function fetchRedlibDetailMediaData(
   return detailData && hasUsableMediaFields(detailData) ? detailData : null;
 }
 
+async function enrichCommentThreadMediaFromRedlib(
+  payload: unknown,
+  base: string,
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  mediaPref: MediaPref,
+): Promise<unknown> {
+  const postData = getCommentThreadPostData(payload);
+
+  if (!postData || hasPlayableMediaFields(postData)) {
+    return payload;
+  }
+
+  const detailPath = buildPublicHtmlPath(upstreamPath);
+
+  if (!detailPath) {
+    return payload;
+  }
+
+  try {
+    const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref);
+
+    if (detailData) {
+      mergeRedlibMediaFields(postData, detailData);
+    }
+  } catch {
+    // Keep the original payload when Redlib detail enrichment fails.
+  }
+
+  return payload;
+}
+
 async function enrichCommentThreadMediaFromOldReddit(
   payload: unknown,
   upstreamPath: string,
@@ -3921,6 +3954,17 @@ async function fetchFromPublicInstance(
       );
 
       if (isCommentThreadPath(upstreamPath)) {
+        if (request.method === 'html' && looksRedlibHtml(body)) {
+          normalizedPayload = await enrichCommentThreadMediaFromRedlib(
+            normalizedPayload,
+            base,
+            upstreamPath,
+            env,
+            options,
+            mediaPref,
+          );
+        }
+
         normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options);
       }
 
