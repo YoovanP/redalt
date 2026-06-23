@@ -70,16 +70,10 @@ function resolveBaseKey(base: string): string {
   return normalized.toLowerCase();
 }
 
-function isSameOriginRedditBase(base: string): boolean {
-  if (typeof window === 'undefined') {
-    return false;
-  }
-
-  return resolveBaseKey(base) === resolveBaseKey(DEFAULT_REDDIT_BASE);
-}
-
-function shouldAvoidPersistingRedditBase(base: string): boolean {
-  return isCloudflarePagesHost() && isSameOriginRedditBase(base);
+function shouldAvoidPersistingRedditBase(): boolean {
+  // On Pages deployments, the same-origin API is the most deployment-aligned backend.
+  // Keep it pinned for the session once it succeeds instead of falling back to remote-first.
+  return false;
 }
 
 function getDefaultRedditBases(): string[] {
@@ -88,7 +82,7 @@ function getDefaultRedditBases(): string[] {
   }
 
   if (isCloudflarePagesHost()) {
-    return [REMOTE_REDDIT_BASES[0], DEFAULT_REDDIT_BASE];
+    return [DEFAULT_REDDIT_BASE, ...REMOTE_REDDIT_BASES];
   }
 
   return [...DEFAULT_REDDIT_BASES];
@@ -705,7 +699,7 @@ function readSessionRedditBase(): string | null {
   try {
     const storedBase = normalizeBase(window.sessionStorage.getItem(SESSION_REDDIT_BASE_KEY) ?? '');
 
-    if (!storedBase || !isConfiguredRedditBase(storedBase) || shouldAvoidPersistingRedditBase(storedBase)) {
+    if (!storedBase || !isConfiguredRedditBase(storedBase) || shouldAvoidPersistingRedditBase()) {
       window.sessionStorage.removeItem(SESSION_REDDIT_BASE_KEY);
       return null;
     }
@@ -719,7 +713,7 @@ function readSessionRedditBase(): string | null {
 function writeSessionRedditBase(base: string): void {
   const normalized = normalizeBase(base);
 
-  if (!normalized || !isConfiguredRedditBase(normalized) || shouldAvoidPersistingRedditBase(normalized)) {
+  if (!normalized || !isConfiguredRedditBase(normalized) || shouldAvoidPersistingRedditBase()) {
     clearSessionRedditBase(base);
     return;
   }
@@ -788,7 +782,7 @@ function isRedditBaseCoolingDown(base: string): boolean {
 function getRedditBaseCandidates(): string[] {
   let candidates: string[];
 
-  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase(sessionRedditBase)) {
+  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase()) {
     sessionRedditBase = null;
     candidates = REDDIT_BASES;
   } else {
