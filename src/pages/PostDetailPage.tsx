@@ -6,7 +6,7 @@ import { SkeletonLoader } from '../components/SkeletonLoader';
 import { StateView } from '../components/StateView';
 import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
-import { fetchPostDetail } from '../lib/redditApi';
+import { fetchPostDetail, getRememberedPost } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import type { NormalizedPost, PostDetailResult, RedditComment } from '../types/reddit';
 
@@ -127,16 +127,20 @@ export function PostDetailPage() {
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [saved, setSaved] = useState(false);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
+  const rememberedPost = useMemo(() => {
+    const post = getRememberedPost(id);
+    return post ? normalizePost(post) : null;
+  }, [id]);
   const fallbackPost = useMemo(() => {
     const state = location.state as PostDetailRouteState | null;
     const post = state?.fallbackPost;
 
-    if (!post || post.id !== id) {
-      return null;
+    if (post && post.id === id) {
+      return post;
     }
 
-    return post;
-  }, [id, location.state]);
+    return rememberedPost;
+  }, [id, location.state, rememberedPost]);
 
   useEffect(() => {
     let ignore = false;
@@ -231,11 +235,11 @@ export function PostDetailPage() {
   return (
     <section className="detail-page">
       <p>
-        <Link to={`/r/${name}`}>← Back to /r/{name}</Link>
+        <Link to={`/r/${name}`}>{"<"} Back to /r/{name}</Link>
       </p>
       <h2>{normalized.title}</h2>
       <p className="meta">
-        <Link to={`/u/${normalized.author}`}>u/{normalized.author}</Link> · {normalized.score} points · {normalized.numComments} comments
+        <Link to={`/u/${normalized.author}`}>u/{normalized.author}</Link> | {normalized.score} points | {normalized.numComments} comments
       </p>
 
       <RenderMedia post={normalized} expanded />
