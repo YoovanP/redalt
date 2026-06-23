@@ -509,7 +509,7 @@ function getRawPostMediaStrength(post: RedditPostData | null | undefined): numbe
   }
 
   if (hasExternalOutbound) {
-    return 2;
+    return 3;
   }
 
   return post.is_self || post.selftext.trim() ? 1 : 0;
