@@ -82,14 +82,6 @@ function shouldAvoidPersistingRedditBase(base: string): boolean {
   return isCloudflarePagesHost() && isSameOriginRedditBase(base);
 }
 
-function isCommentThreadRequestPath(path: string): boolean {
-  return /\/comments\/[^/?#]+\.json(?:[?#]|$)/i.test(path);
-}
-
-function shouldSkipRedditBaseForRequest(base: string, requestPath: string): boolean {
-  return isCloudflarePagesHost() && isSameOriginRedditBase(base) && isCommentThreadRequestPath(requestPath);
-}
-
 function getDefaultRedditBases(): string[] {
   if (isViteDevServer()) {
     return [...REMOTE_REDDIT_BASES];
@@ -793,7 +785,7 @@ function isRedditBaseCoolingDown(base: string): boolean {
   return Boolean(health && health.retryAfter > Date.now());
 }
 
-function getRedditBaseCandidates(requestPath = ''): string[] {
+function getRedditBaseCandidates(): string[] {
   let candidates: string[];
 
   if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase(sessionRedditBase)) {
@@ -807,12 +799,8 @@ function getRedditBaseCandidates(requestPath = ''): string[] {
     ];
   }
 
-  const requestCandidates = requestPath
-    ? candidates.filter((base) => !shouldSkipRedditBaseForRequest(base, requestPath))
-    : candidates;
-  const allowedCandidates = requestCandidates.length > 0 ? requestCandidates : candidates;
-  const activeCandidates = allowedCandidates.filter((base) => !isRedditBaseCoolingDown(base));
-  return activeCandidates.length > 0 ? activeCandidates : allowedCandidates;
+  const activeCandidates = candidates.filter((base) => !isRedditBaseCoolingDown(base));
+  return activeCandidates.length > 0 ? activeCandidates : candidates;
 }
 
 // Reads the persisted UI preference directly (this module is not a React component).
@@ -970,7 +958,7 @@ async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number):
   let lastApiError: RedditApiError | null = null;
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
-    for (const base of getRedditBaseCandidates(requestPath)) {
+    for (const base of getRedditBaseCandidates()) {
       try {
         return await fetchRedditFromBase<T>(base, requestPath, timeoutMs);
       } catch (error) {
@@ -1013,7 +1001,7 @@ async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number):
 }
 
 async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, staggerMs: number): Promise<T> {
-  const bases = getRedditBaseCandidates(requestPath);
+  const bases = getRedditBaseCandidates();
 
   if (bases.length <= 1) {
     return fetchRedditSequential<T>(requestPath, timeoutMs);
