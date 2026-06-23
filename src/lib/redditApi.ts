@@ -24,6 +24,7 @@ const POST_CACHE_KEY = 'redalt.postCache';
 const POST_CACHE_LIMIT = 120;
 const POST_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 12_000;
+const LISTING_FETCH_TIMEOUT_MS = 25_000;
 const DETAIL_FETCH_TIMEOUT_MS = 40_000;
 const DETAIL_RECOVERY_TIMEOUT_MS = 25_000;
 const DETAIL_FALLBACK_PAGE_SIZE = 40;
@@ -910,6 +911,7 @@ export async function fetchSubredditListing(
 
   const data = await fetchReddit<RedditListingResponse>(
     `/r/${encodeURIComponent(subreddit)}/${sort}.json?${queryParts.join('&')}`,
+    { timeoutMs: LISTING_FETCH_TIMEOUT_MS },
   );
   const posts = data.data.children.map((item) => item.data);
   rememberPosts(posts);
@@ -941,6 +943,7 @@ export async function fetchUserListing(
 
   const data = await fetchReddit<RedditListingResponse>(
     `/user/${encodeURIComponent(user)}/submitted.json?${queryParts.join('&')}&sort=${encodeURIComponent(sort)}`,
+    { timeoutMs: LISTING_FETCH_TIMEOUT_MS },
   );
   const posts = data.data.children.map((item) => item.data);
   rememberPosts(posts);
@@ -1336,3 +1339,5 @@ export async function fetchPostDetail(
     throw error;
   }
 }
+
+
