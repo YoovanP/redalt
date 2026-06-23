@@ -304,7 +304,6 @@ export function ExternalEmbed({
           title={provider ?? 'External embed'}
           loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
-          allowFullScreen
           style={frameStyle}
         />
       ) : showEmbed && embedDocument ? (
@@ -315,7 +314,6 @@ export function ExternalEmbed({
           title={provider ?? 'External embed'}
           loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
-          allowFullScreen
           sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts"
           style={frameStyle}
         />

@@ -124,11 +124,17 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
   );
 
   useEffect(() => {
+    if (!isFocused || normalizedValue.length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
     const handle = window.setTimeout(async () => {
       const nextSuggestions = await fetchMixedSearchSuggestions(value);
       setSuggestions(nextSuggestions);
 
-      const canShow = isFocused && normalizedValue.length >= 2 && nextSuggestions.length > 0;
+      const canShow = nextSuggestions.length > 0;
       setShowSuggestions(canShow);
     }, 220);
 
