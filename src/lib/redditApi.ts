@@ -842,19 +842,44 @@ type FetchRedditOptions = {
   staggerMs?: number;
 };
 
-function handleFetchRedditFailure(base: string, error: unknown): RedditApiError | null {
+type FetchFailureStatusMode = 'retrying' | 'failed' | 'silent';
+
+function notifyRetryableFetchFailure(error: RedditApiError, mode: Exclude<FetchFailureStatusMode, 'silent'>): void {
+  if (error.status === 429) {
+    notifyApiStatus(
+      'warn',
+      mode === 'retrying'
+        ? 'Reddit rate limit hit. Retrying...'
+        : 'Reddit is rate-limiting requests right now. Please retry in a moment.',
+    );
+  } else if (error.status === 403 || error.status === 451) {
+    notifyApiStatus(
+      'warn',
+      mode === 'retrying'
+        ? 'Reddit blocked one proxy. Trying another...'
+        : 'Reddit blocked the available proxies. Please retry in a moment.',
+    );
+  } else if (error.status >= 500 || error.status === 0) {
+    notifyApiStatus(
+      'error',
+      mode === 'retrying' ? 'Reddit connection issue. Retrying...' : 'Reddit connection issue. Please retry.',
+    );
+  }
+}
+
+function handleFetchRedditFailure(
+  base: string,
+  error: unknown,
+  statusMode: FetchFailureStatusMode = 'retrying',
+): RedditApiError | null {
   if (error instanceof RedditApiError) {
     if (isSourceSwitchableError(error)) {
       markRedditBaseFailure(base);
       clearSessionRedditBase(base);
     }
 
-    if (error.status === 429) {
-      notifyApiStatus('warn', 'Reddit rate limit hit. Retrying...');
-    } else if (error.status === 403 || error.status === 451) {
-      notifyApiStatus('warn', 'Reddit blocked one proxy. Trying another...');
-    } else if (error.status >= 500 || error.status === 0) {
-      notifyApiStatus('error', 'Reddit connection issue. Retrying...');
+    if (statusMode !== 'silent') {
+      notifyRetryableFetchFailure(error, statusMode);
     }
 
     return error;
@@ -897,10 +922,6 @@ async function fetchRedditFromBase<T>(
     });
 
     if (!response.ok) {
-      if (response.status === 429) {
-        notifyApiStatus('warn', 'Reddit is rate-limiting requests. Results may load slowly.');
-      }
-
       throw new RedditApiError(await readApiErrorMessage(response), response.status);
     }
 
@@ -965,10 +986,12 @@ async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number):
   }
 
   if (lastApiError) {
+    notifyRetryableFetchFailure(lastApiError, 'failed');
     throw lastApiError;
   }
 
   if (lastError instanceof RedditApiError) {
+    notifyRetryableFetchFailure(lastError, 'failed');
     throw lastError;
   }
 
@@ -997,11 +1020,13 @@ async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, s
       }
 
       if (lastApiError) {
+        notifyRetryableFetchFailure(lastApiError, 'failed');
         reject(lastApiError);
         return;
       }
 
       if (lastError instanceof RedditApiError) {
+        notifyRetryableFetchFailure(lastError, 'failed');
         reject(lastError);
         return;
       }
@@ -1042,7 +1067,7 @@ async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, s
           }
 
           lastError = error;
-          const apiError = handleFetchRedditFailure(base, error);
+          const apiError = handleFetchRedditFailure(base, error, 'silent');
 
           if (apiError) {
             lastApiError = apiError;
@@ -1536,5 +1561,4 @@ export async function fetchPostDetail(
     throw error;
   }
 }
-
 
