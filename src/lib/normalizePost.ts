@@ -159,16 +159,30 @@ function deriveRedditVideoFromUrl(post: RedditPostData) {
   }
 }
 
+function shouldPreferHlsSource(fallbackUrl: string | undefined, hlsUrl: string | undefined): boolean {
+  if (!hlsUrl) {
+    return false;
+  }
+
+  if (!fallbackUrl) {
+    return true;
+  }
+
+  const pathname = getUrlPathname(fallbackUrl);
+  return pathname.includes('/vid/') && !/\.(?:mp4|webm|mov|m4v)(?:$|\?)/i.test(pathname);
+}
+
 function getVideoMedia(post: RedditPostData, includePreviewMp4 = true) {
   const media: RedditMedia | null | undefined = post.secure_media ?? post.media;
   const redditVideo = media?.reddit_video;
   const fallbackUrl = normalizeUrl(redditVideo?.fallback_url);
   const hlsUrl = normalizeUrl(redditVideo?.hls_url);
+  const preferredSourceUrl = shouldPreferHlsSource(fallbackUrl, hlsUrl) ? hlsUrl : fallbackUrl || hlsUrl;
 
-  if (fallbackUrl || hlsUrl) {
+  if (preferredSourceUrl || hlsUrl) {
     return {
       type: 'video' as const,
-      sourceUrl: fallbackUrl || hlsUrl,
+      sourceUrl: preferredSourceUrl || hlsUrl,
       hlsUrl,
       dashUrl: normalizeUrl(redditVideo?.dash_url),
       width: redditVideo?.width,
@@ -176,7 +190,6 @@ function getVideoMedia(post: RedditPostData, includePreviewMp4 = true) {
       isGif: redditVideo?.is_gif,
     };
   }
-
   const derivedVideo = deriveRedditVideoFromUrl(post);
 
   if (derivedVideo) {
