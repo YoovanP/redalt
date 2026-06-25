@@ -638,6 +638,22 @@ function buildKnownEmbed(url: string): { provider: string; embedUrl: string } | 
   return null;
 }
 
+function shouldPreferKnownEmbedUrl(parsedEmbedUrl: string | undefined, outboundUrl: string, knownEmbedUrl: string | undefined): boolean {
+  if (!parsedEmbedUrl || !knownEmbedUrl) {
+    return false;
+  }
+
+  const parsedHost = getUrlHostname(parsedEmbedUrl);
+  const outboundHost = getUrlHostname(outboundUrl);
+
+  return Boolean(
+    parsedHost &&
+      outboundHost &&
+      (parsedHost.endsWith('redditmedia.com') || parsedHost.endsWith('reddit.com')) &&
+      !isRedditMediaHost(outboundHost),
+  );
+}
+
 function stripSubmissionBoilerplate(value: string): string {
   return decodeBasicEntities(value)
     .split(/\r?\n/)
@@ -686,7 +702,10 @@ function getExternalMedia(post: RedditPostData) {
   const domain = post.domain?.toLowerCase() || getUrlHostname(outboundUrl);
   const knownEmbed = buildKnownEmbed(outboundUrl);
   const { embedHtml, embedWidth, embedHeight } = getPostEmbedContent(post, oembed?.html);
-  const embedUrl = parseEmbedUrl(embedHtml) || knownEmbed?.embedUrl;
+  const parsedEmbedUrl = parseEmbedUrl(embedHtml);
+  const embedUrl = shouldPreferKnownEmbedUrl(parsedEmbedUrl, outboundUrl, knownEmbed?.embedUrl)
+    ? knownEmbed?.embedUrl
+    : parsedEmbedUrl || knownEmbed?.embedUrl;
   const thumbnailUrl = normalizeUrl(oembed?.thumbnail_url) || getThumbnailUrl(post);
 
   const isExternalDomain = domain.length > 0 && !isRedditMediaHost(domain) && !isLikelyImageUrl(outboundUrl);
