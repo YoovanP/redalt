@@ -3151,7 +3151,7 @@ function parseRssPostChild(
   const permalinkSource = commentUrl || normalizedLink || link;
   const permalink = (() => {
     try {
-      return new URL(permalinkSource).pathname;
+      return normalizePathname(new URL(permalinkSource).pathname);
     } catch {
       return link.startsWith('/') ? link : `/r/${subreddit}/comments/${fallbackStableId}`;
     }
