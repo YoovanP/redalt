@@ -699,6 +699,10 @@ function isTrodditInstance(base: string): boolean {
   }
 }
 
+function supportsRedlibDetailHtml(base: string): boolean {
+  return !isTedditInstance(base) && !isTrodditInstance(base) && !isEddritInstance(base);
+}
+
 function appendTedditApiParams(path: string, sourceParams: URLSearchParams): string {
   const params = new URLSearchParams();
   params.set('api', '');
@@ -1366,6 +1370,35 @@ function isLikelyVideoUrl(url: string): boolean {
   return /\.(?:mp4|webm|mov|m4v|m3u8)$/i.test(pathname) || pathname.endsWith('.gifv');
 }
 
+function getVRedditVideoId(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (hostname === 'v.redd.it') {
+      return parsed.pathname.split('/').filter(Boolean)[0] ?? '';
+    }
+
+    if (hostname.endsWith('reddit.com')) {
+      return parsed.pathname.match(/^\/video\/([^/?#]+)/i)?.[1] ?? '';
+    }
+  } catch {
+    const directMatch = url.match(/https?:\/\/v\.redd\.it\/([^/?#]+)/i)?.[1] ?? '';
+
+    if (directMatch) {
+      return directMatch;
+    }
+
+    return url.match(/https?:\/\/[^/]*reddit\.com\/video\/([^/?#]+)/i)?.[1] ?? '';
+  }
+
+  return '';
+}
+
+function isKnownHostedVideoUrl(url: string): boolean {
+  return Boolean(getVRedditVideoId(url)) || isLikelyVideoUrl(url);
+}
+
 function isRedditNavigationUrl(url: string): boolean {
   const hostname = getUrlHostname(url);
 
@@ -1381,6 +1414,25 @@ function isRedditNavigationUrl(url: string): boolean {
     pathname.startsWith('/u/') ||
     pathname.startsWith('/search')
   );
+}
+
+function isSourceNavigationUrl(url: string, sourceBase: string): boolean {
+  const sourceHost = getUrlHostname(sourceBase);
+  const hostname = getUrlHostname(url);
+
+  if (sourceHost && hostname === sourceHost) {
+    const pathname = getUrlPathname(url);
+
+    return (
+      pathname === '/' ||
+      pathname.startsWith('/r/') ||
+      pathname.startsWith('/user/') ||
+      pathname.startsWith('/u/') ||
+      pathname.startsWith('/search')
+    );
+  }
+
+  return isRedditNavigationUrl(url);
 }
 
 function firstDistinctUrl(values: string[], baseUrl: string): string[] {
@@ -1759,6 +1811,17 @@ function stripRssSubmissionBoilerplate(value: string): string {
       '',
     )
     .trim();
+}
+
+function postIdFromCommentsPath(value: string): string {
+  const path = toPathname(value) || value;
+  const id = path.match(/\/comments\/([^/?#]+)/i)?.[1] ?? '';
+
+  try {
+    return id ? decodeURIComponent(id) : '';
+  } catch {
+    return id;
+  }
 }
 
 function collectNamesFromHtml(html: string, pattern: RegExp, query: string): string[] {
@@ -3064,15 +3127,8 @@ function parseRssPostChild(
     sourceBase,
   );
   const created = Date.parse(readXmlTag(itemXml, 'pubDate') || readXmlTag(itemXml, 'updated') || readXmlTag(itemXml, 'published'));
-  const id = stableIdFromUrl(link || title, fallbackIndex);
-  const permalink = (() => {
-    try {
-      return new URL(link).pathname;
-    } catch {
-      return link.startsWith('/') ? link : `/r/${subreddit}/comments/${id}`;
-    }
-  })();
-  const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
+  const normalizedLink = normalizeUrlCandidate(link, sourceBase);
+  const fallbackStableId = stableIdFromUrl(link || title, fallbackIndex);
   const sourceUrls = firstDistinctUrl(
     [
       enclosureUrl,
@@ -3087,9 +3143,31 @@ function parseRssPostChild(
     ],
     sourceBase,
   );
+  const commentUrl = hrefUrls.find((url) => /\/comments\//i.test(getUrlPathname(url))) ?? '';
+  const permalinkSource = commentUrl || normalizedLink || link;
+  const permalink = (() => {
+    try {
+      return new URL(permalinkSource).pathname;
+    } catch {
+      return link.startsWith('/') ? link : `/r/${subreddit}/comments/${fallbackStableId}`;
+    }
+  })();
+  const id = postIdFromCommentsPath(permalink || commentUrl || normalizedLink || link) || fallbackStableId;
+  const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
   const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
   const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
-  const videoUrl = hrefUrls.find(isLikelyVideoUrl) ?? sourceUrls.find(isLikelyVideoUrl) ?? '';
+  const videoUrl = hrefUrls.find(isKnownHostedVideoUrl) ?? sourceUrls.find(isKnownHostedVideoUrl) ?? '';
+  const vRedditVideoId = getVRedditVideoId(videoUrl);
+  const videoFallbackUrl = videoUrl.endsWith('.gifv')
+    ? videoUrl.replace(/\.gifv$/i, '.mp4')
+    : vRedditVideoId
+      ? `https://v.redd.it/${vRedditVideoId}/HLSPlaylist.m3u8`
+      : videoUrl;
+  const videoHlsUrl = vRedditVideoId
+    ? `https://v.redd.it/${vRedditVideoId}/HLSPlaylist.m3u8`
+    : videoUrl.endsWith('.m3u8')
+      ? videoUrl
+      : undefined;
   const iframeEmbedUrl = findIframeEmbedUrl(content, sourceBase);
   const embed =
     hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ??
@@ -3100,8 +3178,8 @@ function parseRssPostChild(
         }
       : null);
   const externalUrl =
-    hrefUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
-    contentUrls.find((url) => !isRedditNavigationUrl(url) && !isLikelyImageUrl(url)) ??
+    hrefUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
+    contentUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
     '';
   const outboundUrl = videoUrl || externalUrl || imageUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
   const thumbnailUrl = imageUrl || enclosureUrl;
@@ -3141,8 +3219,8 @@ function parseRssPostChild(
         : videoUrl
           ? {
               reddit_video: {
-                fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
-                hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+                fallback_url: videoFallbackUrl,
+                hls_url: videoHlsUrl,
               },
             }
           : null,
@@ -3157,8 +3235,8 @@ function parseRssPostChild(
         : videoUrl
           ? {
               reddit_video: {
-                fallback_url: videoUrl.endsWith('.gifv') ? videoUrl.replace(/\.gifv$/i, '.mp4') : videoUrl,
-                hls_url: videoUrl.endsWith('.m3u8') ? videoUrl : undefined,
+                fallback_url: videoFallbackUrl,
+                hls_url: videoHlsUrl,
               },
             }
           : null,
@@ -3595,6 +3673,24 @@ function getRedlibDetailPath(data: Record<string, unknown>): string {
   return id && subreddit && !subreddit.includes('/') ? `/r/${subreddit}/comments/${id}/` : '';
 }
 
+function isDetailOnlyListingStub(data: Record<string, unknown>, postHint: string): boolean {
+  if (!getRedlibDetailPath(data) || getStringField(data, 'selftext')) {
+    return false;
+  }
+
+  if (postHint && postHint !== 'link') {
+    return false;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+
+  return (
+    !outboundUrl ||
+    isRedditNavigationUrl(outboundUrl) ||
+    isCommentPermalinkUrl(outboundUrl, getStringField(data, 'permalink'), getStringField(data, 'id'))
+  );
+}
+
 const REDLIB_MEDIA_FIELDS = [
   'preview',
   'thumbnail',
@@ -3827,10 +3923,13 @@ function needsRedlibDetailMediaEnrichment(data: Record<string, unknown>): boolea
     return false;
   }
 
+  const postHint = getStringField(data, 'post_hint');
+
   return Boolean(
     data.is_video ||
-      getStringField(data, 'post_hint') === 'hosted:video' ||
-      isUsableThumbnail(data.thumbnail),
+      postHint === 'hosted:video' ||
+      isUsableThumbnail(data.thumbnail) ||
+      isDetailOnlyListingStub(data, postHint),
   );
 }
 
@@ -3972,12 +4071,16 @@ async function fetchFromPublicInstance(
       }
 
       if (
-        request.method === 'html' &&
-        looksRedlibHtml(body) &&
+        supportsRedlibDetailHtml(base) &&
+        (request.method === 'rss' || (request.method === 'html' && looksRedlibHtml(body))) &&
         !isCommentThreadPath(upstreamPath) &&
         !isPublicDiscoveryPath(upstreamPath)
       ) {
         normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options, mediaPref);
+      }
+
+      if (!isPublicDiscoveryPath(upstreamPath) && !hasRenderablePostPayload(normalizedPayload, upstreamPath)) {
+        continue;
       }
 
       if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
