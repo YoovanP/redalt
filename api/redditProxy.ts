@@ -1341,6 +1341,10 @@ function getUrlHostname(url: string): string {
   }
 }
 
+function normalizePathname(pathname: string): string {
+  return pathname.replace(/^\/+/, '/') || '/';
+}
+
 function isRedditMediaHost(hostname: string): boolean {
   return (
     hostname === 'i.redd.it' ||
@@ -1354,9 +1358,9 @@ function isRedditMediaHost(hostname: string): boolean {
 
 function getUrlPathname(url: string): string {
   try {
-    return new URL(url).pathname.toLowerCase();
+    return normalizePathname(new URL(url).pathname).toLowerCase();
   } catch {
-    return url.toLowerCase();
+    return normalizePathname(url).toLowerCase();
   }
 }
 
@@ -2083,7 +2087,7 @@ function looksRedlibHtml(body: string): boolean {
 
 function toPathname(url: string): string {
   try {
-    return new URL(url).pathname;
+    return normalizePathname(new URL(url).pathname);
   } catch {
     return '';
   }
