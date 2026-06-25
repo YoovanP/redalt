@@ -214,9 +214,9 @@ export function ExternalEmbed({
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
 
   useEffect(() => {
-    setShowEmbed(true);
+    setShowEmbed(providerType !== 'redgifs');
     setHtmlEmbedHeight(null);
-  }, [resolvedEmbedUrl, resolvedEmbedHtml]);
+  }, [providerType, resolvedEmbedUrl, resolvedEmbedHtml]);
 
   useEffect(() => {
     const target = containerRef.current;
@@ -228,14 +228,8 @@ export function ExternalEmbed({
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (!entry.isIntersecting) {
-            if (providerType === 'redgifs') {
-              setShowEmbed(false);
-            } else if (iframeRef.current) {
-              pauseEmbed(iframeRef.current, providerType);
-            }
-          } else if (providerType === 'redgifs') {
-            setShowEmbed(true);
+          if (!entry.isIntersecting && iframeRef.current && providerType !== 'redgifs') {
+            pauseEmbed(iframeRef.current, providerType);
           }
         }
       },
@@ -296,13 +290,19 @@ export function ExternalEmbed({
 
   return (
     <div className="media-block external-media" ref={containerRef}>
+      {!showEmbed && providerType === 'redgifs' && resolvedEmbedUrl && (
+        <button type="button" onClick={() => setShowEmbed(true)}>
+          Try loading Redgifs embed
+        </button>
+      )}
+
       {showEmbed && resolvedEmbedUrl ? (
         <iframe
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           src={resolvedEmbedUrl}
           title={provider ?? 'External embed'}
-          loading="lazy"
+          loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           style={frameStyle}
         />
@@ -312,7 +312,7 @@ export function ExternalEmbed({
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           srcDoc={embedDocument}
           title={provider ?? 'External embed'}
-          loading="lazy"
+          loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts"
           style={frameStyle}
@@ -323,7 +323,7 @@ export function ExternalEmbed({
             className="post-image"
             src={thumbnailUrl}
             alt={provider ?? 'External media preview'}
-            loading="lazy"
+            loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
             referrerPolicy="no-referrer"
           />
         </a>
