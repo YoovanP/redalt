@@ -2721,13 +2721,26 @@ function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceB
   ];
 }
 
-function readHtmlCommentAuthor(commentHtml: string): string {
-  const authorMatch = commentHtml.match(/<a\b[^>]*\bclass=["'][^"']*\bcomment_author\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
+function readHtmlCommentId(openTag: string): string {
+  const raw = readHtmlAttribute(openTag, 'data-fullname') || readHtmlAttribute(openTag, 'id');
+  return raw.replace(/^thing_/i, '').replace(/^t1_/i, '') || raw;
+}
+
+function readHtmlCommentAuthor(openTag: string, commentHtml: string): string {
+  const attributeAuthor = readHtmlAttribute(openTag, 'data-author');
+
+  if (attributeAuthor) {
+    return normalizeUserName(attributeAuthor) || '[unknown]';
+  }
+
+  const authorMatch = commentHtml.match(/<a\b[^>]*\bclass=["'][^"']*\b(?:comment_author|author)\b[^"']*["'][^>]*>([\s\S]*?)<\/a>/i);
   return normalizeUserName(stripHtml(authorMatch?.[1] ?? '')) || '[unknown]';
 }
 
 function readHtmlCommentBody(commentHtml: string): string {
-  const bodyBlock = findFirstHtmlTagBlock(commentHtml, 'div', 'comment_body');
+  const bodyBlock =
+    findFirstHtmlTagBlock(commentHtml, 'div', 'comment_body') ??
+    findFirstHtmlTagBlock(commentHtml, 'div', 'usertext-body');
   return bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
 }
 
@@ -2742,16 +2755,18 @@ function parseHtmlCommentChildren(html: string): Array<{ kind: 't1'; data: Recor
       continue;
     }
 
-    const id = readHtmlAttribute(openTag, 'id');
+    const id = readHtmlCommentId(openTag);
     const commentBlock = id ? findHtmlTagBlockAt(html, 'div', match.index) : null;
 
     if (!id || !commentBlock) {
       continue;
     }
 
-    const author = readHtmlCommentAuthor(commentBlock.innerHtml);
+    const author = readHtmlCommentAuthor(openTag, commentBlock.innerHtml);
     const body = readHtmlCommentBody(commentBlock.innerHtml);
-    const repliesBlock = findFirstHtmlTagBlock(commentBlock.innerHtml, 'blockquote', 'replies');
+    const repliesBlock =
+      findFirstHtmlTagBlock(commentBlock.innerHtml, 'blockquote', 'replies') ??
+      findFirstHtmlTagBlock(commentBlock.innerHtml, 'div', 'child');
     const replyChildren = repliesBlock ? parseHtmlCommentChildren(repliesBlock.innerHtml) : [];
 
     if (body) {
@@ -2784,17 +2799,26 @@ function parseHtmlCommentChildren(html: string): Array<{ kind: 't1'; data: Recor
 
 function readHtmlCommentCount(html: string): number {
   const countMatch = html.match(/<[^>]+\bid=["']comment_count["'][^>]*>([\s\S]*?)<\/[^>]+>/i);
-  const text = stripHtml(countMatch?.[1] ?? '');
-  const valueMatch = text.match(/([\d,.]+)\s*([km])?\s+comments?/i);
+  const panestackTitle = findFirstHtmlTagBlock(html, 'div', 'panestack-title');
+  const texts = [
+    stripHtml(countMatch?.[1] ?? ''),
+    panestackTitle ? stripHtml(panestackTitle.innerHtml) : '',
+  ];
 
-  if (!valueMatch) {
-    return 0;
+  for (const text of texts) {
+    const valueMatch = text.match(/(?:all\s+)?([\d,.]+)\s*([km])?\s+comments?/i);
+
+    if (!valueMatch) {
+      continue;
+    }
+
+    const parsed = Number((valueMatch[1] ?? '').replace(/,/g, ''));
+    const multiplier = valueMatch[2]?.toLowerCase() === 'm' ? 1_000_000 : valueMatch[2]?.toLowerCase() === 'k' ? 1_000 : 1;
+
+    return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
   }
 
-  const parsed = Number((valueMatch[1] ?? '').replace(/,/g, ''));
-  const multiplier = valueMatch[2]?.toLowerCase() === 'm' ? 1_000_000 : valueMatch[2]?.toLowerCase() === 'k' ? 1_000 : 1;
-
-  return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
+  return 0;
 }
 
 function extractVRedditIdFromHtml(html: string): string {
