@@ -190,7 +190,6 @@ export function ExternalEmbed({
 }: ExternalEmbedProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const [showEmbed, setShowEmbed] = useState(true);
   const [htmlEmbedHeight, setHtmlEmbedHeight] = useState<number | null>(null);
   const providerType = useMemo(
     () => getEmbedProviderType(embedUrl, outboundUrl, provider),
@@ -214,9 +213,8 @@ export function ExternalEmbed({
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
 
   useEffect(() => {
-    setShowEmbed(providerType !== 'redgifs');
     setHtmlEmbedHeight(null);
-  }, [providerType, resolvedEmbedUrl, resolvedEmbedHtml]);
+  }, [resolvedEmbedUrl, resolvedEmbedHtml]);
 
   useEffect(() => {
     const target = containerRef.current;
@@ -290,13 +288,7 @@ export function ExternalEmbed({
 
   return (
     <div className="media-block external-media" ref={containerRef}>
-      {!showEmbed && providerType === 'redgifs' && resolvedEmbedUrl && (
-        <button type="button" onClick={() => setShowEmbed(true)}>
-          Try loading Redgifs embed
-        </button>
-      )}
-
-      {showEmbed && resolvedEmbedUrl ? (
+      {resolvedEmbedUrl ? (
         <iframe
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
@@ -306,7 +298,7 @@ export function ExternalEmbed({
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           style={frameStyle}
         />
-      ) : showEmbed && embedDocument ? (
+      ) : embedDocument ? (
         <iframe
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}

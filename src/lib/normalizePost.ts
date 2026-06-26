@@ -739,15 +739,6 @@ function getExternalMedia(post: RedditPostData) {
   };
 }
 
-function isBlockedProneExternalProvider(external: ReturnType<typeof getExternalMedia> | null | undefined): boolean {
-  if (!external) {
-    return false;
-  }
-
-  const providerValue = `${external.provider ?? ''} ${external.embedUrl ?? ''} ${external.outboundUrl}`.toLowerCase();
-  return providerValue.includes('redgifs');
-}
-
 export function normalizePost(post: RedditPostData): NormalizedPost {
   const outboundUrl = normalizeUrl(post.url_overridden_by_dest ?? post.url);
   const imageSource = getPreviewImage(post);
@@ -764,8 +755,7 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
       media = { type: 'gallery', items: galleryItems };
     } else {
       const external = getExternalMedia(post);
-      const blockedProneExternal = isBlockedProneExternalProvider(external);
-      const video = getVideoMedia(post, blockedProneExternal || !(external?.embedUrl || external?.embedHtml));
+      const video = getVideoMedia(post, !(external?.embedUrl || external?.embedHtml));
 
       if (video) {
         media = video;
