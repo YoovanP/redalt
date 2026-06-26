@@ -41,15 +41,16 @@ function getMediaStrength(post: NormalizedPost | null): number {
   }
 }
 
-function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPost | null): NormalizedPost {
-  if (!fallbackPost || fallbackPost.id !== detailPost.id) {
-    return detailPost;
+function isRedgifsExternalPost(post: NormalizedPost | null): boolean {
+  if (post?.media.type !== 'external') {
+    return false;
   }
 
-  if (getMediaStrength(detailPost) >= getMediaStrength(fallbackPost)) {
-    return detailPost;
-  }
+  const providerValue = `${post.media.provider ?? ''} ${post.media.embedUrl ?? ''} ${post.media.outboundUrl}`.toLowerCase();
+  return providerValue.includes('redgifs');
+}
 
+function withFallbackMedia(detailPost: NormalizedPost, fallbackPost: NormalizedPost): NormalizedPost {
   return {
     ...detailPost,
     flairText: detailPost.flairText || fallbackPost.flairText,
@@ -58,6 +59,22 @@ function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPo
     selfText: detailPost.selfText || fallbackPost.selfText,
     media: fallbackPost.media,
   };
+}
+
+function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPost | null): NormalizedPost {
+  if (!fallbackPost || fallbackPost.id !== detailPost.id) {
+    return detailPost;
+  }
+
+  if (isRedgifsExternalPost(fallbackPost) && !isRedgifsExternalPost(detailPost)) {
+    return withFallbackMedia(detailPost, fallbackPost);
+  }
+
+  if (getMediaStrength(detailPost) >= getMediaStrength(fallbackPost)) {
+    return detailPost;
+  }
+
+  return withFallbackMedia(detailPost, fallbackPost);
 }
 
 function CommentItem({ comment, depth = 0 }: CommentItemProps) {
