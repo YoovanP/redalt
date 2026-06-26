@@ -2020,6 +2020,7 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
 
 function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const nativeAfter = getHtmlListingNextAfter(html, upstreamPath, sourceBase);
   const allChildren = parseOldRedditSearchResults(html, upstreamPath, sourceBase);
   const childrenSource = allChildren.length > 0 ? allChildren : parseHtmlPostLinks(html, upstreamPath, sourceBase);
   const startIndex = getPaginatedStartIndex(childrenSource, upstreamPath, true);
@@ -2037,7 +2038,7 @@ function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string
   return {
     kind: 'Listing',
     data: {
-      after: getSyntheticRssAfter(childrenSource, upstreamPath, pageSize, startIndex),
+      after: getSyntheticRssAfter(childrenSource, upstreamPath, pageSize, startIndex) ?? nativeAfter,
       before: null,
       children,
     },

@@ -1103,6 +1103,22 @@ async function readApiErrorMessage(response: Response): Promise<string> {
   }
 }
 
+function getListingAfter(listing: RedditListingResponse): string | null {
+  if (listing.data.after) {
+    return listing.data.after;
+  }
+
+  if (listing.data.children.length < PAGE_SIZE) {
+    return null;
+  }
+
+  const lastPostName = [...listing.data.children]
+    .reverse()
+    .find((child) => child.kind === 't3' && child.data?.name)?.data.name;
+
+  return lastPostName || null;
+}
+
 export async function fetchSubredditListing(
   subredditInput: string,
   options: FetchListingOptions = {},
@@ -1131,7 +1147,7 @@ export async function fetchSubredditListing(
 
   return {
     posts,
-    after: data.data.after,
+    after: getListingAfter(data),
   };
 }
 
@@ -1163,7 +1179,7 @@ export async function fetchUserListing(
 
   return {
     posts,
-    after: data.data.after,
+    after: getListingAfter(data),
   };
 }
 
