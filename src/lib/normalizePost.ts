@@ -739,6 +739,17 @@ function getExternalMedia(post: RedditPostData) {
   };
 }
 
+function isRedgifsExternalEmbed(
+  external: ReturnType<typeof getExternalMedia> | null | undefined,
+): boolean {
+  if (!external?.embedUrl && !external?.embedHtml) {
+    return false;
+  }
+
+  const providerValue = `${external.provider ?? ''} ${external.embedUrl ?? ''} ${external.outboundUrl}`.toLowerCase();
+  return providerValue.includes('redgifs');
+}
+
 export function normalizePost(post: RedditPostData): NormalizedPost {
   const outboundUrl = normalizeUrl(post.url_overridden_by_dest ?? post.url);
   const imageSource = getPreviewImage(post);
@@ -755,28 +766,33 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
       media = { type: 'gallery', items: galleryItems };
     } else {
       const external = getExternalMedia(post);
-      const video = getVideoMedia(post, !(external?.embedUrl || external?.embedHtml));
 
-      if (video) {
-        media = video;
-      } else if (external) {
+      if (external && isRedgifsExternalEmbed(external)) {
         media = external;
       } else {
-        const canUseImageFallback = !isHostedVideoPost(post);
-        const imageFallbackUrl = canUseImageFallback
-          ? (isLikelyImageUrl(outboundUrl) ? outboundUrl : thumbnailUrl)
-          : '';
+        const video = getVideoMedia(post, !(external?.embedUrl || external?.embedHtml));
 
-        if (
-          canUseImageFallback &&
-          (imageSource?.url || imageSource?.u || imageFallbackUrl || post.post_hint === 'image')
-        ) {
-          media = {
-            type: 'image',
-            ...getBestImage(imageSource, imageFallbackUrl || outboundUrl),
-          };
+        if (video) {
+          media = video;
+        } else if (external) {
+          media = external;
         } else {
-          media = { type: 'link', outboundUrl };
+          const canUseImageFallback = !isHostedVideoPost(post);
+          const imageFallbackUrl = canUseImageFallback
+            ? (isLikelyImageUrl(outboundUrl) ? outboundUrl : thumbnailUrl)
+            : '';
+
+          if (
+            canUseImageFallback &&
+            (imageSource?.url || imageSource?.u || imageFallbackUrl || post.post_hint === 'image')
+          ) {
+            media = {
+              type: 'image',
+              ...getBestImage(imageSource, imageFallbackUrl || outboundUrl),
+            };
+          } else {
+            media = { type: 'link', outboundUrl };
+          }
         }
       }
     }
