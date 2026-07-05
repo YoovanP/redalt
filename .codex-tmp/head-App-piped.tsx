@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { CustomFeedBuilder } from './components/CustomFeedBuilder';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { FeedSettings } from './components/FeedSettings';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
 import { PostDetailPage } from './pages/PostDetailPage';
 import { SearchPage } from './pages/SearchPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { SubredditPage } from './pages/SubredditPage';
 import { UserPage } from './pages/UserPage';
 
@@ -109,14 +109,7 @@ function AppLayout() {
                 <div className="header-controls">
                   <SubredditSwitcher initialSubreddit={subreddit} />
                   <nav className="header-nav-links" aria-label="Quick links">
-                    <Link to="/settings" className="menu-toggle settings-nav-link" aria-label="Settings" title="Settings">
-                      <span className="menu-toggle-bars" aria-hidden="true">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                      <span className="menu-toggle-label">Settings</span>
-                    </Link>
+                    <FeedSettings />
                     <Link to="/saved">Saved</Link>
                     <Link to="/history">History</Link>
                     <button
@@ -126,7 +119,7 @@ function AppLayout() {
                       title={headerExpanded ? 'Collapse header' : 'Expand header'}
                       onClick={() => setHeaderExpanded((value) => !value)}
                     >
-                      {headerExpanded ? '↑' : '↓'}
+                      {headerExpanded ? '?' : '?'}
                     </button>
                   </nav>
                 </div>
@@ -152,7 +145,6 @@ function AppLayout() {
             <Route path="/u/:username" element={<UserPage />} />
             <Route path="/user/:username" element={<UserPage />} />
             <Route path="/search" element={<SearchPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/saved" element={<LibraryPage mode="saved" />} />
             <Route path="/history" element={<LibraryPage mode="history" />} />
             <Route path="*" element={<Navigate to="/" replace />} />

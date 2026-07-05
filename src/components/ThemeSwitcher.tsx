@@ -1,6 +1,6 @@
 import { useUiSettings } from '../lib/uiSettings';
 
-const THEMES = [
+export const THEMES = [
   { value: 'dark', label: 'Dark' },
   { value: 'light', label: 'Light' },
   { value: 'midnight', label: 'Midnight' },

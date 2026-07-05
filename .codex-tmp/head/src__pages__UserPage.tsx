@@ -1,21 +1,20 @@
 import { type CSSProperties, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { LoadMoreButton } from '../components/LoadMoreButton';
-import { SortControls } from '../components/SortControls';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
 import { StateView } from '../components/StateView';
 import { getValidatedListingSort, getValidatedTopTimeRange, isMediaPost } from '../lib/feedUtils';
-import { fetchUserListing, type FetchListingOptions, type ListingSort, type TopTimeRange } from '../lib/redditApi';
+import { fetchUserListing, type FetchListingOptions } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import { useNearEndLoadMore, usePostListingFeed } from '../lib/usePostListingFeed';
 
 export function UserPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource, redditApiSource },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
   const { username = '' } = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const sort = getValidatedListingSort(searchParams.get('sort'));
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const fetchPage = useCallback(
@@ -27,27 +26,6 @@ export function UserPage() {
       }),
     [username, sort, topTimeRange],
   );
-
-  const onSortChange = (nextSort: ListingSort) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', nextSort);
-
-    if (nextSort !== 'top') {
-      nextParams.delete('t');
-    } else if (!nextParams.get('t')) {
-      nextParams.set('t', 'day');
-    }
-
-    setSearchParams(nextParams);
-  };
-
-  const onTopTimeRangeChange = (nextRange: TopTimeRange) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', 'top');
-    nextParams.set('t', nextRange);
-    setSearchParams(nextParams);
-  };
-
   const {
     normalizedPosts,
     after,
@@ -57,7 +35,7 @@ export function UserPage() {
     loadMoreError,
     loadMore,
   } = usePostListingFeed({
-    sourceKey: `${username}:${sort}:${topTimeRange}:${fallbackMediaSource}:${redditApiSource}`,
+    sourceKey: `${username}:${sort}:${topTimeRange}:${fallbackMediaSource}`,
     fetchPage,
     videoFeedMode,
     initialErrorMessage: 'Unable to load user feed.',
@@ -100,14 +78,6 @@ export function UserPage() {
       {!videoFeedMode && (
         <>
           <h2>/u/{username}</h2>
-          <div className="feed-toolbar">
-            <SortControls
-              sort={sort}
-              topTimeRange={topTimeRange}
-              onSortChange={onSortChange}
-              onTopTimeRangeChange={onTopTimeRangeChange}
-            />
-          </div>
         </>
       )}
 

@@ -1,7 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { LoadMoreButton } from '../components/LoadMoreButton';
-import { SortControls } from '../components/SortControls';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
 import { StateView } from '../components/StateView';
@@ -9,8 +8,6 @@ import { getValidatedListingSort, getValidatedTopTimeRange, isMediaPost } from '
 import {
   fetchSubredditListing,
   type FetchListingOptions,
-  type ListingSort,
-  type TopTimeRange,
 } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import { useNearEndLoadMore, usePostListingFeed } from '../lib/usePostListingFeed';
@@ -25,7 +22,7 @@ function getSubredditRestoreFlagKey(name: string): string {
 
 export function SubredditPage() {
   const {
-    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource, redditApiSource },
+    settings: { columns, videoFeedMode, cardMode, loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
   const navigate = useNavigate();
   const { name = 'mildlyinfuriating' } = useParams();
@@ -43,27 +40,6 @@ export function SubredditPage() {
       }),
     [name, sort, topTimeRange],
   );
-
-  const onSortChange = (nextSort: ListingSort) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', nextSort);
-
-    if (nextSort !== 'top') {
-      nextParams.delete('t');
-    } else if (!nextParams.get('t')) {
-      nextParams.set('t', 'day');
-    }
-
-    setSearchParams(nextParams);
-  };
-
-  const onTopTimeRangeChange = (nextRange: TopTimeRange) => {
-    const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('sort', 'top');
-    nextParams.set('t', nextRange);
-    setSearchParams(nextParams);
-  };
-
   const {
     normalizedPosts,
     after,
@@ -73,7 +49,7 @@ export function SubredditPage() {
     loadMoreError,
     loadMore,
   } = usePostListingFeed({
-    sourceKey: `${name}:${sort}:${topTimeRange}:${fallbackMediaSource}:${redditApiSource}`,
+    sourceKey: `${name}:${sort}:${topTimeRange}:${fallbackMediaSource}`,
     fetchPage,
     videoFeedMode,
     initialErrorMessage: 'Unable to load subreddit.',
@@ -248,26 +224,18 @@ export function SubredditPage() {
       {!videoFeedMode && (
         <>
           <h2>/r/{name}</h2>
-          <div className="feed-toolbar">
-            <SortControls
-              sort={sort}
-              topTimeRange={topTimeRange}
-              onSortChange={onSortChange}
-              onTopTimeRangeChange={onTopTimeRangeChange}
-            />
-            <div className="sort-controls" role="group" aria-label="Flair filter">
-              <label>
-                Flair
-                <select value={selectedFlair} onChange={(event) => onFlairChange(event.target.value)}>
-                  <option value="all">All flairs</option>
-                  {availableFlairs.map((flair) => (
-                    <option key={flair} value={flair}>
-                      {flair}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+          <div className="sort-controls" role="group" aria-label="Flair filter">
+            <label>
+              Flair
+              <select value={selectedFlair} onChange={(event) => onFlairChange(event.target.value)}>
+                <option value="all">All flairs</option>
+                {availableFlairs.map((flair) => (
+                  <option key={flair} value={flair}>
+                    {flair}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </>
       )}

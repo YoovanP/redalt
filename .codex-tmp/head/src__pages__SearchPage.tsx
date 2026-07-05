@@ -57,7 +57,7 @@ export function SearchPage() {
   const includeNsfw = searchParams.get('nsfw') !== '0';
   const mediaFilter = getValidatedMediaFilter(searchParams.get('media'));
   const {
-    settings: { cardMode, fallbackMediaSource, redditApiSource },
+    settings: { cardMode, fallbackMediaSource },
   } = useUiSettings();
 
   const [posts, setPosts] = useState<RedditPostData[]>([]);
@@ -70,7 +70,7 @@ export function SearchPage() {
   const [subredditLimit, setSubredditLimit] = useState(DEFAULT_SUBREDDIT_LIMIT);
   const [userLimit, setUserLimit] = useState(DEFAULT_USER_LIMIT);
   const prevSearchKeyRef = useRef<string | null>(null);
-  const searchKey = `${query}|${sort}|${topTimeRange}|${subredditScope}|${includeNsfw}|${fallbackMediaSource}|${redditApiSource}`;
+  const searchKey = `${query}|${sort}|${topTimeRange}|${subredditScope}|${includeNsfw}|${fallbackMediaSource}`;
 
   useEffect(() => {
     let ignore = false;
@@ -167,7 +167,6 @@ export function SearchPage() {
     userLimit,
     searchKey,
     fallbackMediaSource,
-    redditApiSource,
   ]);
 
   const normalizedPosts = useMemo(
@@ -286,7 +285,7 @@ export function SearchPage() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <strong>r/{subreddit.name}</strong>
                   <p>{subreddit.title}</p>
-                  <span>{subreddit.subscribers.toLocaleString()} members{` ${subreddit.isNsfw ? '· NSFW' : ''}`}</span>
+                  <span>{subreddit.subscribers.toLocaleString()} members{` ${subreddit.isNsfw ? '? NSFW' : ''}`}</span>
                 </div>
                 <button
                   type="button"

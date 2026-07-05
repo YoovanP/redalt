@@ -136,7 +136,7 @@ export function PostDetailPage() {
   const { name = 'mildlyinfuriating', id = '' } = useParams();
   const location = useLocation();
   const {
-    settings: { fallbackMediaSource, redditApiSource },
+    settings: { fallbackMediaSource },
   } = useUiSettings();
   const [data, setData] = useState<PostDetailResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -191,7 +191,7 @@ export function PostDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource]);
+  }, [name, id, fallbackPost, fallbackMediaSource]);
 
   const normalized = useMemo(() => {
     if (!data) {

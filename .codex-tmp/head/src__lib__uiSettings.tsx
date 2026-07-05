@@ -19,9 +19,7 @@ export type FallbackMediaSource = 'instance' | 'reddit';
 
 export type LoadMoreMode = 'scroll' | 'button';
 
-export type RedditApiSource = 'auto' | 'same-origin' | 'render' | 'cloudflare';
-
-export type UiSettings = {
+type UiSettings = {
   theme: ThemeName;
   autoplayVideos: boolean;
   autoplayWithAudio: boolean;
@@ -32,7 +30,6 @@ export type UiSettings = {
   openInNewTab: boolean;
   fallbackMediaSource: FallbackMediaSource;
   loadMoreMode: LoadMoreMode;
-  redditApiSource: RedditApiSource;
 };
 
 type UiSettingsContextType = {
@@ -53,7 +50,6 @@ const defaultSettings: UiSettings = {
   openInNewTab: false,
   fallbackMediaSource: 'instance',
   loadMoreMode: 'scroll',
-  redditApiSource: 'auto',
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
@@ -94,14 +90,6 @@ function normalizeSettings(input: unknown): UiSettings {
       ? value.loadMoreMode
       : defaultSettings.loadMoreMode;
 
-  const redditApiSource =
-    value.redditApiSource === 'auto' ||
-    value.redditApiSource === 'same-origin' ||
-    value.redditApiSource === 'render' ||
-    value.redditApiSource === 'cloudflare'
-      ? value.redditApiSource
-      : defaultSettings.redditApiSource;
-
   return {
     theme,
     autoplayVideos: Boolean(value.autoplayVideos),
@@ -119,7 +107,6 @@ function normalizeSettings(input: unknown): UiSettings {
         : defaultSettings.openInNewTab,
     fallbackMediaSource: value.fallbackMediaSource === 'reddit' ? 'reddit' : 'instance',
     loadMoreMode,
-    redditApiSource,
   };
 }
 
@@ -150,17 +137,7 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     () => ({
       settings,
       updateSettings: (partial: Partial<UiSettings>) => {
-        setSettings((previous) => {
-          const next = normalizeSettings({ ...previous, ...partial });
-
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-          } catch {
-            // The in-memory settings update should still work when storage is blocked.
-          }
-
-          return next;
-        });
+        setSettings((previous) => normalizeSettings({ ...previous, ...partial }));
       },
     }),
     [settings],

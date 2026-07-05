@@ -35,7 +35,7 @@ export function HomePage() {
   const [currentSource, setCurrentSource] = useState<'popular' | 'all'>('popular');
 
   const {
-    settings: { loadMoreMode, fallbackMediaSource, redditApiSource },
+    settings: { loadMoreMode, fallbackMediaSource },
   } = useUiSettings();
 
   useEffect(() => {
@@ -87,7 +87,7 @@ export function HomePage() {
     return () => {
       ignore = true;
     };
-  }, [fallbackMediaSource, redditApiSource]);
+  }, [fallbackMediaSource]);
 
   const loadMore = async () => {
     if (!after || loadingMore) {
@@ -170,13 +170,13 @@ export function HomePage() {
           <h3>Your Library</h3>
           <div className="home-chip-list">
             <Link to="/saved" className="home-chip">
-              <span className="home-chip-icon">★</span> Saved posts
+              <span className="home-chip-icon">?</span> Saved posts
             </Link>
             <Link to="/history" className="home-chip">
-              <span className="home-chip-icon">◷</span> Watch history
+              <span className="home-chip-icon">?</span> Watch history
             </Link>
             <Link to="/search?q=trending" className="home-chip">
-              <span className="home-chip-icon">▸</span> Search trending
+              <span className="home-chip-icon">?</span> Search trending
             </Link>
           </div>
           {recentSubreddits.length > 0 && (
@@ -218,14 +218,14 @@ export function HomePage() {
                       <RenderMedia post={post} mode="shorts" />
                     ) : (
                       <div className="home-trending-placeholder">
-                        <span className="home-trending-placeholder-icon">📄</span>
+                        <span className="home-trending-placeholder-icon">??</span>
                       </div>
                     )}
                   </div>
                   <div className="home-trending-info">
                     <h4>{post.title}</h4>
                     <p className="home-trending-meta">
-                      r/{post.subreddit} · {post.score} points
+                      r/{post.subreddit} ? {post.score} points
                     </p>
                   </div>
                 </Link>
@@ -244,7 +244,7 @@ export function HomePage() {
                 </button>
               )}
               <Link to="/r/popular" className="home-trending-more" style={{ margin: 0 }}>
-                Browse more popular posts →
+                Browse more popular posts ?
               </Link>
             </div>
           </>

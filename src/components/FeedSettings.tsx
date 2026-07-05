@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import type { ListingSort, TopTimeRange } from '../lib/redditApi';
 import { SortControls } from './SortControls';
@@ -32,12 +32,38 @@ function supportsSortControls(pathname: string): boolean {
   return /^\/r\/[^/]+\/?$/i.test(pathname) || /^\/(?:u|user)\/[^/]+\/?$/i.test(pathname);
 }
 
+const PANEL_GUTTER = 8;
+const PANEL_OFFSET = 8;
+const PANEL_MAX_WIDTH = 380;
+
+function getPanelStyle(trigger: HTMLElement): CSSProperties {
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const rect = trigger.getBoundingClientRect();
+  const width = Math.max(240, Math.min(PANEL_MAX_WIDTH, viewportWidth - PANEL_GUTTER * 2));
+  const left = Math.min(
+    Math.max(rect.left, PANEL_GUTTER),
+    Math.max(PANEL_GUTTER, viewportWidth - width - PANEL_GUTTER),
+  );
+  const top = rect.bottom + PANEL_OFFSET;
+
+  return {
+    position: 'fixed',
+    top,
+    left,
+    width,
+    maxHeight: Math.max(160, viewportHeight - top - PANEL_GUTTER),
+  };
+}
+
 export function FeedSettings() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { settings, updateSettings } = useUiSettings();
   const [open, setOpen] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>();
   const rootRef = useRef<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const sort = getValidatedSort(searchParams.get('sort'));
   const topTimeRange = getValidatedTopTimeRange(searchParams.get('t'));
   const canSort = supportsSortControls(location.pathname);
@@ -84,9 +110,31 @@ export function FeedSettings() {
     };
   }, [open]);
 
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) {
+      return;
+    }
+
+    const updatePanelStyle = () => {
+      if (buttonRef.current) {
+        setPanelStyle(getPanelStyle(buttonRef.current));
+      }
+    };
+
+    updatePanelStyle();
+    window.addEventListener('resize', updatePanelStyle);
+    window.addEventListener('scroll', updatePanelStyle, true);
+
+    return () => {
+      window.removeEventListener('resize', updatePanelStyle);
+      window.removeEventListener('scroll', updatePanelStyle, true);
+    };
+  }, [open]);
+
   return (
     <section ref={rootRef} className="feed-settings-menu">
       <button
+        ref={buttonRef}
         type="button"
         className="menu-toggle"
         aria-label="Open feed settings"
@@ -97,7 +145,7 @@ export function FeedSettings() {
       </button>
 
       {open && (
-        <div className="feed-settings-panel">
+        <div className="feed-settings-panel" style={panelStyle}>
           <ThemeSwitcher />
 
           {canSort && (

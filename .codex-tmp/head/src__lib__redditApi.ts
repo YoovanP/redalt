@@ -17,15 +17,6 @@ const DEFAULT_REDDIT_BASES = [...REMOTE_REDDIT_BASES, DEFAULT_REDDIT_BASE];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
 const UI_SETTINGS_KEY = 'redalt.uiSettings';
-
-type RedditApiSourcePreference = 'auto' | 'same-origin' | 'render' | 'cloudflare';
-
-const REDDIT_API_SOURCE_BASES: Record<Exclude<RedditApiSourcePreference, 'auto'>, string> = {
-  'same-origin': DEFAULT_REDDIT_BASE,
-  render: REMOTE_REDDIT_BASES[0],
-  cloudflare: REMOTE_REDDIT_BASES[1],
-};
-
 const PAGE_SIZE = 8;
 const REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS = 30 * 1000;
 const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
@@ -80,7 +71,9 @@ function resolveBaseKey(base: string): string {
 }
 
 function shouldAvoidPersistingRedditBase(): boolean {
-  return getRedditApiSourcePref() !== 'auto';
+  // On Pages deployments, the same-origin API is the most deployment-aligned backend.
+  // Keep it pinned for the session once it succeeds instead of falling back to remote-first.
+  return false;
 }
 
 function getDefaultRedditBases(): string[] {
@@ -788,16 +781,8 @@ function isRedditBaseCoolingDown(base: string): boolean {
 
 function getRedditBaseCandidates(): string[] {
   let candidates: string[];
-  const selectedBase = getSelectedRedditBase();
 
-  if (selectedBase) {
-    const selectedKey = resolveBaseKey(selectedBase);
-    sessionRedditBase = null;
-    candidates = [
-      selectedBase,
-      ...REDDIT_BASES.filter((base) => resolveBaseKey(base) !== selectedKey),
-    ];
-  } else if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase()) {
+  if (!sessionRedditBase || !isConfiguredRedditBase(sessionRedditBase) || shouldAvoidPersistingRedditBase()) {
     sessionRedditBase = null;
     candidates = REDDIT_BASES;
   } else {
@@ -808,48 +793,8 @@ function getRedditBaseCandidates(): string[] {
     ];
   }
 
-  const activeCandidates = candidates.filter(
-    (base, index) => (Boolean(selectedBase) && index === 0) || !isRedditBaseCoolingDown(base),
-  );
+  const activeCandidates = candidates.filter((base) => !isRedditBaseCoolingDown(base));
   return activeCandidates.length > 0 ? activeCandidates : candidates;
-}
-
-function getRedditApiSourcePref(): RedditApiSourcePreference {
-  if (typeof window === 'undefined') {
-    return 'auto';
-  }
-
-  try {
-    const raw = window.localStorage.getItem(UI_SETTINGS_KEY);
-
-    if (!raw) {
-      return 'auto';
-    }
-
-    const parsed = JSON.parse(raw) as { redditApiSource?: unknown };
-
-    if (
-      parsed.redditApiSource === 'same-origin' ||
-      parsed.redditApiSource === 'render' ||
-      parsed.redditApiSource === 'cloudflare'
-    ) {
-      return parsed.redditApiSource;
-    }
-
-    return 'auto';
-  } catch {
-    return 'auto';
-  }
-}
-
-function getSelectedRedditBase(): string | null {
-  const source = getRedditApiSourcePref();
-
-  if (source === 'auto') {
-    return null;
-  }
-
-  return normalizeBase(REDDIT_API_SOURCE_BASES[source]);
 }
 
 // Reads the persisted UI preference directly (this module is not a React component).
