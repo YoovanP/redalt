@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { THEMES } from '../components/ThemeSwitcher';
 import {
@@ -21,11 +21,26 @@ const REDDIT_SOURCE_OPTIONS: Array<{ value: RedditApiSource; label: string }> = 
 export function SettingsPage() {
   const { settings, updateSettings } = useUiSettings();
   const [draftSettings, setDraftSettings] = useState<UiSettings>(settings);
+  const savedSettingsRef = useRef(settings);
+  const committedDraftRef = useRef(false);
   const navigate = useNavigate();
 
   useEffect(() => {
+    savedSettingsRef.current = settings;
     setDraftSettings(settings);
   }, [settings]);
+
+  useEffect(() => {
+    document.body.dataset.theme = draftSettings.theme;
+  }, [draftSettings.theme]);
+
+  useEffect(() => {
+    return () => {
+      if (!committedDraftRef.current) {
+        document.body.dataset.theme = savedSettingsRef.current.theme;
+      }
+    };
+  }, []);
 
   const updateDraftSettings = (partial: Partial<UiSettings>) => {
     setDraftSettings((previous) => ({ ...previous, ...partial }));
@@ -41,6 +56,8 @@ export function SettingsPage() {
   };
 
   const saveSettings = () => {
+    committedDraftRef.current = true;
+    document.body.dataset.theme = draftSettings.theme;
     updateSettings(draftSettings);
     returnToPreviousPage();
   };
