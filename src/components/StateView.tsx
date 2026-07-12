@@ -9,8 +9,11 @@ type StateViewProps = {
 export function StateView({ kind, message, skeletonCount = 3 }: StateViewProps) {
   if (kind === 'loading') {
     return (
-      <div className="state-view state-loading" aria-busy="true">
-        <SkeletonLoader kind="post-card" count={skeletonCount} />
+      <div className="state-view state-loading" aria-busy="true" aria-live="polite">
+        <p className="visually-hidden">{message ?? 'Loading…'}</p>
+        <div aria-hidden="true">
+          <SkeletonLoader kind="post-card" count={skeletonCount} />
+        </div>
       </div>
     );
   }

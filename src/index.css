@@ -180,6 +180,18 @@ body::before {
   opacity: 0.2;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 a {
   color: var(--link);
   transition: color 0.25s ease, text-shadow 0.25s ease;
@@ -276,6 +288,11 @@ input:focus, select:focus {
   border-color: var(--link) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--link) 25%, transparent), inset 0 0 12px color-mix(in srgb, var(--link) 8%, transparent);
   background: color-mix(in srgb, var(--input-bg) 98%, var(--link) 2%);
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--link) 78%, #fff 22%);
+  outline-offset: 3px;
 }
 
 .app-shell {
@@ -624,6 +641,12 @@ input:focus, select:focus {
 
 .subreddit-suggestions button:hover {
   background: var(--input-bg);
+}
+
+.subreddit-suggestions button[aria-selected='true'] {
+  background: color-mix(in srgb, var(--input-bg) 72%, var(--link) 28%);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--link);
 }
 
 .subreddit-suggestion-type {
@@ -1513,6 +1536,28 @@ input:focus, select:focus {
   margin: 0;
   opacity: 0.8;
   font-size: 0.86rem;
+}
+
+.search-chip-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-chip-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  margin-left: auto;
+  padding: 0;
+  border: 2px solid var(--input-border);
+  border-radius: 50%;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 1.25rem;
+  line-height: 1;
 }
 
 .subreddit-form input,
@@ -2559,6 +2604,43 @@ article[data-focused='true'] > .post-card {
 
 .comment-meta span {
   opacity: 0.75;
+}
+
+.comment-collapse-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--input-border);
+  border-radius: 50%;
+  background: var(--input-bg);
+  color: var(--text);
+  line-height: 1;
+}
+
+.comments-status {
+  margin: 1rem 0;
+  padding: 0.8rem 0.9rem;
+  border-left: 3px solid var(--link);
+  background: color-mix(in srgb, var(--panel) 88%, var(--link) 12%);
+}
+
+.comments-status p {
+  margin: 0 0 0.55rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .comment-body {

@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { readStorageItem, writeStorageItem } from './browserStorage';
 
 export type ThemeName =
   | 'dark'
@@ -124,26 +125,23 @@ function normalizeSettings(input: unknown): UiSettings {
 }
 
 export function UiSettingsProvider({ children }: { children: React.ReactNode }) {
-  const [settings, setSettings] = useState<UiSettings>(defaultSettings);
-
-  useEffect(() => {
+  const [settings, setSettings] = useState<UiSettings>(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = readStorageItem('local', STORAGE_KEY);
 
       if (!raw) {
-        return;
+        return defaultSettings;
       }
 
-      const parsed = JSON.parse(raw) as unknown;
-      setSettings(normalizeSettings(parsed));
+      return normalizeSettings(JSON.parse(raw) as unknown);
     } catch {
-      setSettings(defaultSettings);
+      return defaultSettings;
     }
-  }, []);
+  });
 
   useEffect(() => {
     document.body.dataset.theme = settings.theme;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    writeStorageItem('local', STORAGE_KEY, JSON.stringify(settings));
   }, [settings]);
 
   const value = useMemo(
@@ -152,12 +150,6 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
       updateSettings: (partial: Partial<UiSettings>) => {
         setSettings((previous) => {
           const next = normalizeSettings({ ...previous, ...partial });
-
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-          } catch {
-            // The in-memory settings update should still work when storage is blocked.
-          }
 
           return next;
         });

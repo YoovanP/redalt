@@ -53,6 +53,7 @@ export function LibraryPage({ mode }: LibraryPageProps) {
     settings: { openInNewTab },
   } = useUiSettings();
   const [items, setItems] = useState<LibraryItem[]>([]);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const refresh = useCallback(() => {
     setItems(mode === 'saved' ? getSavedPosts() : getWatchHistory());
@@ -73,6 +74,11 @@ export function LibraryPage({ mode }: LibraryPageProps) {
   }, [refresh]);
 
   const clearAll = () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      return;
+    }
+
     if (mode === 'saved') {
       clearSavedPosts();
     } else {
@@ -80,6 +86,7 @@ export function LibraryPage({ mode }: LibraryPageProps) {
     }
 
     refresh();
+    setConfirmClear(false);
   };
 
   const title = mode === 'saved' ? 'Saved posts' : 'Watch history';
@@ -92,8 +99,8 @@ export function LibraryPage({ mode }: LibraryPageProps) {
     <section className="library-page">
       <div className="library-header">
         <h2>{title}</h2>
-        <button type="button" className="load-more" onClick={clearAll}>
-          Clear all
+        <button type="button" className="load-more" onClick={clearAll} onBlur={() => setConfirmClear(false)}>
+          {confirmClear ? `Confirm clear ${items.length}` : 'Clear all'}
         </button>
       </div>
 

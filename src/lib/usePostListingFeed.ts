@@ -22,6 +22,52 @@ type UseNearEndLoadMoreOptions = {
   loadMore: () => void;
 };
 
+const MEDIA_PAGE_SCAN_LIMIT = 4;
+
+async function fetchInitialListingPages(
+  fetchPage: FetchListingPage,
+  videoFeedMode: boolean,
+): Promise<PostListingResult> {
+  let result = await fetchPage({});
+
+  if (!videoFeedMode || result.posts.some((post) => isMediaPost(normalizePost(post).media.type))) {
+    return result;
+  }
+
+  const posts = [...result.posts];
+  const seenNames = new Set(posts.map((post) => post.name));
+  let after = result.after;
+  let attempts = 1;
+
+  while (after && attempts < MEDIA_PAGE_SCAN_LIMIT) {
+    const requestedCursor = after;
+    try {
+      result = await fetchPage({ after: requestedCursor });
+    } catch {
+      break;
+    }
+
+    for (const post of result.posts) {
+      if (!seenNames.has(post.name)) {
+        seenNames.add(post.name);
+        posts.push(post);
+      }
+    }
+
+    after = result.after;
+    attempts += 1;
+
+    if (
+      result.posts.some((post) => isMediaPost(normalizePost(post).media.type)) ||
+      after === requestedCursor
+    ) {
+      break;
+    }
+  }
+
+  return { posts, after };
+}
+
 export function usePostListingFeed({
   sourceKey,
   fetchPage,
@@ -45,7 +91,7 @@ export function usePostListingFeed({
     setPosts([]);
     setAfter(null);
 
-    fetchPage({})
+    fetchInitialListingPages(fetchPage, videoFeedMode)
       .then((result) => {
         if (ignore) {
           return;
@@ -68,7 +114,7 @@ export function usePostListingFeed({
     return () => {
       ignore = true;
     };
-  }, [fetchPage, initialErrorMessage, sourceKey]);
+  }, [fetchPage, initialErrorMessage, sourceKey, videoFeedMode]);
 
   const normalizedPosts = useMemo(() => posts.map(normalizePost), [posts]);
 
@@ -99,6 +145,10 @@ export function usePostListingFeed({
           break;
         }
 
+        if (!result.after || result.after === cursor) {
+          break;
+        }
+
         cursor = result.after;
       }
 
@@ -121,7 +171,7 @@ export function usePostListingFeed({
         });
       }
 
-      setAfter(uniqueCollected.length === 0 && nextAfter === after ? null : nextAfter);
+      setAfter(nextAfter === after ? null : nextAfter);
     } catch (err) {
       setLoadMoreError(err instanceof Error ? err.message : loadMoreErrorMessage);
     } finally {

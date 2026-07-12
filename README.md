@@ -157,6 +157,14 @@ VITE_REDDIT_API_BASES=https://proxy-a.example.com/api/reddit,https://proxy-b.exa
 npm run build
 ```
 
+## Tests
+
+```bash
+npm test
+```
+
+The zero-dependency Node tests cover storage failure handling and proxy route authorization.
+
 ## Deploying by Platform
 
 ### Vercel
@@ -172,11 +180,11 @@ Also set `REDDIT_PROXY_USER_AGENT` and `ENABLE_PUBLIC_INSTANCE_FALLBACK` for the
 
 ### Render (Proxy Service)
 
-Use `fly-proxy/` as root service directory.
+Use the repository root so the service can load the shared `api/redditProxy.ts` core.
 
 - Runtime: Node
-- Build Command: `npm install --omit=dev`
-- Start Command: `npm run start`
+- Build Command: `npm --prefix fly-proxy ci --omit=dev`
+- Start Command: `npm --prefix fly-proxy run start`
 - Health Check Path: `/healthz`
 - Env: `ENABLE_MIRROR_FALLBACK=true`
 - Env: `ENABLE_PUBLIC_INSTANCE_FALLBACK=true`
@@ -199,8 +207,8 @@ Health endpoint:
 ### Railway
 
 - Create a new Railway project from this repo.
-- For proxy deployment, set service root to `fly-proxy`.
-- Use same Node build/start commands as Render.
+- Keep the repository root as the service root.
+- Use the same prefixed Node build/start commands as Render.
 
 ## Project Notes
 

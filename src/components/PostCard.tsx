@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { writeStorageItem } from '../lib/browserStorage';
 import { isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { MarkdownText } from './MarkdownText';
 import { RenderMedia } from './media/RenderMedia';
@@ -42,12 +43,8 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
       return;
     }
 
-    try {
-      sessionStorage.setItem(`redalt.subreddit.scroll.${post.subreddit}`, String(window.scrollY));
-      sessionStorage.setItem(`redalt.subreddit.restore.${post.subreddit}`, '1');
-    } catch {
-      // Ignore storage failures.
-    }
+    writeStorageItem('session', `redalt.subreddit.scroll.${post.subreddit}`, String(window.scrollY));
+    writeStorageItem('session', `redalt.subreddit.restore.${post.subreddit}`, '1');
   };
 
   const onShare = async () => {

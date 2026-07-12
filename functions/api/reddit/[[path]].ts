@@ -39,6 +39,17 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     });
   }
 
+  if (context.request.method !== 'GET') {
+    return new Response('Method not allowed', {
+      status: 405,
+      headers: withCors({
+        Allow: 'GET, OPTIONS',
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-store',
+      }),
+    });
+  }
+
   const incomingUrl = new URL(context.request.url);
   const upstreamPath = buildUpstreamPath(context.params.path, incomingUrl);
   const response = await handleRedditProxyRequest(upstreamPath, context.env, {

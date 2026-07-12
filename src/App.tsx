@@ -3,6 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { CustomFeedBuilder } from './components/CustomFeedBuilder';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { SubredditSwitcher } from './components/SubredditSwitcher';
+import { readStorageItem, writeStorageItem } from './lib/browserStorage';
 import { UiSettingsProvider, useUiSettings } from './lib/uiSettings';
 import { HomePage } from './pages/HomePage';
 import { LibraryPage } from './pages/LibraryPage';
@@ -28,15 +29,10 @@ export default function App() {
 function AppLayout() {
   const location = useLocation();
   const subreddit = currentSubreddit(location.pathname);
-  const isHome = location.pathname === '/';
   const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string } | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(() => {
-    try {
-      const raw = localStorage.getItem('redalt.headerExpanded');
-      return raw === null ? true : raw === 'true';
-    } catch {
-      return true;
-    }
+    const raw = readStorageItem('local', 'redalt.headerExpanded');
+    return raw === null ? true : raw === 'true';
   });
   const {
     settings: { persistentHeader, videoFeedMode },
@@ -44,7 +40,7 @@ function AppLayout() {
   } = useUiSettings();
 
   useEffect(() => {
-    localStorage.setItem('redalt.headerExpanded', String(headerExpanded));
+    writeStorageItem('local', 'redalt.headerExpanded', String(headerExpanded));
   }, [headerExpanded]);
 
   useEffect(() => {
@@ -84,8 +80,7 @@ function AppLayout() {
         </div>
       )}
 
-      {!isHome && (
-        <header
+      <header
           className={`app-header${persistentHeader ? '' : ' app-header-static'}${
             videoFeedMode ? ' app-header-media-only' : ''
           }${!videoFeedMode && !headerExpanded ? ' app-header-compact' : ''
@@ -139,11 +134,10 @@ function AppLayout() {
               )}
             </>
           )}
-        </header>
-      )}
+      </header>
 
       <main>
-        <ErrorBoundary>
+        <ErrorBoundary key={location.pathname}>
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/r/:name" element={<SubredditPage />} />

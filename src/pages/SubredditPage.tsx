@@ -5,6 +5,7 @@ import { SortControls } from '../components/SortControls';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
 import { StateView } from '../components/StateView';
+import { readStorageItem, removeStorageItem } from '../lib/browserStorage';
 import { getValidatedListingSort, getValidatedTopTimeRange, isMediaPost } from '../lib/feedUtils';
 import {
   fetchSubredditListing,
@@ -184,16 +185,12 @@ export function SubredditPage() {
     let shouldRestore = false;
     let nextScrollY = 0;
 
-    try {
-      shouldRestore = sessionStorage.getItem(getSubredditRestoreFlagKey(name)) === '1';
+    shouldRestore = readStorageItem('session', getSubredditRestoreFlagKey(name)) === '1';
 
-      if (shouldRestore) {
-        const raw = sessionStorage.getItem(getSubredditScrollKey(name));
-        const parsed = raw ? Number(raw) : 0;
-        nextScrollY = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-      }
-    } catch {
-      shouldRestore = false;
+    if (shouldRestore) {
+      const raw = readStorageItem('session', getSubredditScrollKey(name));
+      const parsed = raw ? Number(raw) : 0;
+      nextScrollY = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
     }
 
     if (!shouldRestore) {
@@ -207,11 +204,7 @@ export function SubredditPage() {
       window.scrollTo({ top: nextScrollY, behavior: 'auto' });
     });
 
-    try {
-      sessionStorage.removeItem(getSubredditRestoreFlagKey(name));
-    } catch {
-      // Ignore storage failures.
-    }
+    removeStorageItem('session', getSubredditRestoreFlagKey(name));
   }, [loading, name]);
 
   const onFlairChange = (nextFlair: string) => {
@@ -236,10 +229,26 @@ export function SubredditPage() {
 
   if (visiblePosts.length === 0) {
     return (
-      <StateView
-        kind="empty"
-        message={videoFeedMode ? 'No media posts found for this subreddit.' : 'This subreddit has no visible posts.'}
-      />
+      <section>
+        <StateView
+          kind="empty"
+          message={
+            videoFeedMode
+              ? 'No media posts found in the pages checked for this subreddit.'
+              : selectedFlair !== 'all'
+                ? `No loaded posts use the “${selectedFlair}” flair.`
+                : 'This subreddit has no visible posts.'
+          }
+        />
+        {after && (
+          <div>
+            <LoadMoreButton loading={loadingMore} onClick={loadMore}>
+              Check more posts
+            </LoadMoreButton>
+            {loadMoreError && <p className="meta">{loadMoreError}</p>}
+          </div>
+        )}
+      </section>
     );
   }
 

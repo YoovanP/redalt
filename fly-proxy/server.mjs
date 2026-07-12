@@ -69,6 +69,7 @@ async function proxyRequest(req, res) {
       new Response('Method not allowed', {
         status: 405,
         headers: {
+          Allow: 'GET, OPTIONS',
           'Content-Type': 'text/plain; charset=utf-8',
           'Cache-Control': 'no-store',
         },

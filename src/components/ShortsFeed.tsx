@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { readStorageItem, writeStorageItem } from '../lib/browserStorage';
 import { addWatchHistory, toggleSavedPost } from '../lib/localLibrary';
 import { RenderMedia } from './media/RenderMedia';
 import type { NormalizedPost } from '../types/reddit';
@@ -37,28 +38,28 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const [quickMenuIndex, setQuickMenuIndex] = useState<number | null>(null);
   const [gestureMessage, setGestureMessage] = useState<string | null>(null);
   const [shortsMuted, setShortsMuted] = useState(() => {
-    const raw = localStorage.getItem('redalt.shortsMuted');
+    const raw = readStorageItem('local', 'redalt.shortsMuted');
     return raw === null ? true : raw === 'true';
   });
   const [playbackRate, setPlaybackRate] = useState(() => {
-    const raw = Number(localStorage.getItem('redalt.shortsPlaybackRate') ?? '1');
+    const raw = Number(readStorageItem('local', 'redalt.shortsPlaybackRate') ?? '1');
     return raw === 0.75 || raw === 1 || raw === 1.25 || raw === 1.5 || raw === 2 ? raw : 1;
   });
   const [showOverlay, setShowOverlay] = useState(() => {
-    const raw = localStorage.getItem('redalt.shortsShowOverlay');
+    const raw = readStorageItem('local', 'redalt.shortsShowOverlay');
     return raw === null ? true : raw === 'true';
   });
 
   useEffect(() => {
-    localStorage.setItem('redalt.shortsMuted', String(shortsMuted));
+    writeStorageItem('local', 'redalt.shortsMuted', String(shortsMuted));
   }, [shortsMuted]);
 
   useEffect(() => {
-    localStorage.setItem('redalt.shortsPlaybackRate', String(playbackRate));
+    writeStorageItem('local', 'redalt.shortsPlaybackRate', String(playbackRate));
   }, [playbackRate]);
 
   useEffect(() => {
-    localStorage.setItem('redalt.shortsShowOverlay', String(showOverlay));
+    writeStorageItem('local', 'redalt.shortsShowOverlay', String(showOverlay));
   }, [showOverlay]);
 
   useEffect(() => {
@@ -194,13 +195,23 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   }, [activeIndex, posts.length]);
 
   useEffect(() => {
-    for (const [_, video] of videoRefs.current) {
+    const activePostName = posts[activeIndex]?.name;
+
+    for (const [postName, video] of videoRefs.current) {
       if (video) {
         video.muted = shortsMuted;
         video.playbackRate = playbackRate;
+
+        if (postName !== activePostName) {
+          video.pause();
+        } else if (video.autoplay) {
+          void video.play().catch(() => {
+            // Browser autoplay policies can still require an explicit user gesture.
+          });
+        }
       }
     }
-  }, [shortsMuted, playbackRate]);
+  }, [activeIndex, playbackRate, posts, shortsMuted]);
 
   const triggerIndex = Math.max(0, posts.length - 3);
 

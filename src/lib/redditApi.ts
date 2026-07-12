@@ -1269,22 +1269,20 @@ export async function fetchSubredditSuggestions(query: string): Promise<string[]
     return [];
   }
 
-  if (!isCloudflarePagesHost()) {
-    try {
-      const typeahead = await fetchReddit<SubredditTypeaheadResponse>(
-        `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
-      );
+  try {
+    const typeahead = await fetchReddit<SubredditTypeaheadResponse>(
+      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+    );
 
-      const names = (typeahead.names ?? [])
-        .map((name) => name.trim())
-        .filter(Boolean);
+    const names = (typeahead.names ?? [])
+      .map((name) => name.trim())
+      .filter(Boolean);
 
-      if (names.length > 0) {
-        return names.slice(0, 8);
-      }
-    } catch {
-      // fallback handled below
+    if (names.length > 0) {
+      return names.slice(0, 8);
     }
+  } catch {
+    // The broader subreddit search below remains available when typeahead fails.
   }
 
   const cleanedLower = cleaned.toLowerCase();
@@ -1331,19 +1329,13 @@ export async function fetchMixedSearchSuggestions(query: string): Promise<MixedS
     return [];
   }
 
-  const blockProneSearchEndpoints = isCloudflarePagesHost();
-
   const [subredditTypeahead, userListing, postListing] = await Promise.allSettled([
-    blockProneSearchEndpoints
-      ? Promise.resolve<SubredditTypeaheadResponse>({ names: [] })
-      : fetchReddit<SubredditTypeaheadResponse>(
-          `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
-        ),
-    blockProneSearchEndpoints
-      ? Promise.resolve<UserSearchResponse>({ kind: 'Listing', data: { children: [] } })
-      : fetchReddit<UserSearchResponse>(
-          `/users/search.json?raw_json=1&include_over_18=on&limit=5&q=${encodeURIComponent(cleaned)}`,
-        ),
+    fetchReddit<SubredditTypeaheadResponse>(
+      `/api/search_reddit_names.json?raw_json=1&include_over_18=1&include_unadvertisable=1&query=${encodeURIComponent(cleaned)}`,
+    ),
+    fetchReddit<UserSearchResponse>(
+      `/users/search.json?raw_json=1&include_over_18=on&limit=5&q=${encodeURIComponent(cleaned)}`,
+    ),
     fetchReddit<RedditListingResponse>(
       `/search.json?raw_json=1&sort=relevance&type=link&limit=6&q=${encodeURIComponent(cleaned)}`,
     ),
@@ -1463,18 +1455,14 @@ export async function fetchGlobalSearch(
     };
   }
 
-  const blockProneSearchEndpoints = isCloudflarePagesHost();
-
   const [postListing, subredditListing, userListing] = await Promise.allSettled([
     fetchReddit<RedditListingResponse>(`${postSearchPath}&${postQueryParts.join('&')}`),
     fetchReddit<SubredditSearchResponse>(
       `/subreddits/search.json?${[...communityQueryParts, `limit=${subredditLimit}`].join('&')}`,
     ),
-    blockProneSearchEndpoints
-      ? Promise.resolve<UserSearchResponse>({ kind: 'Listing', data: { children: [] } })
-      : fetchReddit<UserSearchResponse>(
-          `/users/search.json?${[...communityQueryParts, `limit=${userLimit}`].join('&')}`,
-        ),
+    fetchReddit<UserSearchResponse>(
+      `/users/search.json?${[...communityQueryParts, `limit=${userLimit}`].join('&')}`,
+    ),
   ]);
 
   const postsSource = postListing.status === 'fulfilled' ? postListing.value : null;
@@ -1608,9 +1596,13 @@ export async function fetchPostDetail(
 
     rememberPosts([post]);
 
+    const comments = response[1] ? extractComments(response[1]) : [];
+    const commentsUnavailable = !response[1] || (post.num_comments > 0 && comments.length === 0);
+
     return {
       post,
-      comments: response[1] ? extractComments(response[1]) : [],
+      comments,
+      commentsStatus: commentsUnavailable ? 'unavailable' : comments.length > 0 ? 'loaded' : 'empty',
     };
   } catch (error) {
     const fallbackPost = cachedPost ?? (await recoverPostFromFallbackSources(subreddit, postId, undefined, cachedTitle));
@@ -1620,10 +1612,10 @@ export async function fetchPostDetail(
       return {
         post: fallbackPost,
         comments: [],
+        commentsStatus: 'unavailable',
       };
     }
 
     throw error;
   }
 }
-

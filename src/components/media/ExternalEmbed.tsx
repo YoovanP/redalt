@@ -13,6 +13,39 @@ type ExternalEmbedProps = {
 
 type ProviderType = 'youtube' | 'vimeo' | 'redgifs' | 'other';
 
+const TRUSTED_EMBED_HOSTS = [
+  'youtube.com',
+  'youtube-nocookie.com',
+  'youtu.be',
+  'vimeo.com',
+  'redgifs.com',
+  'reddit.com',
+  'redditmedia.com',
+  'instagram.com',
+  'instagr.am',
+  'tiktok.com',
+  'twitter.com',
+  'x.com',
+  'twitch.tv',
+  'streamable.com',
+  'soundcloud.com',
+] as const;
+
+function isTrustedEmbedUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+
+    if (url.protocol !== 'https:') {
+      return false;
+    }
+
+    const hostname = url.hostname.toLowerCase();
+    return TRUSTED_EMBED_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+  } catch {
+    return false;
+  }
+}
+
 function decodeBasicEntities(value: string): string {
   return value
     .replace(/&#(?:x20|32);/gi, ' ')
@@ -200,7 +233,8 @@ export function ExternalEmbed({
       return undefined;
     }
 
-    return providerType === 'youtube' ? withYouTubeApi(embedUrl) : embedUrl;
+    const candidate = providerType === 'youtube' ? withYouTubeApi(embedUrl) : embedUrl;
+    return isTrustedEmbedUrl(candidate) ? candidate : undefined;
   }, [embedUrl, providerType]);
   const resolvedEmbedHtml = useMemo(() => {
     const normalized = decodeBasicEntities(embedHtml ?? '').trim();
@@ -294,8 +328,10 @@ export function ExternalEmbed({
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           src={resolvedEmbedUrl}
           title={provider ?? 'External embed'}
-          loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
+          loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
+          sandbox="allow-forms allow-popups allow-presentation allow-same-origin allow-scripts"
+          referrerPolicy="strict-origin-when-cross-origin"
           style={frameStyle}
         />
       ) : embedDocument ? (
@@ -304,9 +340,10 @@ export function ExternalEmbed({
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           srcDoc={embedDocument}
           title={provider ?? 'External embed'}
-          loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
+          loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
-          sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-same-origin allow-scripts"
+          sandbox="allow-forms allow-popups allow-presentation allow-scripts"
+          referrerPolicy="no-referrer"
           style={frameStyle}
         />
       ) : thumbnailUrl ? (
@@ -315,7 +352,7 @@ export function ExternalEmbed({
             className="post-image"
             src={thumbnailUrl}
             alt={provider ?? 'External media preview'}
-            loading={providerType === 'redgifs' ? 'eager' : 'lazy'}
+            loading="lazy"
             referrerPolicy="no-referrer"
           />
         </a>

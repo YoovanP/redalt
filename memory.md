@@ -77,8 +77,8 @@ The frontend request layer is `src/lib/redditApi.ts`.
 2. It chooses proxy bases from `VITE_REDDIT_API_BASES`, or from built-in
    defaults when the env var is missing.
 3. Current built-in default order in code is:
-   `https://redalt.pages.dev/api/reddit`,
    `https://redalt-vercel.onrender.com/api/reddit`,
+   `https://redalt.pages.dev/api/reddit`,
    then `/api/reddit`.
 4. In Vite dev mode, `/api/reddit` is removed from the default base list unless
    explicitly configured, because the plain Vite server does not provide the
@@ -92,10 +92,8 @@ The frontend request layer is `src/lib/redditApi.ts`.
 8. `src/components/media/RenderMedia.tsx` chooses the concrete renderer for
    text, image, gallery, video, external embed, or plain link posts.
 
-The README recommends a production order of Render, Cloudflare Pages, then
-same-origin. The code's built-in default order currently starts with
-Cloudflare Pages, then Render, then same-origin. If the intended production
-priority is Render first, set `VITE_REDDIT_API_BASES` explicitly.
+The built-in production order is Render, Cloudflare Pages, then same-origin.
+Set `VITE_REDDIT_API_BASES` explicitly to override that priority.
 
 ## Proxy Behavior
 
@@ -124,9 +122,9 @@ shared proxy attempts:
 3. AllOrigins mirror fallback when enabled.
 4. Reddit RSS/Atom fallback for compatible listing and comment routes.
 
-The Render proxy in `fly-proxy/server.mjs` implements the same broad behavior
-as a standalone Node HTTP server with `/healthz`, but it is a separate copy and
-must be kept in sync manually when proxy fallback logic changes.
+The Render/Fly proxy in `fly-proxy/server.mjs` is a standalone Node HTTP adapter
+with `/healthz` that imports the shared `api/redditProxy.ts` core. Its deploy
+context must remain the repository root so that shared module is packaged.
 
 ## What Works
 
@@ -189,11 +187,9 @@ must be kept in sync manually when proxy fallback logic changes.
 - The service worker may serve cached runtime responses while offline. This is
   useful for resilience but can make stale Reddit content appear if the network
   is unavailable.
-- There is no test script, lint script, or parser test suite in `package.json`.
-  The main repo-level verification command is `npm run build`.
-- The Render proxy (`fly-proxy/server.mjs`) duplicates large parts of
-  `api/redditProxy.ts`. A fix made in only one file can leave one deployment path
-  stale.
+- `npm test` covers safe browser-storage behavior and proxy route authorization.
+  Parser fixtures and browser-level interaction tests are still missing, so
+  `npm run build` remains part of the main verification flow.
 - Plain Vite local development relies on the remote default proxies unless
   `VITE_REDDIT_API_BASES` is set. The same-origin `/api/reddit` route is not
   available from Vite alone.
@@ -215,8 +211,8 @@ Deployment paths:
 - Vercel uses `api/reddit.ts` and `api/redditProxy.ts`.
 - Cloudflare Pages uses `functions/api/reddit/[[path]].ts` and
   `api/redditProxy.ts`.
-- Render uses `fly-proxy/server.mjs`, `fly-proxy/package.json`, and
-  `render.yaml`.
+- Render uses the repository root plus `fly-proxy/server.mjs`,
+  `fly-proxy/package.json`, `api/redditProxy.ts`, and `render.yaml`.
 
 ## Verification Notes
 

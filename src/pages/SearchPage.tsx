@@ -281,10 +281,10 @@ export function SearchPage() {
           <h3>Subreddits</h3>
           <div className="search-chip-list">
             {subreddits.map((subreddit) => (
-              <Link key={subreddit.name} to={`/r/${subreddit.name}`} className="search-chip-card">
+              <article key={subreddit.name} className="search-chip-card">
                 {subreddit.iconUrl && <img src={subreddit.iconUrl} alt="" loading="lazy" />}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <strong>r/{subreddit.name}</strong>
+                <div className="search-chip-content">
+                  <strong><Link to={`/r/${subreddit.name}`}>r/{subreddit.name}</Link></strong>
                   <p>{subreddit.title}</p>
                   <span>{subreddit.subscribers.toLocaleString()} members{` ${subreddit.isNsfw ? '· NSFW' : ''}`}</span>
                 </div>
@@ -292,26 +292,12 @@ export function SearchPage() {
                   type="button"
                   aria-label={`Add r/${subreddit.name} to custom feed`}
                   title="Add to custom feed"
-                  style={{
-                    marginLeft: 'auto',
-                    padding: '0',
-                    fontSize: '1.25rem',
-                    lineHeight: 1,
-                    minHeight: '32px',
-                    minWidth: '32px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderRadius: '50%'
-                  }}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    addCustomFeedSubreddit(subreddit.name);
-                  }}
+                  className="search-chip-add"
+                  onClick={() => addCustomFeedSubreddit(subreddit.name)}
                 >
                   +
                 </button>
-              </Link>
+              </article>
             ))}
           </div>
           {canLoadMoreSubreddits && (

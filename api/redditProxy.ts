@@ -38,6 +38,8 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
 const SUCCESS_RESPONSE_CACHE_TTL_MS = 5 * 60 * 1000;
+const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
+const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
 const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
 const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 4000;
@@ -88,6 +90,9 @@ function getCachedSuccessResponse(cacheKey: string): Response | null {
     return null;
   }
 
+  successfulResponseCache.delete(cacheKey);
+  successfulResponseCache.set(cacheKey, cached);
+
   const headers = new Headers(cached.headers);
   headers.set('X-RedAlt-Cache', 'hit');
   return new Response(cached.body, { status: cached.status, headers });
@@ -100,12 +105,34 @@ async function rememberSuccessfulResponse(cacheKey: string, response: Response):
 
   const body = await response.text();
   const headers = Object.fromEntries(response.headers.entries());
-  successfulResponseCache.set(cacheKey, {
-    body,
-    status: response.status,
-    headers,
-    expiresAt: Date.now() + SUCCESS_RESPONSE_CACHE_TTL_MS,
-  });
+  const now = Date.now();
+
+  for (const [key, cached] of successfulResponseCache) {
+    if (cached.expiresAt <= now) {
+      successfulResponseCache.delete(key);
+    }
+  }
+
+  if (new TextEncoder().encode(body).byteLength <= SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES) {
+    successfulResponseCache.delete(cacheKey);
+
+    while (successfulResponseCache.size >= SUCCESS_RESPONSE_CACHE_MAX_ENTRIES) {
+      const oldestKey = successfulResponseCache.keys().next().value;
+
+      if (typeof oldestKey !== 'string') {
+        break;
+      }
+
+      successfulResponseCache.delete(oldestKey);
+    }
+
+    successfulResponseCache.set(cacheKey, {
+      body,
+      status: response.status,
+      headers,
+      expiresAt: now + SUCCESS_RESPONSE_CACHE_TTL_MS,
+    });
+  }
 
   return new Response(body, {
     status: response.status,
@@ -115,15 +142,44 @@ async function rememberSuccessfulResponse(cacheKey: string, response: Response):
 }
 
 export function isAllowedRedditPath(upstreamPath: string): boolean {
-  const normalizedPath = upstreamPath.split('?')[0] || '/';
+  const rawPath = upstreamPath.split('?')[0] || '/';
+
+  if (!rawPath.startsWith('/') || rawPath.startsWith('//')) {
+    return false;
+  }
+
+  let normalizedPath = rawPath;
+
+  try {
+    for (let pass = 0; pass < 3; pass += 1) {
+      const decoded = decodeURIComponent(normalizedPath);
+
+      if (decoded === normalizedPath) {
+        break;
+      }
+
+      normalizedPath = decoded;
+    }
+  } catch {
+    return false;
+  }
+
+  if (
+    normalizedPath.startsWith('//') ||
+    normalizedPath.includes('//') ||
+    /[\\\u0000-\u001f\u007f]/.test(normalizedPath) ||
+    normalizedPath.split('/').some((segment) => segment === '.' || segment === '..')
+  ) {
+    return false;
+  }
 
   return (
-    normalizedPath.startsWith('/r/') ||
-    normalizedPath.startsWith('/user/') ||
-    normalizedPath.startsWith('/search.json') ||
-    normalizedPath.startsWith('/subreddits/') ||
-    normalizedPath.startsWith('/users/') ||
-    normalizedPath.startsWith('/api/search_reddit_names.json')
+    /^\/r\/[^/]+(?:\/.*)?$/.test(normalizedPath) ||
+    /^\/user\/[^/]+(?:\/.*)?$/.test(normalizedPath) ||
+    /^\/subreddits\/[^/]+(?:\/.*)?$/.test(normalizedPath) ||
+    /^\/users\/[^/]+(?:\/.*)?$/.test(normalizedPath) ||
+    normalizedPath === '/search.json' ||
+    normalizedPath === '/api/search_reddit_names.json'
   );
 }
 

@@ -2,7 +2,7 @@ app = "redalt-reddit-proxy"
 primary_region = "sin"
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "fly-proxy/Dockerfile"
 
 [http_service]
   internal_port = 8080

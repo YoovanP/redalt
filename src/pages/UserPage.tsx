@@ -88,10 +88,20 @@ export function UserPage() {
 
   if (visiblePosts.length === 0) {
     return (
-      <StateView
-        kind="empty"
-        message={videoFeedMode ? 'No media posts found for this user.' : 'This user has no visible posts.'}
-      />
+      <section>
+        <StateView
+          kind="empty"
+          message={videoFeedMode ? 'No media posts found in the pages checked for this user.' : 'This user has no visible posts.'}
+        />
+        {after && (
+          <div>
+            <LoadMoreButton loading={loadingMore} onClick={loadMore}>
+              Check more posts
+            </LoadMoreButton>
+            {loadMoreError && <p className="meta">{loadMoreError}</p>}
+          </div>
+        )}
+      </section>
     );
   }
 

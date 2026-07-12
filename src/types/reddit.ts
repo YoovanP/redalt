@@ -172,4 +172,5 @@ export interface RedditComment {
 export interface PostDetailResult {
   post: RedditPostData;
   comments: RedditComment[];
+  commentsStatus: 'loaded' | 'empty' | 'unavailable';
 }

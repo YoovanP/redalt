@@ -2,10 +2,9 @@ services:
   - type: web
     name: redalt-reddit-proxy
     runtime: node
-    rootDir: fly-proxy
     plan: free
-    buildCommand: npm install --omit=dev
-    startCommand: npm run start
+    buildCommand: npm --prefix fly-proxy ci --omit=dev
+    startCommand: npm --prefix fly-proxy run start
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:

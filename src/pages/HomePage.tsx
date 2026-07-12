@@ -204,11 +204,9 @@ export function HomePage() {
           <>
             <div className="home-trending-grid">
               {trendingPosts.slice(0, visibleCount).map((post, index) => (
-                <Link
+                <article
                   key={post.id}
-                  to={`/r/${post.subreddit}/comments/${post.id}`}
                   className="home-trending-card"
-                  state={{ fallbackPost: post }}
                 >
                   {index === triggerIndex && (after || visibleCount < trendingPosts.length) && (
                     <div ref={nearEndRef} className="near-end-trigger" />
@@ -223,12 +221,19 @@ export function HomePage() {
                     )}
                   </div>
                   <div className="home-trending-info">
-                    <h4>{post.title}</h4>
+                    <h4>
+                      <Link
+                        to={`/r/${post.subreddit}/comments/${post.id}`}
+                        state={{ fallbackPost: post }}
+                      >
+                        {post.title}
+                      </Link>
+                    </h4>
                     <p className="home-trending-meta">
                       r/{post.subreddit} · {post.score} points
                     </p>
                   </div>
-                </Link>
+                </article>
               ))}
             </div>
             <div className="home-trending-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>

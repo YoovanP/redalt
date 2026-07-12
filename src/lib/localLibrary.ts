@@ -1,4 +1,5 @@
 import type { NormalizedPost } from '../types/reddit';
+import { readStorageItem, writeStorageItem } from './browserStorage';
 
 export type LibraryItem = {
   id: string;
@@ -20,10 +21,6 @@ export type LibraryItem = {
 const SAVED_KEY = 'redalt.savedPosts';
 const HISTORY_KEY = 'redalt.watchHistory';
 const HISTORY_LIMIT = 250;
-
-function isBrowser(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-}
 
 function mapPostToItem(post: NormalizedPost): LibraryItem {
   return {
@@ -71,19 +68,11 @@ function parseItems(raw: string | null): LibraryItem[] {
 }
 
 function readItems(key: string): LibraryItem[] {
-  if (!isBrowser()) {
-    return [];
-  }
-
-  return parseItems(window.localStorage.getItem(key));
+  return parseItems(readStorageItem('local', key));
 }
 
 function writeItems(key: string, items: LibraryItem[]): void {
-  if (!isBrowser()) {
-    return;
-  }
-
-  window.localStorage.setItem(key, JSON.stringify(items));
+  writeStorageItem('local', key, JSON.stringify(items));
 }
 
 export function getSavedPosts(): LibraryItem[] {

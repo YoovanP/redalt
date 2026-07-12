@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useId, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { fetchMixedSearchSuggestions, type MixedSearchSuggestion } from '../lib/redditApi';
 
@@ -105,6 +105,8 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
   const [suggestions, setSuggestions] = useState<MixedSearchSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const suggestionsId = useId();
 
   useEffect(() => {
     if (!isFocused) {
@@ -124,21 +126,31 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
   );
 
   useEffect(() => {
+    let ignore = false;
+
     if (!isFocused || normalizedValue.length < 2) {
       setSuggestions([]);
       setShowSuggestions(false);
+      setActiveSuggestionIndex(-1);
       return;
     }
 
     const handle = window.setTimeout(async () => {
       const nextSuggestions = await fetchMixedSearchSuggestions(value);
+
+      if (ignore) {
+        return;
+      }
+
       setSuggestions(nextSuggestions);
+      setActiveSuggestionIndex(-1);
 
       const canShow = nextSuggestions.length > 0;
       setShowSuggestions(canShow);
     }, 220);
 
     return () => {
+      ignore = true;
       window.clearTimeout(handle);
     };
   }, [value, normalizedValue, isFocused]);
@@ -182,6 +194,40 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
     navigate(suggestion.route);
   };
 
+  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      setShowSuggestions(false);
+      setActiveSuggestionIndex(-1);
+      return;
+    }
+
+    if (!showSuggestions || suggestions.length === 0) {
+      return;
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      setActiveSuggestionIndex((current) => {
+        if (current < 0) {
+          return delta > 0 ? 0 : suggestions.length - 1;
+        }
+
+        return (current + delta + suggestions.length) % suggestions.length;
+      });
+      return;
+    }
+
+    if (event.key === 'Enter' && activeSuggestionIndex >= 0) {
+      const suggestion = suggestions[activeSuggestionIndex];
+
+      if (suggestion) {
+        event.preventDefault();
+        onPickSuggestion(suggestion);
+      }
+    }
+  };
+
   return (
     <form className={`subreddit-form${wide ? ' subreddit-form-wide' : ''}`} onSubmit={onSubmit}>
       <div className="subreddit-input-wrap">
@@ -190,14 +236,16 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
           onChange={(event) => {
             const nextValue = event.target.value;
             setValue(nextValue);
+            setSuggestions([]);
+            setActiveSuggestionIndex(-1);
+            setShowSuggestions(false);
 
-            const normalizedNextValue = nextValue.trim().replace(/^\/?r\//i, '').toLowerCase();
-            setShowSuggestions(isFocused && suggestions.length > 0 && normalizedNextValue.length >= 2);
           }}
           onFocus={() => {
             setIsFocused(true);
             setShowSuggestions(suggestions.length > 0 && normalizedValue.length >= 2);
           }}
+          onKeyDown={onInputKeyDown}
           onBlur={() =>
             window.setTimeout(() => {
               setIsFocused(false);
@@ -207,14 +255,30 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
           placeholder="Search posts, subreddits, users..."
           aria-label="Search Reddit content"
           aria-autocomplete="list"
+          aria-expanded={showSuggestions}
+          aria-controls={showSuggestions ? suggestionsId : undefined}
+          aria-activedescendant={
+            showSuggestions && activeSuggestionIndex >= 0
+              ? `${suggestionsId}-${activeSuggestionIndex}`
+              : undefined
+          }
           autoComplete="off"
         />
 
         {showSuggestions && (
-          <ul className="subreddit-suggestions" role="listbox" aria-label="Search suggestions">
-            {suggestions.map((suggestion) => (
-              <li key={`${suggestion.kind}:${suggestion.route}`}>
-                <button type="button" onMouseDown={() => onPickSuggestion(suggestion)}>
+          <ul id={suggestionsId} className="subreddit-suggestions" role="listbox" aria-label="Search suggestions">
+            {suggestions.map((suggestion, index) => (
+              <li key={`${suggestion.kind}:${suggestion.route}`} role="presentation">
+                <button
+                  id={`${suggestionsId}-${index}`}
+                  type="button"
+                  role="option"
+                  aria-selected={activeSuggestionIndex === index}
+                  tabIndex={-1}
+                  onMouseEnter={() => setActiveSuggestionIndex(index)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => onPickSuggestion(suggestion)}
+                >
                   <span className={`subreddit-suggestion-type suggestion-${suggestion.kind}`}>
                     {suggestion.kind}
                   </span>

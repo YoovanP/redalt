@@ -92,13 +92,25 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
 
   return (
     <li className={itemClassName}>
-      <div className="comment-meta" onClick={toggleCollapse} role={depth === 0 ? 'button' : undefined} tabIndex={depth === 0 ? 0 : undefined} onKeyDown={depth === 0 ? (e) => { if (e.key === 'Enter') toggleCollapse(); } : undefined}>
+      <div className="comment-meta">
+        {depth === 0 && (
+          <button
+            type="button"
+            className="comment-collapse-control"
+            aria-expanded={!collapsed}
+            aria-label={`${collapsed ? 'Expand' : 'Collapse'} comment by ${comment.author}`}
+            title={collapsed ? 'Expand comment' : 'Collapse comment'}
+            onClick={toggleCollapse}
+          >
+            {collapsed ? '+' : '−'}
+          </button>
+        )}
         <strong>
-          <Link to={`/u/${comment.author}`} onClick={(e) => e.stopPropagation()}>u/{comment.author}</Link>
+          <Link to={`/u/${comment.author}`}>u/{comment.author}</Link>
         </strong>
         {comment.parentAuthor && (
           <span>
-            replying to <Link to={`/u/${comment.parentAuthor}`} onClick={(e) => e.stopPropagation()}>u/{comment.parentAuthor}</Link>
+            replying to <Link to={`/u/${comment.parentAuthor}`}>u/{comment.parentAuthor}</Link>
           </span>
         )}
       </div>
@@ -144,6 +156,7 @@ export function PostDetailPage() {
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [saved, setSaved] = useState(false);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
+  const [retryNonce, setRetryNonce] = useState(0);
   const rememberedPost = useMemo(() => {
     const post = getRememberedPost(id);
     return post ? normalizePost(post) : null;
@@ -191,7 +204,7 @@ export function PostDetailPage() {
     return () => {
       ignore = true;
     };
-  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource]);
+  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource, retryNonce]);
 
   const normalized = useMemo(() => {
     if (!data) {
@@ -276,6 +289,17 @@ export function PostDetailPage() {
           {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
         </button>
       </p>
+
+      {data?.commentsStatus === 'unavailable' && (
+        <div className="comments-status" role="status">
+          <p>The post loaded, but comments are temporarily unavailable.</p>
+          <button type="button" className="load-more" onClick={() => setRetryNonce((value) => value + 1)}>
+            Retry comments
+          </button>
+        </div>
+      )}
+
+      {data?.commentsStatus === 'empty' && <p className="comments-status">No comments yet.</p>}
 
       {comments.length > 0 && (
         <div>

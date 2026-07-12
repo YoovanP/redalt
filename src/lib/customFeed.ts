@@ -1,9 +1,7 @@
+import { readStorageItem, writeStorageItem } from './browserStorage';
+
 const STORAGE_KEY = 'redalt.customFeed';
 export const CUSTOM_FEED_UPDATE_EVENT = 'redalt-custom-feed-update';
-
-function isBrowser(): boolean {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-}
 
 export function sanitizeSubreddit(input: string): string {
   return input
@@ -14,12 +12,8 @@ export function sanitizeSubreddit(input: string): string {
 }
 
 export function readCustomFeedSubreddits(): string[] {
-  if (!isBrowser()) {
-    return [];
-  }
-
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readStorageItem('local', STORAGE_KEY);
     const parsed = raw ? (JSON.parse(raw) as unknown) : [];
 
     if (!Array.isArray(parsed)) {
@@ -39,12 +33,8 @@ export function readCustomFeedSubreddits(): string[] {
 }
 
 export function writeCustomFeedSubreddits(subreddits: string[]): void {
-  if (!isBrowser()) {
-    return;
-  }
-
   const sanitized = Array.from(new Set(subreddits.map(sanitizeSubreddit).filter(Boolean)));
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+  writeStorageItem('local', STORAGE_KEY, JSON.stringify(sanitized));
 }
 
 export function notifyCustomFeedUpdate(): void {

@@ -31,7 +31,9 @@ if ('serviceWorker' in navigator) {
       return;
     }
 
-    void navigator.serviceWorker.register('/sw.js');
+    void navigator.serviceWorker.register('/sw.js').catch(() => {
+      // The app remains usable when service-worker registration is blocked.
+    });
   });
 }
 

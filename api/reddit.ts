@@ -3,6 +3,7 @@ import { handleRedditProxyRequest, type RedditProxyEnv } from './redditProxy';
 const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
 
 type VercelRequestLike = {
+  method?: string;
   url?: string;
   query?: {
     path?: string | string[];
@@ -35,6 +36,22 @@ async function sendResponse(res: VercelResponseLike, response: Response): Promis
 }
 
 export default async function handler(req: VercelRequestLike, res: VercelResponseLike): Promise<void> {
+  const method = (req.method ?? 'GET').toUpperCase();
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+
+  if (method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  if (method !== 'GET') {
+    res.setHeader('Allow', 'GET, OPTIONS');
+    res.status(405).send('Method not allowed');
+    return;
+  }
+
   const incomingUrl = new URL(req.url ?? '/', 'http://localhost');
   const upstreamPath = buildUpstreamPath(req.query?.path, incomingUrl);
   const response = await handleRedditProxyRequest(upstreamPath, process.env as RedditProxyEnv, {
