@@ -4,11 +4,24 @@ import { useUiSettings } from '../../lib/uiSettings';
 type VideoMediaProps = {
   sourceUrl: string;
   hlsUrl?: string;
+  mimeType?: string;
+  posterUrl?: string;
+  isGif?: boolean;
   title: string;
   showSourceLink?: boolean;
+  inline?: boolean;
 };
 
-export function VideoMedia({ sourceUrl, hlsUrl, title, showSourceLink = true }: VideoMediaProps) {
+export function VideoMedia({
+  sourceUrl,
+  hlsUrl,
+  mimeType,
+  posterUrl,
+  isGif = false,
+  title,
+  showSourceLink = true,
+  inline = false,
+}: VideoMediaProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const {
     settings: { autoplayVideos, autoplayWithAudio },
@@ -47,22 +60,32 @@ export function VideoMedia({ sourceUrl, hlsUrl, title, showSourceLink = true }: 
     };
   }, [hlsUrl]);
 
+  const player = (
+    <video
+      ref={videoRef}
+      className="post-video"
+      controls={!isGif}
+      playsInline
+      preload="metadata"
+      autoPlay={isGif || autoplayVideos}
+      loop={isGif}
+      muted={isGif || shouldMute}
+      poster={posterUrl}
+    >
+      {hlsUrl && <source src={hlsUrl} type="application/vnd.apple.mpegurl" />}
+      {hlsUrl && <source src={hlsUrl} type="application/x-mpegURL" />}
+      {sourceUrl !== hlsUrl && <source src={sourceUrl} type={mimeType} />}
+      Your browser does not support embedded videos.
+    </video>
+  );
+
+  if (inline) {
+    return player;
+  }
+
   return (
     <div className="media-block media-aspect-wrap">
-      <video
-        ref={videoRef}
-        className="post-video"
-        controls
-        playsInline
-        preload="metadata"
-        autoPlay={autoplayVideos}
-        muted={shouldMute}
-      >
-        {hlsUrl && <source src={hlsUrl} type="application/vnd.apple.mpegurl" />}
-        {hlsUrl && <source src={hlsUrl} type="application/x-mpegURL" />}
-        {sourceUrl !== hlsUrl && <source src={sourceUrl} type="video/mp4" />}
-        Your browser does not support embedded videos.
-      </video>
+      {player}
       {showSourceLink && (
         <a href={sourceLinkUrl} target="_blank" rel="noreferrer">
           Open video source: {title}

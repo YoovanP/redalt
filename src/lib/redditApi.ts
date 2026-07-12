@@ -322,14 +322,25 @@ function getUrlHostname(url: string | undefined): string {
   }
 }
 
+function hostMatches(hostname: string, expectedHost: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.+$/g, '');
+  const normalizedExpectedHost = expectedHost.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+
+  return Boolean(
+    normalizedHostname &&
+      normalizedExpectedHost &&
+      (normalizedHostname === normalizedExpectedHost || normalizedHostname.endsWith(`.${normalizedExpectedHost}`)),
+  );
+}
+
 function isRedditMediaHost(hostname: string): boolean {
   return (
     hostname === 'i.redd.it' ||
     hostname === 'preview.redd.it' ||
     hostname === 'v.redd.it' ||
-    hostname.endsWith('.redd.it') ||
-    hostname.endsWith('redditmedia.com') ||
-    hostname.endsWith('reddit.com')
+    hostMatches(hostname, 'redd.it') ||
+    hostMatches(hostname, 'redditmedia.com') ||
+    hostMatches(hostname, 'reddit.com')
   );
 }
 
@@ -354,9 +365,12 @@ function isKnownRedditHostedVideoUrl(url: string | undefined): boolean {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
 
-    return hostname === 'v.redd.it' || (hostname.endsWith('reddit.com') && /^\/video\/[^/?#]+/i.test(parsed.pathname));
+    return hostname === 'v.redd.it' || (hostMatches(hostname, 'reddit.com') && /^\/video\/[^/?#]+/i.test(parsed.pathname));
   } catch {
-    return /https?:\/\/v\.redd\.it\//i.test(url) || /https?:\/\/[^/]*reddit\.com\/video\//i.test(url);
+    return (
+      /https?:\/\/v\.redd\.it\//i.test(url) ||
+      /https?:\/\/(?:[^./?#]+\.)*reddit\.com\/video\//i.test(url)
+    );
   }
 }
 
@@ -364,33 +378,98 @@ function hasNonEmptyObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
 }
 
+function isUsableHttpUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+}
+
+function hasUsableMediaSource(value: unknown): boolean {
+  if (!hasNonEmptyObject(value)) {
+    return false;
+  }
+
+  return ['url', 'u', 'mp4', 'gif', 'hlsUrl', 'dashUrl', 'hls_url', 'dash_url'].some((key) =>
+    isUsableHttpUrl(value[key]),
+  );
+}
+
+function hasPreviewImagesDirect(post: RedditPostData): boolean {
+  return Boolean(
+    post.preview?.images?.some((image) =>
+      hasUsableMediaSource(image.source) ||
+      Object.values(image.variants ?? {}).some((variant) => hasUsableMediaSource(variant?.source)),
+    ),
+  );
+}
+
+function hasRedditVideoSource(value: unknown): boolean {
+  if (!hasNonEmptyObject(value)) {
+    return false;
+  }
+
+  return [value.fallback_url, value.hls_url, value.dash_url].some(isUsableHttpUrl);
+}
+
+function hasPreviewVideoDirect(post: RedditPostData): boolean {
+  return hasRedditVideoSource(post.preview?.reddit_video_preview);
+}
+
+function hasRenderablePreviewDirect(post: RedditPostData): boolean {
+  return hasPreviewImagesDirect(post) || hasPreviewVideoDirect(post);
+}
+
+const POST_MEDIA_TREE_MAX_DEPTH = 3;
+const POST_MEDIA_TREE_MAX_ITEMS = 4;
+
+function somePostMediaTree(
+  post: RedditPostData,
+  predicate: (candidate: RedditPostData) => boolean,
+  depth = 0,
+  seen = new Set<RedditPostData>(),
+): boolean {
+  if (depth > POST_MEDIA_TREE_MAX_DEPTH || seen.has(post)) {
+    return false;
+  }
+
+  seen.add(post);
+
+  if (predicate(post)) {
+    return true;
+  }
+
+  if (depth === POST_MEDIA_TREE_MAX_DEPTH || !Array.isArray(post.crosspost_parent_list)) {
+    return false;
+  }
+
+  return post.crosspost_parent_list
+    .slice(0, POST_MEDIA_TREE_MAX_ITEMS)
+    .some((crosspost) => crosspost && somePostMediaTree(crosspost, predicate, depth + 1, seen));
+}
+
 function hasPreviewImages(post: RedditPostData): boolean {
-  return Array.isArray(post.preview?.images) && post.preview.images.length > 0;
+  return somePostMediaTree(post, hasPreviewImagesDirect);
 }
 
 function getPostOutboundUrl(post: RedditPostData | null | undefined): string {
   return post ? post.url_overridden_by_dest ?? post.url ?? '' : '';
 }
 
-function hasPlayableVideoMedia(post: RedditPostData | null | undefined): boolean {
-  if (!post) {
-    return false;
-  }
-
+function hasPlayableVideoMediaDirect(post: RedditPostData): boolean {
   const outboundUrl = getPostOutboundUrl(post);
 
   return Boolean(
-    (Boolean(post.is_video || post.post_hint === 'hosted:video') &&
-      Boolean(post.secure_media?.reddit_video?.fallback_url || post.media?.reddit_video?.fallback_url)) ||
-      isKnownRedditHostedVideoUrl(outboundUrl),
+    hasRedditVideoSource(post.secure_media?.reddit_video) ||
+      hasRedditVideoSource(post.media?.reddit_video) ||
+      hasPreviewVideoDirect(post) ||
+      isKnownRedditHostedVideoUrl(outboundUrl) ||
+      /\.(?:mp4|webm|mov|m4v|ogv|gifv|m3u8)(?:$|[?#])/i.test(outboundUrl),
   );
 }
 
-function hasRenderableEmbed(post: RedditPostData | null | undefined): boolean {
-  if (!post) {
-    return false;
-  }
+function hasPlayableVideoMedia(post: RedditPostData | null | undefined): boolean {
+  return Boolean(post && somePostMediaTree(post, hasPlayableVideoMediaDirect));
+}
 
+function hasRenderableEmbedDirect(post: RedditPostData): boolean {
   return Boolean(
     post.secure_media?.oembed?.html ||
       post.media?.oembed?.html ||
@@ -399,20 +478,52 @@ function hasRenderableEmbed(post: RedditPostData | null | undefined): boolean {
   );
 }
 
-function hasGalleryMedia(post: RedditPostData | null | undefined): boolean {
-  return Boolean(post?.is_gallery && post.gallery_data?.items?.length && hasNonEmptyObject(post.media_metadata));
+function hasRenderableEmbed(post: RedditPostData | null | undefined): boolean {
+  return Boolean(post && somePostMediaTree(post, hasRenderableEmbedDirect));
 }
 
-function hasRenderableExternalOutbound(post: RedditPostData | null | undefined): boolean {
-  if (!post) {
+function hasGalleryMediaDirect(post: RedditPostData): boolean {
+  if (!post.is_gallery || !post.gallery_data?.items?.length || !hasNonEmptyObject(post.media_metadata)) {
     return false;
   }
 
+  return post.gallery_data.items.some((item) => {
+    const metadata = post.media_metadata?.[item.media_id] as Record<string, unknown> | undefined;
+
+    return Boolean(
+      metadata &&
+        (hasUsableMediaSource(metadata) ||
+          hasUsableMediaSource(metadata.s) ||
+          (Array.isArray(metadata.p) && metadata.p.some(hasUsableMediaSource))),
+    );
+  });
+}
+
+function hasGalleryMedia(post: RedditPostData | null | undefined): boolean {
+  return Boolean(post && somePostMediaTree(post, hasGalleryMediaDirect));
+}
+
+function hasRenderableExternalOutboundDirect(post: RedditPostData): boolean {
   const outboundUrl = getPostOutboundUrl(post);
   const hostname = getUrlHostname(outboundUrl);
 
   return Boolean(
     outboundUrl && !isRedditMediaHost(hostname) && !isCommentPermalinkUrl(outboundUrl, post.id),
+  );
+}
+
+function hasRenderableExternalOutbound(post: RedditPostData | null | undefined): boolean {
+  return Boolean(post && somePostMediaTree(post, hasRenderableExternalOutboundDirect));
+}
+
+function hasRenderableImageDirect(post: RedditPostData): boolean {
+  const outboundUrl = getPostOutboundUrl(post);
+  const hasImageOutbound = /\.(?:png|jpe?g|webp|gif|avif)(?:$|[?#])/i.test(outboundUrl);
+
+  return Boolean(
+    hasPreviewImagesDirect(post) ||
+      hasImageOutbound ||
+      (isUsableHttpUrl(post.thumbnail) && !['default', 'self', 'nsfw', 'spoiler', 'image'].includes(post.thumbnail.toLowerCase())),
   );
 }
 
@@ -480,18 +591,11 @@ function getRawPostMediaStrength(post: RedditPostData | null | undefined): numbe
     return -1;
   }
 
-  const outboundUrl = getPostOutboundUrl(post);
-  const hostname = getUrlHostname(outboundUrl);
-  const hasExternalOutbound = Boolean(
-    outboundUrl && !isRedditMediaHost(hostname) && !isCommentPermalinkUrl(outboundUrl, post.id),
-  );
+  const hasExternalOutbound = hasRenderableExternalOutbound(post);
   const hasVideo = hasPlayableVideoMedia(post);
   const hasEmbed = hasRenderableEmbed(post);
   const hasGallery = hasGalleryMedia(post);
-  const hasImage =
-    post.post_hint === 'image' ||
-    hasPreviewImages(post) ||
-    Boolean(post.thumbnail && /^https?:\/\//i.test(post.thumbnail));
+  const hasImage = somePostMediaTree(post, hasRenderableImageDirect);
 
   if (hasVideo) {
     return 5;
@@ -513,26 +617,36 @@ function getRawPostMediaStrength(post: RedditPostData | null | undefined): numbe
     return 3;
   }
 
-  return post.is_self || post.selftext.trim() ? 1 : 0;
+  return post.is_self || (post.selftext ?? '').trim() ? 1 : 0;
 }
 
 function mergePostMediaFields(detailPost: RedditPostData, mediaPost: RedditPostData): RedditPostData {
+  const mediaPostHasGallery = hasGalleryMediaDirect(mediaPost);
+  const mediaPostHasPreview = hasRenderablePreviewDirect(mediaPost);
+
   return {
     ...detailPost,
     link_flair_text: detailPost.link_flair_text ?? mediaPost.link_flair_text,
     url: mediaPost.url || detailPost.url,
     url_overridden_by_dest: mediaPost.url_overridden_by_dest ?? detailPost.url_overridden_by_dest,
     domain: mediaPost.domain || detailPost.domain,
-    thumbnail: mediaPost.thumbnail ?? detailPost.thumbnail,
-    preview: hasPreviewImages(mediaPost) ? mediaPost.preview : detailPost.preview,
-    gallery_data: mediaPost.gallery_data ?? detailPost.gallery_data,
-    media_metadata: mediaPost.media_metadata ?? detailPost.media_metadata,
-    media: hasNonEmptyObject(mediaPost.media) ? mediaPost.media : detailPost.media,
-    secure_media: hasNonEmptyObject(mediaPost.secure_media) ? mediaPost.secure_media : detailPost.secure_media,
-    media_embed: mediaPost.media_embed ?? detailPost.media_embed,
-    secure_media_embed: mediaPost.secure_media_embed ?? detailPost.secure_media_embed,
-    is_self: mediaPost.is_self,
-    is_gallery: mediaPost.is_gallery ?? detailPost.is_gallery,
+    thumbnail: isUsableHttpUrl(mediaPost.thumbnail) ? mediaPost.thumbnail : detailPost.thumbnail,
+    preview: mediaPostHasPreview ? mediaPost.preview : detailPost.preview,
+    gallery_data: mediaPostHasGallery ? mediaPost.gallery_data : detailPost.gallery_data,
+    media_metadata: mediaPostHasGallery ? mediaPost.media_metadata : detailPost.media_metadata,
+    media: hasRenderableEmbedDirect(mediaPost) || hasRedditVideoSource(mediaPost.media?.reddit_video)
+      ? mediaPost.media
+      : detailPost.media,
+    secure_media: hasRedditVideoSource(mediaPost.secure_media?.reddit_video) || Boolean(mediaPost.secure_media?.oembed?.html)
+      ? mediaPost.secure_media
+      : detailPost.secure_media,
+    media_embed: mediaPost.media_embed?.content ? mediaPost.media_embed : detailPost.media_embed,
+    secure_media_embed: mediaPost.secure_media_embed?.content ? mediaPost.secure_media_embed : detailPost.secure_media_embed,
+    crosspost_parent_list: mediaPost.crosspost_parent_list?.length
+      ? mediaPost.crosspost_parent_list
+      : detailPost.crosspost_parent_list,
+    is_self: typeof mediaPost.is_self === 'boolean' ? mediaPost.is_self : detailPost.is_self,
+    is_gallery: mediaPostHasGallery ? true : detailPost.is_gallery,
     is_video: mediaPost.is_video ?? detailPost.is_video,
     post_hint: mediaPost.post_hint ?? detailPost.post_hint,
   };
@@ -542,16 +656,16 @@ function chooseBetterCachedPost(current: RedditPostData, candidate: RedditPostDa
   const currentStrength = getRawPostMediaStrength(current);
   const candidateStrength = getRawPostMediaStrength(candidate);
 
+  if (candidateStrength < currentStrength) {
+    return current;
+  }
+
   if (candidateImprovesMedia(current, candidate)) {
     return candidate;
   }
 
-  if (candidateStrength < currentStrength && !candidateImprovesMedia(candidate, current)) {
-    return current;
-  }
-
   if ((candidate.num_comments ?? 0) > (current.num_comments ?? 0) || (candidate.score ?? 0) > (current.score ?? 0)) {
-    return candidate;
+    return mergePostMediaFields(candidate, current);
   }
 
   return current;
@@ -690,7 +804,12 @@ async function recoverPostFromFallbackSources(
     }),
   );
 
-  return results.find((post): post is RedditPostData => Boolean(post)) ?? null;
+  return results
+    .filter((post): post is RedditPostData => Boolean(post))
+    .reduce<RedditPostData | null>(
+      (best, candidate) => (best ? chooseBetterCachedPost(best, candidate) : candidate),
+      null,
+    );
 }
 
 function isConfiguredRedditBase(base: string): boolean {

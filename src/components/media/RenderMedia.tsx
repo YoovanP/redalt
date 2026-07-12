@@ -32,6 +32,9 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
       <VideoMedia
         sourceUrl={media.sourceUrl}
         hlsUrl={media.hlsUrl}
+        mimeType={media.mimeType}
+        posterUrl={media.posterUrl}
+        isGif={media.isGif}
         title={post.title}
         showSourceLink={!isShorts}
       />

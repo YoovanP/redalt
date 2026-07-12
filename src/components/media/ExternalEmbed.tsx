@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { isTrustedEmbedUrl } from '../../lib/normalizePost';
 
 type ExternalEmbedProps = {
   embedUrl?: string;
@@ -13,37 +14,32 @@ type ExternalEmbedProps = {
 
 type ProviderType = 'youtube' | 'vimeo' | 'redgifs' | 'other';
 
-const TRUSTED_EMBED_HOSTS = [
-  'youtube.com',
-  'youtube-nocookie.com',
-  'youtu.be',
-  'vimeo.com',
-  'redgifs.com',
-  'reddit.com',
-  'redditmedia.com',
-  'instagram.com',
-  'instagr.am',
-  'tiktok.com',
-  'twitter.com',
-  'x.com',
-  'twitch.tv',
-  'streamable.com',
-  'soundcloud.com',
-] as const;
+function urlHostMatches(value: string | undefined, expectedHost: string): boolean {
+  if (!value) {
+    return false;
+  }
 
-function isTrustedEmbedUrl(value: string): boolean {
   try {
-    const url = new URL(value);
-
-    if (url.protocol !== 'https:') {
-      return false;
-    }
-
-    const hostname = url.hostname.toLowerCase();
-    return TRUSTED_EMBED_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`));
+    const hostname = new URL(value).hostname.toLowerCase().replace(/\.+$/g, '');
+    const normalizedExpectedHost = expectedHost.toLowerCase().replace(/^\.+|\.+$/g, '');
+    return hostname === normalizedExpectedHost || hostname.endsWith(`.${normalizedExpectedHost}`);
   } catch {
     return false;
   }
+}
+
+function hasProviderHost(
+  embedUrl: string | undefined,
+  outboundUrl: string | undefined,
+  expectedHosts: string[],
+): boolean {
+  return [embedUrl, outboundUrl].some((value) =>
+    expectedHosts.some((expectedHost) => urlHostMatches(value, expectedHost)),
+  );
+}
+
+function providerMatches(provider: string | undefined, expectedProvider: string): boolean {
+  return provider?.trim().toLowerCase() === expectedProvider.toLowerCase();
 }
 
 function decodeBasicEntities(value: string): string {
@@ -58,15 +54,18 @@ function decodeBasicEntities(value: string): string {
 }
 
 function isLikelyVerticalEmbed(embedUrl?: string, outboundUrl?: string, provider?: string): boolean {
-  const value = `${embedUrl ?? ''} ${outboundUrl ?? ''} ${provider ?? ''}`.toLowerCase();
-
   return (
-    value.includes('tiktok') ||
-    value.includes('instagram') ||
-    value.includes('instagr.am') ||
-    value.includes('/reel/') ||
-    value.includes('/shorts/') ||
-    value.includes('redgifs')
+    hasProviderHost(embedUrl, outboundUrl, ['tiktok.com']) ||
+    hasProviderHost(embedUrl, outboundUrl, ['instagram.com', 'instagr.am']) ||
+    hasProviderHost(embedUrl, outboundUrl, ['redgifs.com']) ||
+    providerMatches(provider, 'TikTok') ||
+    providerMatches(provider, 'Instagram') ||
+    providerMatches(provider, 'Redgifs') ||
+    [embedUrl, outboundUrl].some(
+      (value) =>
+        (urlHostMatches(value, 'youtube.com') || urlHostMatches(value, 'youtube-nocookie.com')) &&
+        /\/shorts\//i.test(value ?? ''),
+    )
   );
 }
 
@@ -75,17 +74,18 @@ function getEmbedProviderType(
   outboundUrl?: string,
   provider?: string,
 ): ProviderType {
-  const value = `${embedUrl ?? ''} ${outboundUrl ?? ''} ${provider ?? ''}`.toLowerCase();
-
-  if (value.includes('youtube') || value.includes('youtu.be')) {
+  if (
+    hasProviderHost(embedUrl, outboundUrl, ['youtube.com', 'youtube-nocookie.com', 'youtu.be']) ||
+    providerMatches(provider, 'YouTube')
+  ) {
     return 'youtube';
   }
 
-  if (value.includes('vimeo')) {
+  if (hasProviderHost(embedUrl, outboundUrl, ['vimeo.com']) || providerMatches(provider, 'Vimeo')) {
     return 'vimeo';
   }
 
-  if (value.includes('redgifs')) {
+  if (hasProviderHost(embedUrl, outboundUrl, ['redgifs.com']) || providerMatches(provider, 'Redgifs')) {
     return 'redgifs';
   }
 
@@ -97,7 +97,9 @@ function withYouTubeApi(url: string): string {
     const parsed = new URL(url);
 
     if (
-      (parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtu.be')) &&
+      (urlHostMatches(url, 'youtube.com') ||
+        urlHostMatches(url, 'youtube-nocookie.com') ||
+        urlHostMatches(url, 'youtu.be')) &&
       !parsed.searchParams.has('enablejsapi')
     ) {
       parsed.searchParams.set('enablejsapi', '1');

@@ -21,7 +21,7 @@ export interface RedditPostData {
   subreddit: string;
   permalink: string;
   url: string;
-  url_overridden_by_dest?: string;
+  url_overridden_by_dest?: string | null;
   domain: string;
   selftext: string;
   selftext_html?: string | null;
@@ -35,6 +35,7 @@ export interface RedditPostData {
   post_hint?: string;
   thumbnail?: string;
   preview?: {
+    enabled?: boolean;
     images?: Array<{
       source?: RedditImageSource;
       variants?: {
@@ -42,11 +43,14 @@ export interface RedditPostData {
         mp4?: { source?: RedditImageSource };
       };
     }>;
+    reddit_video_preview?: RedditVideo;
   };
   gallery_data?: {
     items: Array<{
       media_id: string;
       id: number;
+      caption?: string;
+      outbound_url?: string;
     }>;
   };
   media_metadata?: Record<
@@ -57,32 +61,51 @@ export interface RedditPostData {
       m?: string;
       s?: RedditImageSource;
       p?: RedditImageSource[];
+      hlsUrl?: string;
+      dashUrl?: string;
+      hls_url?: string;
+      dash_url?: string;
+      x?: number;
+      y?: number;
     }
   >;
   media?: RedditMedia | null;
   secure_media?: RedditMedia | null;
   media_embed?: RedditEmbedContent | null;
   secure_media_embed?: RedditEmbedContent | null;
+  crosspost_parent_list?: RedditPostData[];
 }
 
 export interface RedditImageSource {
-  url: string;
+  url?: string;
   u?: string;
+  gif?: string;
+  mp4?: string;
+  hlsUrl?: string;
+  dashUrl?: string;
+  hls_url?: string;
+  dash_url?: string;
   width?: number;
   height?: number;
   x?: number;
   y?: number;
 }
 
+export interface RedditVideo {
+  fallback_url?: string;
+  hls_url?: string;
+  dash_url?: string;
+  scrubber_media_url?: string;
+  width?: number;
+  height?: number;
+  is_gif?: boolean;
+  duration?: number;
+  bitrate_kbps?: number;
+  transcoding_status?: string;
+}
+
 export interface RedditMedia {
-  reddit_video?: {
-    fallback_url: string;
-    hls_url?: string;
-    dash_url?: string;
-    width?: number;
-    height?: number;
-    is_gif?: boolean;
-  };
+  reddit_video?: RedditVideo;
   oembed?: {
     provider_name?: string;
     provider_url?: string;
@@ -115,6 +138,8 @@ export type NormalizedMedia =
       sourceUrl: string;
       hlsUrl?: string;
       dashUrl?: string;
+      mimeType?: string;
+      posterUrl?: string;
       width?: number;
       height?: number;
       isGif?: boolean;
@@ -131,13 +156,31 @@ export type NormalizedMedia =
     }
   | { type: 'link'; outboundUrl: string };
 
-export interface GalleryItem {
-  id: string;
-  url: string;
-  mimeType?: string;
-  width?: number;
-  height?: number;
-}
+export type GalleryItem =
+  | {
+      id: string;
+      type: 'image';
+      url: string;
+      mimeType?: string;
+      width?: number;
+      height?: number;
+      caption?: string;
+      outboundUrl?: string;
+    }
+  | {
+      id: string;
+      type: 'video';
+      sourceUrl: string;
+      hlsUrl?: string;
+      dashUrl?: string;
+      mimeType?: string;
+      posterUrl?: string;
+      width?: number;
+      height?: number;
+      isGif?: boolean;
+      caption?: string;
+      outboundUrl?: string;
+    };
 
 export interface NormalizedPost {
   id: string;

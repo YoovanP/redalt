@@ -61,12 +61,20 @@ function withFallbackMedia(detailPost: NormalizedPost, fallbackPost: NormalizedP
   };
 }
 
+function hasPlayableNativeMedia(post: NormalizedPost): boolean {
+  return post.media.type === 'video' || post.media.type === 'gallery';
+}
+
 function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPost | null): NormalizedPost {
   if (!fallbackPost || fallbackPost.id !== detailPost.id) {
     return detailPost;
   }
 
-  if (isRedgifsExternalPost(fallbackPost) && !isRedgifsExternalPost(detailPost)) {
+  if (
+    isRedgifsExternalPost(fallbackPost) &&
+    !isRedgifsExternalPost(detailPost) &&
+    !hasPlayableNativeMedia(detailPost)
+  ) {
     return withFallbackMedia(detailPost, fallbackPost);
   }
 

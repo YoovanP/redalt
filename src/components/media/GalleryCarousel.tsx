@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { GalleryItem } from '../../types/reddit';
+import { VideoMedia } from './VideoMedia';
 
 type GalleryCarouselProps = {
   items: GalleryItem[];
@@ -9,19 +10,11 @@ type GalleryCarouselProps = {
 export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
   const [index, setIndex] = useState(0);
 
-  const boundedIndex = useMemo(() => {
-    if (items.length === 0) {
-      return 0;
-    }
+  const boundedIndex = items.length === 0 ? 0 : Math.min(index, items.length - 1);
 
-    const clamped = Math.min(index, items.length - 1);
-
-    if (clamped !== index) {
-      setIndex(clamped);
-    }
-
-    return clamped;
-  }, [index, items.length]);
+  useEffect(() => {
+    setIndex((current) => (items.length === 0 ? 0 : Math.min(current, items.length - 1)));
+  }, [items.length]);
 
   if (items.length === 0) {
     return null;
@@ -32,7 +25,28 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
 
   return (
     <div className="media-block gallery" style={hasDimensions ? { aspectRatio: `${active.width} / ${active.height}`, maxHeight: '80vh' } : { aspectRatio: '16 / 9', maxHeight: '520px' }}>
-      <img className="post-image" src={active.url} alt={`${title} (${boundedIndex + 1}/${items.length})`} loading="lazy" />
+      {active.type === 'video' ? (
+        <VideoMedia
+          key={active.id}
+          sourceUrl={active.sourceUrl}
+          hlsUrl={active.hlsUrl}
+          mimeType={active.mimeType}
+          posterUrl={active.posterUrl}
+          isGif={active.isGif}
+          title={title}
+          showSourceLink={false}
+          inline
+        />
+      ) : (
+        <img
+          key={active.id}
+          className="post-image"
+          src={active.url}
+          alt={`${title} (${boundedIndex + 1}/${items.length})`}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+        />
+      )}
       {items.length > 1 && (
         <div className="gallery-controls">
           <button

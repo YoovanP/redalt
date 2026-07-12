@@ -45,6 +45,9 @@ const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
 const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 4000;
 const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 25_000;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
+const CROSSPOST_MEDIA_MAX_DEPTH = 3;
+const CROSSPOST_MEDIA_MAX_ITEMS = 4;
+const MEDIA_SOURCE_URL_FIELDS = ['url', 'u', 'mp4', 'gif', 'hlsUrl', 'dashUrl', 'hls_url', 'dash_url'] as const;
 const PUBLIC_INSTANCE_BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 const STATIC_PUBLIC_INSTANCES = [
@@ -277,10 +280,14 @@ function rewriteRedlibVideoUrl(url: string, instanceHost: string): string {
   const vid2Match = path.match(/^\/vid\/([^/]+)\/([^/]+)$/i);
   if (vid2Match) {
     const segment2 = vid2Match[2].toLowerCase();
+
+    if (segment2.startsWith('dash_') || segment2.startsWith('cmaf_')) {
+      return `https://v.redd.it/${vid2Match[1]}/${vid2Match[2]}${search}`;
+    }
+
     const prefix = segment2 === 'cmaf' ? 'CMAF' : 'DASH';
     const size = segment2 === 'cmaf' ? '1080.mp4' : vid2Match[2];
-    const separator = segment2.startsWith('dash_') || segment2.startsWith('cmaf_') ? '' : '_';
-    return `https://v.redd.it/${vid2Match[1]}/${prefix}${separator}${size}${search}`;
+    return `https://v.redd.it/${vid2Match[1]}/${prefix}_${size}${search}`;
   }
 
   return url;
@@ -301,9 +308,6 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
     return payload;
   }
 
-  const rewrite = (value: unknown): unknown =>
-    typeof value === 'string' && value ? rewriteRedlibImageUrl(value, instanceHost) : value;
-
   const isVideoPath = (urlStr: string): boolean => {
     try {
       const pathname = new URL(urlStr, base).pathname;
@@ -313,82 +317,127 @@ function applyMediaSourcePreference(payload: unknown, base: string, pref: MediaP
     }
   };
 
-  const rewriteData = (data: Record<string, unknown> | undefined): void => {
-    if (!data) {
+  const rewriteMediaValue = (value: unknown): unknown => {
+    if (typeof value !== 'string' || !value) {
+      return value;
+    }
+
+    return isVideoPath(value)
+      ? rewriteRedlibVideoUrl(value, instanceHost)
+      : rewriteRedlibImageUrl(value, instanceHost);
+  };
+
+  const rewriteSource = (value: unknown): void => {
+    if (!isNonEmptyRecord(value)) {
       return;
     }
 
+    for (const key of MEDIA_SOURCE_URL_FIELDS) {
+      if (typeof value[key] === 'string') {
+        value[key] = rewriteMediaValue(value[key]);
+      }
+    }
+  };
+
+  const rewriteMediaObject = (value: unknown): void => {
+    if (!isNonEmptyRecord(value)) {
+      return;
+    }
+
+    if (isNonEmptyRecord(value.reddit_video)) {
+      for (const key of ['fallback_url', 'hls_url', 'dash_url']) {
+        if (typeof value.reddit_video[key] === 'string') {
+          value.reddit_video[key] = rewriteRedlibVideoUrl(value.reddit_video[key], instanceHost);
+        }
+      }
+    }
+
+    if (isNonEmptyRecord(value.oembed) && typeof value.oembed.thumbnail_url === 'string') {
+      value.oembed.thumbnail_url = rewriteMediaValue(value.oembed.thumbnail_url);
+    }
+  };
+
+  const rewritten = new Set<Record<string, unknown>>();
+  const rewriteData = (data: Record<string, unknown> | undefined, depth = 0): void => {
+    if (!data || depth > CROSSPOST_MEDIA_MAX_DEPTH || rewritten.has(data)) {
+      return;
+    }
+
+    rewritten.add(data);
+
     if (typeof data.url === 'string') {
-      data.url = (isVideoPath(data.url) ? rewriteRedlibVideoUrl(data.url, instanceHost) : rewrite(data.url)) as string;
+      data.url = rewriteMediaValue(data.url) as string;
     }
 
     if (typeof data.url_overridden_by_dest === 'string') {
-      data.url_overridden_by_dest = (isVideoPath(data.url_overridden_by_dest)
-        ? rewriteRedlibVideoUrl(data.url_overridden_by_dest, instanceHost)
-        : rewrite(data.url_overridden_by_dest)) as string;
+      data.url_overridden_by_dest = rewriteMediaValue(data.url_overridden_by_dest) as string;
     }
 
     if (typeof data.thumbnail === 'string') {
-      data.thumbnail = rewrite(data.thumbnail) as string;
+      data.thumbnail = rewriteMediaValue(data.thumbnail) as string;
     }
 
-    const preview = data.preview as { images?: Array<{ source?: { url?: unknown } }> } | undefined;
-    if (preview?.images) {
-      for (const image of preview.images) {
-        if (image?.source && typeof image.source.url === 'string') {
-          image.source.url = rewrite(image.source.url) as string;
+    if (isNonEmptyRecord(data.preview) && Array.isArray(data.preview.images)) {
+      for (const image of data.preview.images) {
+        if (!isNonEmptyRecord(image)) {
+          continue;
+        }
+
+        rewriteSource(image.source);
+
+        if (Array.isArray(image.resolutions)) {
+          for (const resolution of image.resolutions) {
+            rewriteSource(resolution);
+          }
+        }
+
+        if (isNonEmptyRecord(image.variants)) {
+          for (const variant of Object.values(image.variants)) {
+            if (isNonEmptyRecord(variant)) {
+              rewriteSource(variant.source);
+            }
+          }
         }
       }
     }
 
-    const mediaMetadata = data.media_metadata as
-      | Record<string, { s?: { u?: unknown; url?: unknown } }>
-      | undefined;
-    if (mediaMetadata) {
-      for (const meta of Object.values(mediaMetadata)) {
-        if (meta?.s) {
-          if (typeof meta.s.u === 'string') {
-            meta.s.u = rewrite(meta.s.u) as string;
-          }
-          if (typeof meta.s.url === 'string') {
-            meta.s.url = rewrite(meta.s.url) as string;
+    if (isNonEmptyRecord(data.preview) && isNonEmptyRecord(data.preview.reddit_video_preview)) {
+      for (const key of ['fallback_url', 'hls_url', 'dash_url']) {
+        if (typeof data.preview.reddit_video_preview[key] === 'string') {
+          data.preview.reddit_video_preview[key] = rewriteRedlibVideoUrl(
+            data.preview.reddit_video_preview[key],
+            instanceHost,
+          );
+        }
+      }
+    }
+
+    if (isNonEmptyRecord(data.media_metadata)) {
+      for (const metadata of Object.values(data.media_metadata)) {
+        if (!isNonEmptyRecord(metadata)) {
+          continue;
+        }
+
+        rewriteSource(metadata);
+        rewriteSource(metadata.s);
+
+        if (Array.isArray(metadata.p)) {
+          for (const preview of metadata.p) {
+            rewriteSource(preview);
           }
         }
       }
     }
 
-    const media = data.media as { reddit_video?: Record<string, unknown>; oembed?: Record<string, unknown> } | undefined;
-    if (media?.reddit_video) {
-      if (typeof media.reddit_video.fallback_url === 'string') {
-        media.reddit_video.fallback_url = rewriteRedlibVideoUrl(media.reddit_video.fallback_url, instanceHost);
-      }
-      if (typeof media.reddit_video.hls_url === 'string') {
-        media.reddit_video.hls_url = rewriteRedlibVideoUrl(media.reddit_video.hls_url, instanceHost);
-      }
-      if (typeof media.reddit_video.dash_url === 'string') {
-        media.reddit_video.dash_url = rewriteRedlibVideoUrl(media.reddit_video.dash_url, instanceHost);
-      }
-    }
+    rewriteMediaObject(data.media);
+    rewriteMediaObject(data.secure_media);
 
-    if (media?.oembed && typeof media.oembed.thumbnail_url === 'string') {
-      media.oembed.thumbnail_url = rewrite(media.oembed.thumbnail_url) as string;
-    }
-
-    const secureMedia = data.secure_media as { reddit_video?: Record<string, unknown>; oembed?: Record<string, unknown> } | undefined;
-    if (secureMedia?.reddit_video) {
-      if (typeof secureMedia.reddit_video.fallback_url === 'string') {
-        secureMedia.reddit_video.fallback_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.fallback_url, instanceHost);
+    if (depth < CROSSPOST_MEDIA_MAX_DEPTH && Array.isArray(data.crosspost_parent_list)) {
+      for (const crosspost of data.crosspost_parent_list.slice(0, CROSSPOST_MEDIA_MAX_ITEMS)) {
+        if (isNonEmptyRecord(crosspost)) {
+          rewriteData(crosspost, depth + 1);
+        }
       }
-      if (typeof secureMedia.reddit_video.hls_url === 'string') {
-        secureMedia.reddit_video.hls_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.hls_url, instanceHost);
-      }
-      if (typeof secureMedia.reddit_video.dash_url === 'string') {
-        secureMedia.reddit_video.dash_url = rewriteRedlibVideoUrl(secureMedia.reddit_video.dash_url, instanceHost);
-      }
-    }
-
-    if (secureMedia?.oembed && typeof secureMedia.oembed.thumbnail_url === 'string') {
-      secureMedia.oembed.thumbnail_url = rewrite(secureMedia.oembed.thumbnail_url) as string;
     }
   };
 
@@ -436,16 +485,8 @@ export async function handleRedditProxyRequest(
       4000,
     ).catch(() => null);
 
-    if (cloudflareResponse?.ok && isJsonContentType(cloudflareResponse.headers.get('content-type'))) {
+    if (cloudflareResponse && await hasUsableRedditJsonResponse(cloudflareResponse, cleanPath)) {
       return responseFromUpstream(cloudflareResponse, 'public, max-age=30, s-maxage=120');
-    }
-  }
-
-  if (isCommentThreadPath(cleanPath)) {
-    const oldRedditCommentResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref);
-
-    if (oldRedditCommentResponse) {
-      return rememberSuccessfulResponse(cacheKey, oldRedditCommentResponse);
     }
   }
 
@@ -476,7 +517,11 @@ export async function handleRedditProxyRequest(
     const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
 
     if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
-      return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
+      if (await hasUsableRedditJsonResponse(upstreamResponse, cleanPath)) {
+        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
+      }
+
+      continue;
     }
 
     if (blockedHtml) {
@@ -504,7 +549,7 @@ export async function handleRedditProxyRequest(
   if (options.enableMirrorFallback !== false) {
     const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options).catch(() => null);
 
-    if (mirrorResponse?.ok && isJsonContentType(mirrorResponse.headers.get('content-type'))) {
+    if (mirrorResponse && await hasUsableRedditJsonResponse(mirrorResponse, cleanPath)) {
       return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120'));
     }
   }
@@ -546,7 +591,42 @@ function responseFromUpstream(response: Response, cacheControl: string): Respons
 }
 
 function isJsonContentType(contentType: string | null): boolean {
-  return (contentType ?? '').toLowerCase().includes('application/json');
+  const normalized = (contentType ?? '').toLowerCase();
+  return normalized.includes('application/json') || normalized.includes('+json');
+}
+
+function isUsableRedditPayload(payload: unknown, upstreamPath: string): boolean {
+  if (!isCompatibleRedditPayload(payload, upstreamPath)) {
+    return false;
+  }
+
+  if (isPublicDiscoveryPath(upstreamPath)) {
+    return true;
+  }
+
+  const children = isCommentThreadPath(upstreamPath)
+    ? Array.isArray(payload)
+      ? listingChildren(payload[0])
+      : []
+    : listingChildren(payload);
+
+  if (isCommentThreadPath(upstreamPath)) {
+    return children.some((child) => child.data ? hasRenderablePostData(child.data) : false);
+  }
+
+  return children.length === 0 || hasRenderablePostPayload(payload, upstreamPath);
+}
+
+async function hasUsableRedditJsonResponse(response: Response, upstreamPath: string): Promise<boolean> {
+  if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+    return false;
+  }
+
+  try {
+    return isUsableRedditPayload(await response.clone().json(), upstreamPath);
+  } catch {
+    return false;
+  }
 }
 
 async function isBlockedHtmlResponse(response: Response): Promise<boolean> {
@@ -1272,9 +1352,9 @@ function stripHtmlLines(value: string): string[] {
 }
 
 function readHtmlAttributes(html: string, attribute: 'href' | 'src'): string[] {
-  return [...html.matchAll(new RegExp(`\\s${attribute}=["']([^"']+)["']`, 'gi'))].map((match) =>
-    decodeXmlEntities(match[1] ?? '').trim(),
-  );
+  return [...html.matchAll(/<[^>]+>/g)]
+    .map((match) => readHtmlAttribute(match[0], attribute))
+    .filter(Boolean);
 }
 
 function readHtmlAttribute(openTag: string, attribute: string): string {
@@ -1397,6 +1477,16 @@ function getUrlHostname(url: string): string {
   }
 }
 
+function hostMatches(hostname: string, expectedHost: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, '');
+  const normalizedExpectedHost = expectedHost.trim().toLowerCase().replace(/\.$/, '');
+
+  return (
+    Boolean(normalizedHostname && normalizedExpectedHost) &&
+    (normalizedHostname === normalizedExpectedHost || normalizedHostname.endsWith(`.${normalizedExpectedHost}`))
+  );
+}
+
 function normalizePathname(pathname: string): string {
   return pathname.replace(/^\/+/, '/') || '/';
 }
@@ -1406,9 +1496,9 @@ function isRedditMediaHost(hostname: string): boolean {
     hostname === 'i.redd.it' ||
     hostname === 'preview.redd.it' ||
     hostname === 'v.redd.it' ||
-    hostname.endsWith('.redd.it') ||
-    hostname.endsWith('redditmedia.com') ||
-    hostname.endsWith('reddit.com')
+    hostMatches(hostname, 'redd.it') ||
+    hostMatches(hostname, 'redditmedia.com') ||
+    hostMatches(hostname, 'reddit.com')
   );
 }
 
@@ -1439,7 +1529,7 @@ function getVRedditVideoId(url: string): string {
       return parsed.pathname.split('/').filter(Boolean)[0] ?? '';
     }
 
-    if (hostname.endsWith('reddit.com')) {
+    if (hostMatches(hostname, 'reddit.com')) {
       return parsed.pathname.match(/^\/video\/([^/?#]+)/i)?.[1] ?? '';
     }
   } catch {
@@ -1449,7 +1539,7 @@ function getVRedditVideoId(url: string): string {
       return directMatch;
     }
 
-    return url.match(/https?:\/\/[^/]*reddit\.com\/video\/([^/?#]+)/i)?.[1] ?? '';
+    return url.match(/https?:\/\/(?:[^./?#]+\.)*reddit\.com\/video\/([^/?#]+)/i)?.[1] ?? '';
   }
 
   return '';
@@ -1462,7 +1552,7 @@ function isKnownHostedVideoUrl(url: string): boolean {
 function isRedditNavigationUrl(url: string): boolean {
   const hostname = getUrlHostname(url);
 
-  if (!hostname.endsWith('reddit.com') && !hostname.endsWith('redd.it')) {
+  if (!hostMatches(hostname, 'reddit.com') && !hostMatches(hostname, 'redd.it')) {
     return false;
   }
 
@@ -1520,12 +1610,12 @@ function buildYouTubeEmbed(url: string): string | null {
     const hostname = parsed.hostname.toLowerCase();
     let id = '';
 
-    if (hostname.includes('youtu.be')) {
+    if (hostMatches(hostname, 'youtu.be')) {
       id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
-    } else if (hostname.includes('youtube.com')) {
+    } else if (hostMatches(hostname, 'youtube.com') || hostMatches(hostname, 'youtube-nocookie.com')) {
       id =
         parsed.searchParams.get('v') ??
-        parsed.pathname.match(/\/(?:embed|shorts)\/([^/?]+)/i)?.[1] ??
+        parsed.pathname.match(/\/(?:embed|shorts|live)\/([^/?]+)/i)?.[1] ??
         '';
     }
 
@@ -1539,7 +1629,7 @@ function buildVimeoEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('vimeo.com')) {
+    if (!hostMatches(parsed.hostname, 'vimeo.com')) {
       return null;
     }
 
@@ -1554,7 +1644,7 @@ function buildRedgifsEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('redgifs.com')) {
+    if (!hostMatches(parsed.hostname, 'redgifs.com')) {
       return null;
     }
 
@@ -1573,7 +1663,7 @@ function buildTikTokEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('tiktok.com')) {
+    if (!hostMatches(parsed.hostname, 'tiktok.com')) {
       return null;
     }
 
@@ -1593,7 +1683,7 @@ function buildInstagramEmbed(url: string): string | null {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
 
-    if (!hostname.includes('instagram.com') && !hostname.includes('instagr.am')) {
+    if (!hostMatches(hostname, 'instagram.com') && !hostMatches(hostname, 'instagr.am')) {
       return null;
     }
 
@@ -1614,7 +1704,7 @@ function buildTwitterEmbed(url: string): string | null {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
 
-    if (!hostname.includes('twitter.com') && hostname !== 'x.com' && !hostname.endsWith('.x.com')) {
+    if (!hostMatches(hostname, 'twitter.com') && !hostMatches(hostname, 'x.com')) {
       return null;
     }
 
@@ -1629,7 +1719,7 @@ function buildStreamableEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('streamable.com')) {
+    if (!hostMatches(parsed.hostname, 'streamable.com')) {
       return null;
     }
 
@@ -1646,9 +1736,9 @@ function buildDailymotionEmbed(url: string): string | null {
     const hostname = parsed.hostname.toLowerCase();
     let id = '';
 
-    if (hostname === 'dai.ly') {
+    if (hostMatches(hostname, 'dai.ly')) {
       id = parsed.pathname.split('/').filter(Boolean)[0] ?? '';
-    } else if (hostname.includes('dailymotion.com')) {
+    } else if (hostMatches(hostname, 'dailymotion.com')) {
       id = parsed.pathname.match(/\/(?:video|embed\/video)\/([^/?#]+)/i)?.[1] ?? '';
     }
 
@@ -1662,7 +1752,7 @@ function buildSpotifyEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('spotify.com')) {
+    if (!hostMatches(parsed.hostname, 'spotify.com')) {
       return null;
     }
 
@@ -1684,7 +1774,7 @@ function buildSoundCloudEmbed(url: string): string | null {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
 
-    if (!hostname.includes('soundcloud.com') && !hostname.includes('sndcdn.com')) {
+    if (!hostMatches(hostname, 'soundcloud.com') && !hostMatches(hostname, 'sndcdn.com')) {
       return null;
     }
 
@@ -1698,7 +1788,7 @@ function buildLoomEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('loom.com')) {
+    if (!hostMatches(parsed.hostname, 'loom.com')) {
       return null;
     }
 
@@ -1713,7 +1803,7 @@ function buildImgurEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('imgur.com')) {
+    if (!hostMatches(parsed.hostname, 'imgur.com')) {
       return null;
     }
 
@@ -1728,7 +1818,7 @@ function buildGfycatEmbed(url: string): string | null {
   try {
     const parsed = new URL(url);
 
-    if (!parsed.hostname.toLowerCase().includes('gfycat.com')) {
+    if (!hostMatches(parsed.hostname, 'gfycat.com')) {
       return null;
     }
 
@@ -1746,55 +1836,59 @@ function inferProviderName(url: string): string {
     return 'External';
   }
 
-  if (hostname.includes('youtube') || hostname.includes('youtu.be')) {
+  if (
+    hostMatches(hostname, 'youtube.com') ||
+    hostMatches(hostname, 'youtube-nocookie.com') ||
+    hostMatches(hostname, 'youtu.be')
+  ) {
     return 'YouTube';
   }
 
-  if (hostname.includes('vimeo')) {
+  if (hostMatches(hostname, 'vimeo.com')) {
     return 'Vimeo';
   }
 
-  if (hostname.includes('redgifs')) {
+  if (hostMatches(hostname, 'redgifs.com')) {
     return 'Redgifs';
   }
 
-  if (hostname.includes('tiktok')) {
+  if (hostMatches(hostname, 'tiktok.com')) {
     return 'TikTok';
   }
 
-  if (hostname.includes('instagram') || hostname.includes('instagr.am')) {
+  if (hostMatches(hostname, 'instagram.com') || hostMatches(hostname, 'instagr.am')) {
     return 'Instagram';
   }
 
-  if (hostname.includes('twitter.com') || hostname === 'x.com' || hostname.endsWith('.x.com')) {
+  if (hostMatches(hostname, 'twitter.com') || hostMatches(hostname, 'x.com')) {
     return 'X';
   }
 
-  if (hostname.includes('streamable')) {
+  if (hostMatches(hostname, 'streamable.com')) {
     return 'Streamable';
   }
 
-  if (hostname.includes('dailymotion') || hostname === 'dai.ly') {
+  if (hostMatches(hostname, 'dailymotion.com') || hostMatches(hostname, 'dai.ly')) {
     return 'Dailymotion';
   }
 
-  if (hostname.includes('spotify')) {
+  if (hostMatches(hostname, 'spotify.com')) {
     return 'Spotify';
   }
 
-  if (hostname.includes('soundcloud')) {
+  if (hostMatches(hostname, 'soundcloud.com') || hostMatches(hostname, 'sndcdn.com')) {
     return 'SoundCloud';
   }
 
-  if (hostname.includes('loom.com')) {
+  if (hostMatches(hostname, 'loom.com')) {
     return 'Loom';
   }
 
-  if (hostname.includes('imgur.com')) {
+  if (hostMatches(hostname, 'imgur.com')) {
     return 'Imgur';
   }
 
-  if (hostname.includes('gfycat.com')) {
+  if (hostMatches(hostname, 'gfycat.com')) {
     return 'Gfycat';
   }
 
@@ -1861,7 +1955,7 @@ function cleanRssSelfText(content: string, title: string, mediaUrl: string): str
     return true;
   });
 
-  return lines.slice(0, 4).join('\n\n');
+  return lines.join('\n\n');
 }
 
 function stripRssSubmissionBoilerplate(value: string): string {
@@ -2014,6 +2108,475 @@ function parseOldRedditSearchResults(
   return children;
 }
 
+type OldRedditGalleryItem = {
+  mediaId: string;
+  url: string;
+  width?: number;
+  height?: number;
+  mimeType: string;
+};
+
+function readOldRedditNumber(value: string): number {
+  const parsed = Number(value.replace(/,/g, '').trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function readOldRedditCompactNumber(value: string): number {
+  const match = value.replace(/,/g, '').match(/(-?\d+(?:\.\d+)?)\s*([km])?/i);
+
+  if (!match) {
+    return 0;
+  }
+
+  const parsed = Number(match[1]);
+  const suffix = match[2]?.toLowerCase();
+  const multiplier = suffix === 'm' ? 1_000_000 : suffix === 'k' ? 1_000 : 1;
+  return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : 0;
+}
+
+function readOldRedditScore(innerHtml: string): number {
+  let fallback = 0;
+
+  for (const match of innerHtml.matchAll(/<div\b[^>]*\bclass=["'][^"']*\bscore\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/gi)) {
+    const openTag = match[0].match(/^<div\b[^>]*>/i)?.[0] ?? '';
+    const title = readHtmlAttribute(openTag, 'title');
+    const value = readOldRedditCompactNumber(title || stripHtml(match[1] ?? ''));
+
+    if (value) {
+      fallback = value;
+    }
+  }
+
+  return fallback;
+}
+
+function readOldRedditBoolean(value: string): boolean {
+  return /^(?:1|true|yes)$/i.test(value.trim());
+}
+
+function oldRedditThumbnail(innerHtml: string, sourceBase: string): string {
+  const thumbnailBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'thumbnail');
+  const imageTag = thumbnailBlock?.innerHtml.match(/<img\b[^>]*>/i)?.[0] ?? '';
+  return imageTag
+    ? fullSizeRedditImageUrl(normalizeUrlCandidate(readHtmlAttribute(imageTag, 'src'), sourceBase))
+    : '';
+}
+
+function oldRedditGalleryItems(innerHtml: string, sourceBase: string, fallbackThumbnail = ''): OldRedditGalleryItem[] {
+  const items: OldRedditGalleryItem[] = [];
+  const seenUrls = new Set<string>();
+  const usedIds = new Set<string>();
+
+  const addItem = (rawUrl: string, preferredId = '', width?: number, height?: number): void => {
+    const url = fullSizeRedditImageUrl(normalizeUrlCandidate(rawUrl, sourceBase));
+
+    if (!url || seenUrls.has(url)) {
+      return;
+    }
+
+    const slug = toPathname(url).split('/').filter(Boolean).at(-1) ?? '';
+    const baseId = preferredId || slug.replace(/\.[a-z0-9]+$/i, '') || `gallery-${items.length}`;
+    let mediaId = baseId;
+    let suffix = 1;
+
+    while (usedIds.has(mediaId)) {
+      mediaId = `${baseId}-${suffix}`;
+      suffix += 1;
+    }
+
+    seenUrls.add(url);
+    usedIds.add(mediaId);
+    items.push({ mediaId, url, width, height, mimeType: mimeFromUrl(url) });
+  };
+
+  const anchorPattern = /<a\b[^>]*>/gi;
+
+  for (let match = anchorPattern.exec(innerHtml); match; match = anchorPattern.exec(innerHtml)) {
+    if (!hasHtmlClass(match[0], 'gallery-item-thumbnail-link')) {
+      continue;
+    }
+
+    const block = findHtmlTagBlockAt(innerHtml, 'a', match.index);
+
+    if (!block) {
+      continue;
+    }
+
+    const imageTag = block.innerHtml.match(/<img\b[^>]*>/i)?.[0] ?? '';
+    const width = readOldRedditNumber(readHtmlAttribute(imageTag, 'width')) || undefined;
+    const height = readOldRedditNumber(readHtmlAttribute(imageTag, 'height')) || undefined;
+    addItem(readHtmlAttribute(block.openTag, 'href'), '', width, height);
+    anchorPattern.lastIndex = block.end;
+  }
+
+  if (items.length === 0) {
+    const tilePattern = /<div\b[^>]*>/gi;
+
+    for (let match = tilePattern.exec(innerHtml); match; match = tilePattern.exec(innerHtml)) {
+      if (!hasHtmlClass(match[0], 'gallery-tile')) {
+        continue;
+      }
+
+      const block = findHtmlTagBlockAt(innerHtml, 'div', match.index);
+
+      if (!block) {
+        continue;
+      }
+
+      const imageTag = block.innerHtml.match(/<img\b[^>]*>/i)?.[0] ?? '';
+      const width = readOldRedditNumber(readHtmlAttribute(imageTag, 'width')) || undefined;
+      const height = readOldRedditNumber(readHtmlAttribute(imageTag, 'height')) || undefined;
+      addItem(
+        readHtmlAttribute(imageTag, 'src'),
+        readHtmlAttribute(block.openTag, 'data-media-id'),
+        width,
+        height,
+      );
+      tilePattern.lastIndex = block.end;
+    }
+  }
+
+  if (items.length === 0 && fallbackThumbnail) {
+    addItem(fallbackThumbnail);
+  }
+
+  return items;
+}
+
+function setOldRedditPreview(
+  data: Record<string, unknown>,
+  url: string,
+  width?: number,
+  height?: number,
+): void {
+  if (!url) {
+    return;
+  }
+
+  data.preview = {
+    enabled: true,
+    images: [{ source: { url, width, height }, resolutions: [] }],
+  };
+}
+
+function applyOldRedditScopedMedia(
+  data: Record<string, unknown>,
+  openTag: string,
+  innerHtml: string,
+  sourceBase: string,
+  thumbnail: string,
+  isGallery: boolean,
+): void {
+  if (data.is_self) {
+    return;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+
+  if (isGallery) {
+    const gallery = oldRedditGalleryItems(innerHtml, sourceBase, thumbnail);
+
+    if (gallery.length > 0) {
+      const mediaMetadata: Record<string, unknown> = {};
+
+      for (const item of gallery) {
+        mediaMetadata[item.mediaId] = {
+          status: 'valid',
+          e: item.mimeType === 'image/gif' ? 'AnimatedImage' : 'Image',
+          m: item.mimeType,
+          s: {
+            u: item.url,
+            gif: item.mimeType === 'image/gif' ? item.url : undefined,
+            x: item.width,
+            y: item.height,
+          },
+          p: [],
+        };
+      }
+
+      data.is_gallery = true;
+      data.gallery_data = {
+        items: gallery.map((item, index) => ({ media_id: item.mediaId, id: index })),
+      };
+      data.media_metadata = mediaMetadata;
+      data.post_hint = 'image';
+      setOldRedditPreview(data, gallery[0].url, gallery[0].width, gallery[0].height);
+      return;
+    }
+  }
+
+  const videoTag =
+    innerHtml.match(
+      /<[^>]*\b(?:data-hls-url|data-mpd-url|data-dash-url|data-fallback-url|data-video-url|data-mp4-url)=(?:"[^"]*"|'[^']*')[^>]*>/i,
+    )?.[0] ?? '';
+  const sourceTag = innerHtml.match(/<source\b[^>]*>/i)?.[0] ?? '';
+  const dataKind = (
+    readHtmlAttribute(openTag, 'data-post-type') ||
+    readHtmlAttribute(openTag, 'data-type') ||
+    readHtmlAttribute(openTag, 'data-kind')
+  ).toLowerCase();
+  const videoId = getVRedditVideoId(outboundUrl);
+  const hlsUrl =
+    normalizeUrlCandidate(
+      readHtmlAttribute(videoTag, 'data-hls-url') || readHtmlAttribute(videoTag, 'data-video-hls-url'),
+      sourceBase,
+    ) ||
+    (videoId ? `https://v.redd.it/${videoId}/HLSPlaylist.m3u8` : '');
+  const dashUrl = normalizeUrlCandidate(
+    readHtmlAttribute(videoTag, 'data-mpd-url') || readHtmlAttribute(videoTag, 'data-dash-url'),
+    sourceBase,
+  );
+  const derivedHlsUrl = /DASHPlaylist\.mpd/i.test(dashUrl)
+    ? dashUrl.replace(/DASHPlaylist\.mpd/i, 'HLSPlaylist.m3u8')
+    : '';
+  const explicitFallback = normalizeUrlCandidate(
+    readHtmlAttribute(videoTag, 'data-fallback-url') ||
+      readHtmlAttribute(videoTag, 'data-video-url') ||
+      readHtmlAttribute(videoTag, 'data-mp4-url') ||
+      readHtmlAttribute(videoTag, 'src') ||
+      readHtmlAttribute(sourceTag, 'src'),
+    sourceBase,
+  );
+  const directVideoUrl = isLikelyVideoUrl(outboundUrl)
+    ? outboundUrl.replace(/\.gifv(?=[?#]|$)/i, '.mp4')
+    : '';
+
+  if (videoTag || /^(?:video|gif|hosted:video)$/.test(dataKind) || videoId || directVideoUrl) {
+    const fallbackUrl = explicitFallback || directVideoUrl || hlsUrl || derivedHlsUrl;
+
+    if (fallbackUrl) {
+      const width = readOldRedditNumber(readHtmlAttribute(videoTag, 'data-video-width')) || undefined;
+      const height = readOldRedditNumber(readHtmlAttribute(videoTag, 'data-video-height')) || undefined;
+      const isGif = readOldRedditBoolean(readHtmlAttribute(videoTag, 'data-is-gif')) || /\.gifv(?:[?#]|$)/i.test(outboundUrl);
+      const redditVideo = {
+        fallback_url: fallbackUrl,
+        hls_url: hlsUrl || derivedHlsUrl || undefined,
+        dash_url: dashUrl || undefined,
+        width,
+        height,
+        is_gif: isGif,
+      };
+
+      data.is_video = true;
+      data.post_hint = 'hosted:video';
+      data.media = { reddit_video: redditVideo };
+      data.secure_media = { reddit_video: redditVideo };
+      setOldRedditPreview(data, thumbnail, width, height);
+      return;
+    }
+  }
+
+  if (isLikelyImageUrl(outboundUrl)) {
+    data.post_hint = 'image';
+    setOldRedditPreview(data, fullSizeRedditImageUrl(outboundUrl));
+    return;
+  }
+
+  const knownEmbed = buildKnownEmbed(outboundUrl);
+  const iframeEmbedUrl = findIframeEmbedUrl(innerHtml, sourceBase);
+  const embedUrl = knownEmbed?.embedUrl || iframeEmbedUrl;
+
+  if (embedUrl) {
+    const mediaObject = {
+      oembed: {
+        provider_name: knownEmbed?.provider || inferProviderName(outboundUrl || embedUrl),
+        thumbnail_url: thumbnail || undefined,
+        html: `<iframe src="${embedUrl}" allowfullscreen></iframe>`,
+      },
+    };
+    data.post_hint = 'rich:video';
+    data.media = mediaObject;
+    data.secure_media = mediaObject;
+  } else {
+    data.post_hint = 'link';
+  }
+
+  setOldRedditPreview(data, thumbnail);
+}
+
+function parseOldRedditPostBlock(
+  openTag: string,
+  innerHtml: string,
+  upstreamPath: string,
+  sourceBase: string,
+): { kind: 't3'; data: Record<string, unknown> } | null {
+  const fullname = readHtmlAttribute(openTag, 'data-fullname');
+  const id = fullname.replace(/^t3_/i, '') || readHtmlAttribute(openTag, 'id').replace(/^thing_t3_/i, '');
+
+  if (!id) {
+    return null;
+  }
+
+  const rawPermalink = readHtmlAttribute(openTag, 'data-permalink');
+  const permalinkUrl = normalizeUrlCandidate(rawPermalink, sourceBase);
+  const permalink = toPathname(permalinkUrl) || (rawPermalink.startsWith('/') ? normalizePathname(rawPermalink) : '');
+
+  if (!permalink || !/\/comments\//i.test(permalink)) {
+    return null;
+  }
+
+  const titleBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'title');
+  const title = stripHtml(titleBlock?.innerHtml ?? '') || titleFromPermalink(permalink);
+  const fallbackSubreddit = inferSubredditFromPermalink(permalink, inferSubredditFromPath(upstreamPath));
+  const subreddit = normalizeCommunityName(readHtmlAttribute(openTag, 'data-subreddit')) || fallbackSubreddit;
+  const author = normalizeUserName(readHtmlAttribute(openTag, 'data-author')) || '[unknown]';
+  const bodyBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'usertext-body');
+  const selftext = bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+  const rawDomain = readHtmlAttribute(openTag, 'data-domain');
+  const titleHref = readHtmlAttribute(titleBlock?.openTag ?? '', 'href');
+  const outboundCandidate = normalizeUrlCandidate(
+    readHtmlAttribute(openTag, 'data-url') || titleHref,
+    sourceBase,
+  );
+  const isSelf =
+    rawDomain.toLowerCase().startsWith('self.') ||
+    isCommentPermalinkUrl(outboundCandidate, permalink, id) ||
+    !outboundCandidate;
+  const finalUrl = isSelf
+    ? `https://www.reddit.com${permalink}`
+    : outboundCandidate || `https://www.reddit.com${permalink}`;
+  const timestamp = readOldRedditNumber(readHtmlAttribute(openTag, 'data-timestamp'));
+  const timeTag = innerHtml.match(/<time\b[^>]*>/i)?.[0] ?? '';
+  const fallbackCreatedMs = Date.parse(
+    readHtmlAttribute(timeTag, 'datetime') || readHtmlAttribute(timeTag, 'title'),
+  );
+  const createdUtc = timestamp > 0
+    ? Math.floor(timestamp > 10_000_000_000 ? timestamp / 1000 : timestamp)
+    : Number.isFinite(fallbackCreatedMs)
+      ? Math.floor(fallbackCreatedMs / 1000)
+      : Math.floor(Date.now() / 1000);
+  const commentsBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'comments');
+  const score =
+    readOldRedditNumber(readHtmlAttribute(openTag, 'data-score')) ||
+    readOldRedditScore(innerHtml);
+  const numComments =
+    readOldRedditNumber(readHtmlAttribute(openTag, 'data-comments-count')) ||
+    readOldRedditCompactNumber(
+      readHtmlAttribute(commentsBlock?.openTag ?? '', 'title') || stripHtml(commentsBlock?.innerHtml ?? ''),
+    );
+  const thumbnail = oldRedditThumbnail(innerHtml, sourceBase);
+  const data: Record<string, unknown> = {
+    id,
+    name: `t3_${id}`,
+    title,
+    author,
+    subreddit,
+    permalink,
+    score,
+    ups: score,
+    num_comments: numComments,
+    created_utc: createdUtc,
+    selftext,
+    over_18:
+      readOldRedditBoolean(readHtmlAttribute(openTag, 'data-nsfw')) ||
+      hasHtmlClass(openTag, 'over18') ||
+      /\bnsfw-stamp\b/i.test(innerHtml),
+    url: finalUrl,
+    url_overridden_by_dest: finalUrl,
+    domain: isSelf ? rawDomain || `self.${subreddit}` : getUrlHostname(finalUrl) || rawDomain,
+    is_self: isSelf,
+  };
+
+  const flairMatch = innerHtml.match(
+    /<[^>]*\bclass=["'][^"']*\blinkflairlabel\b[^"']*["'][^>]*>([\s\S]*?)<\//i,
+  );
+  const flair = stripHtml(flairMatch?.[1] ?? '');
+
+  if (flair) {
+    data.link_flair_text = flair;
+  }
+
+  if (thumbnail) {
+    data.thumbnail = thumbnail;
+  }
+
+  applyOldRedditScopedMedia(
+    data,
+    openTag,
+    innerHtml,
+    sourceBase,
+    thumbnail,
+    readOldRedditBoolean(readHtmlAttribute(openTag, 'data-is-gallery')) ||
+      /\/gallery\//i.test(finalUrl) ||
+      /\bgallery-item-thumbnail-link\b/i.test(innerHtml),
+  );
+
+  return { kind: 't3', data };
+}
+
+function parseOldRedditPostChildren(
+  html: string,
+  upstreamPath: string,
+  sourceBase: string,
+): Array<{ kind: 't3'; data: Record<string, unknown> }> {
+  const children: Array<{ kind: 't3'; data: Record<string, unknown> }> = [];
+  const seen = new Set<string>();
+  const tagPattern = /<div\b[^>]*>/gi;
+
+  for (let match = tagPattern.exec(html); match; match = tagPattern.exec(html)) {
+    const openTag = match[0];
+    const fullname = readHtmlAttribute(openTag, 'data-fullname');
+
+    if (!hasHtmlClass(openTag, 'thing') || !/^t3_[A-Za-z0-9]+$/i.test(fullname)) {
+      continue;
+    }
+
+    const id = fullname.replace(/^t3_/i, '').toLowerCase();
+    const block = findHtmlTagBlockAt(html, 'div', match.index);
+
+    if (!block || seen.has(id)) {
+      continue;
+    }
+
+    const child = parseOldRedditPostBlock(openTag, block.innerHtml, upstreamPath, sourceBase);
+
+    if (child) {
+      seen.add(id);
+      children.push(child);
+    }
+
+    tagPattern.lastIndex = block.end;
+  }
+
+  return children;
+}
+
+export function parseOldRedditListing(
+  html: string,
+  upstreamPath: string,
+  sourceBase = 'https://old.reddit.com',
+): unknown | null {
+  const allChildren = parseOldRedditPostChildren(html, upstreamPath, sourceBase);
+
+  if (allChildren.length === 0) {
+    return null;
+  }
+
+  const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
+  const startIndex = getPaginatedStartIndex(allChildren, upstreamPath, true);
+
+  if (startIndex === null) {
+    return null;
+  }
+
+  const children = allChildren.slice(startIndex, startIndex + pageSize);
+
+  if (children.length === 0) {
+    return null;
+  }
+
+  return {
+    kind: 'Listing',
+    data: {
+      after:
+        getSyntheticRssAfter(allChildren, upstreamPath, pageSize, startIndex) ??
+        getHtmlListingNextAfter(html, upstreamPath, sourceBase),
+      before: null,
+      children,
+    },
+  };
+}
+
 function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: string): Array<{ kind: 't3'; data: Record<string, unknown> }> {
   const children: Array<{ kind: 't3'; data: Record<string, unknown> }> = [];
   const seen = new Set<string>();
@@ -2075,6 +2638,12 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
 }
 
 function parseHtmlListing(html: string, upstreamPath: string, sourceBase: string): unknown | null {
+  const oldRedditPayload = parseOldRedditListing(html, upstreamPath, sourceBase);
+
+  if (oldRedditPayload) {
+    return oldRedditPayload;
+  }
+
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
   const nativeAfter = getHtmlListingNextAfter(html, upstreamPath, sourceBase);
   const allChildren = parseOldRedditSearchResults(html, upstreamPath, sourceBase);
@@ -2541,7 +3110,10 @@ function parseRedlibPostBlock(
     }
 
     if (!title) {
-      title = stripHtml(titleBlock.innerHtml);
+      const titleOnlyHtml = titleBlock.innerHtml
+        .replace(/<a\b[^>]*\bclass=["'][^"']*\bpost_flair\b[^"']*["'][^>]*>[\s\S]*?<\/a>/gi, ' ')
+        .replace(/<small\b[^>]*\bclass=["'][^"']*\b(?:nsfw|spoiler)\b[^"']*["'][^>]*>[\s\S]*?<\/small>/gi, ' ');
+      title = stripHtml(titleOnlyHtml);
     }
   } else {
     const anchorBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'post_title');
@@ -2603,9 +3175,11 @@ function parseRedlibPostBlock(
 
   const mediaHint = redlibPostMediaHint(innerHtml);
 
-  if (mediaHint === 'video') {
+  if (mediaHint === 'video' || mediaHint === 'gif') {
     data.is_video = true;
     data.post_hint = 'hosted:video';
+  } else if (mediaHint === 'gallery') {
+    data.post_hint = 'gallery';
   }
 
   const embed = redlibKnownEmbed(innerHtml, sourceBase);
@@ -2632,7 +3206,7 @@ function parseRedlibPostBlock(
       hls_url: video.hlsUrl,
       width: video.width,
       height: video.height,
-      is_gif: false,
+      is_gif: mediaHint === 'gif',
     };
     data.is_video = true;
     data.post_hint = 'hosted:video';
@@ -2680,7 +3254,18 @@ function parseRedlibPostBlock(
       data.url_overridden_by_dest = outbound;
       data.domain = getUrlHostname(outbound);
       data.post_hint = 'link';
-    } else if (thumbnail && mediaHint !== 'video') {
+    } else if (thumbnail && mediaHint === 'gallery') {
+      const fullImageUrl = fullSizeRedditImageUrl(thumbnail);
+
+      data.post_hint = 'gallery';
+      data.url = `https://www.reddit.com${permalink}`;
+      data.url_overridden_by_dest = data.url;
+      data.domain = 'reddit.com';
+      data.preview = {
+        enabled: true,
+        images: [{ source: { url: fullImageUrl, width: urlWidthParam(fullImageUrl) }, resolutions: [] }],
+      };
+    } else if (thumbnail && mediaHint !== 'video' && mediaHint !== 'gif') {
       // Redlib sometimes collapses media posts to 140px preview thumbnails in listings.
       // Upgrade Reddit-hosted previews to the full image path before exposing them as media.
       const fullImageUrl = fullSizeRedditImageUrl(thumbnail);
@@ -2703,7 +3288,7 @@ function parseRedlibPostBlock(
   return { kind: 't3', data };
 }
 
-function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
+export function parseRedlibListing(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
   const pageSize = Math.min(getRequestedListingLimit(upstreamPath), 25);
   const nativeAfter = getHtmlListingNextAfter(html, upstreamPath, sourceBase);
   const allChildren = findRedlibPostBlocks(html)
@@ -2736,7 +3321,7 @@ function parseRedlibListing(html: string, upstreamPath: string, sourceBase: stri
   };
 }
 
-function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
+export function parseRedlibCommentsResponse(html: string, upstreamPath: string, sourceBase: string, mediaPref: MediaPref): unknown | null {
   const postId = inferCommentThreadId(upstreamPath);
   const blocks = findRedlibPostBlocks(html);
 
@@ -2878,112 +3463,14 @@ function readHtmlCommentCount(html: string): number {
   return 0;
 }
 
-function extractVRedditIdFromHtml(html: string): string {
-  const decoded = decodeXmlEntities(html);
-  const match = decoded.match(/https?:\\?\/\\?\/v\.redd\.it\\?\/([A-Za-z0-9]+)/i);
-
-  return match?.[1] ?? '';
-}
-
-function findRedditHtmlOutboundUrl(html: string, sourceBase: string): string {
-  for (const match of html.matchAll(/<a\b[^>]*>/gi)) {
-    const tag = match[0];
-    const className = readHtmlAttribute(tag, 'class');
-
-    if (!/\b(?:title|thumbnail|outbound)\b/i.test(className)) {
-      continue;
-    }
-
-    const href = normalizeUrlCandidate(readHtmlAttribute(tag, 'href'), sourceBase);
-
-    if (href && !isRedditNavigationUrl(href)) {
-      return href;
-    }
-  }
-
-  return '';
-}
-
-function applyRedditHtmlExternalMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
-  const outboundUrl = findRedditHtmlOutboundUrl(html, sourceBase);
-
-  if (!outboundUrl) {
-    return;
-  }
-
-  const iframeEmbedUrl =
-    findIframeEmbedUrl(html, sourceBase) ||
-    normalizeUrlCandidate(readHtmlMetaContent(html, 'twitter:player'), sourceBase);
-  const knownEmbed = buildKnownEmbed(outboundUrl);
-  const embedUrl = iframeEmbedUrl || knownEmbed?.embedUrl || '';
-  const thumbnail = normalizeUrlCandidate(readHtmlMetaContent(html, 'og:image'), sourceBase);
-
-  data.is_self = false;
-  data.url = outboundUrl;
-  data.url_overridden_by_dest = outboundUrl;
-  data.domain = getUrlHostname(outboundUrl);
-  data.post_hint = embedUrl ? 'rich:video' : 'link';
-
-  if (thumbnail) {
-    data.thumbnail = thumbnail;
-    data.preview = {
-      enabled: true,
-      images: [{ source: { url: thumbnail }, resolutions: [] }],
-    };
-  }
-
-  if (embedUrl) {
-    const mediaObject = {
-      oembed: {
-        provider_name: inferProviderName(outboundUrl),
-        thumbnail_url: thumbnail || undefined,
-        html: `<iframe src="${embedUrl}" allowfullscreen></iframe>`,
-      },
-    };
-    data.media = mediaObject;
-    data.secure_media = mediaObject;
-  }
-}
-
-function applyRedditHtmlMedia(data: Record<string, unknown>, html: string, sourceBase: string): void {
-  const videoId = extractVRedditIdFromHtml(html);
-
-  if (videoId) {
-    const videoPageUrl = `https://v.redd.it/${videoId}`;
-    const hlsUrl = `https://v.redd.it/${videoId}/HLSPlaylist.m3u8`;
-    const thumbnail = normalizeUrlCandidate(readHtmlMetaContent(html, 'og:image'), sourceBase);
-    const redditVideo = {
-      fallback_url: hlsUrl,
-      hls_url: hlsUrl,
-      is_gif: false,
-    };
-
-    data.is_self = false;
-    data.is_video = true;
-    data.post_hint = 'hosted:video';
-    data.url = videoPageUrl;
-    data.url_overridden_by_dest = videoPageUrl;
-    data.domain = 'v.redd.it';
-    data.media = { reddit_video: redditVideo };
-    data.secure_media = { reddit_video: redditVideo };
-
-    if (thumbnail) {
-      data.thumbnail = thumbnail;
-      data.preview = {
-        enabled: true,
-        images: [{ source: { url: thumbnail }, resolutions: [] }],
-      };
-    }
-
-    return;
-  }
-
-  applyRedditHtmlExternalMedia(data, html, sourceBase);
-}
-
 function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBase: string): unknown | null {
   const postId = inferCommentThreadId(upstreamPath);
-  const postChild = parseHtmlPostLinks(html, upstreamPath, sourceBase).find((child) => child.data.id === postId);
+  const scopedPostChild = parseOldRedditPostChildren(html, upstreamPath, sourceBase).find(
+    (child) => child.data.id === postId,
+  );
+  const postChild =
+    scopedPostChild ??
+    parseHtmlPostLinks(html, upstreamPath, sourceBase).find((child) => child.data.id === postId);
 
   if (!postChild) {
     return null;
@@ -2991,7 +3478,6 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
 
   const comments = parseHtmlCommentChildren(html);
   const commentCount = readHtmlCommentCount(html);
-  applyRedditHtmlMedia(postChild.data, html, sourceBase);
   postChild.data.num_comments = Math.max(commentCount, comments.length, Number(postChild.data.num_comments) || 0);
 
   return [
@@ -3012,6 +3498,14 @@ function parseHtmlCommentsResponse(html: string, upstreamPath: string, sourceBas
       },
     },
   ];
+}
+
+export function parseOldRedditCommentsResponse(
+  html: string,
+  upstreamPath: string,
+  sourceBase = 'https://old.reddit.com',
+): unknown | null {
+  return parseHtmlCommentsResponse(html, upstreamPath, sourceBase);
 }
 
 function parseHtmlDiscoveryListing(html: string, upstreamPath: string): unknown | null {
@@ -3189,6 +3683,25 @@ function getHtmlListingNextAfter(html: string, upstreamPath: string, sourceBase:
   return null;
 }
 
+function findRssSubmissionUrl(content: string, sourceBase: string): string {
+  for (const match of content.matchAll(/<a\b[^>]*>([\s\S]*?)<\/a>/gi)) {
+    const label = stripHtml(match[1] ?? '').replace(/[\[\]]/g, '').trim().toLowerCase();
+
+    if (label !== 'link' && label !== 'source') {
+      continue;
+    }
+
+    const openTag = match[0].match(/^<a\b[^>]*>/i)?.[0] ?? '';
+    const url = normalizeUrlCandidate(readHtmlAttribute(openTag, 'href'), sourceBase);
+
+    if (url) {
+      return url;
+    }
+  }
+
+  return '';
+}
+
 function parseRssPostChild(
   itemXml: string,
   upstreamPath: string,
@@ -3213,6 +3726,8 @@ function parseRssPostChild(
   );
   const created = Date.parse(readXmlTag(itemXml, 'pubDate') || readXmlTag(itemXml, 'updated') || readXmlTag(itemXml, 'published'));
   const normalizedLink = normalizeUrlCandidate(link, sourceBase);
+  const declaredUrl = normalizeUrlCandidate(readXmlTag(itemXml, 'url'), sourceBase);
+  const submissionUrl = declaredUrl || findRssSubmissionUrl(content, sourceBase);
   const fallbackStableId = stableIdFromUrl(link || title, fallbackIndex);
   const sourceUrls = firstDistinctUrl(
     [
@@ -3240,8 +3755,24 @@ function parseRssPostChild(
   const id = postIdFromCommentsPath(permalink || commentUrl || normalizedLink || link) || fallbackStableId;
   const itemSubreddit = inferSubredditFromPermalink(permalink, subreddit);
   const contentUrls = firstDistinctUrl([...hrefUrls, ...sourceUrls], sourceBase);
-  const imageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
-  const videoUrl = hrefUrls.find(isKnownHostedVideoUrl) ?? sourceUrls.find(isKnownHostedVideoUrl) ?? '';
+  const preliminarySelftext = cleanRssSelfText(content, title, submissionUrl);
+  const submissionIsNavigation = Boolean(
+    submissionUrl &&
+      (isSourceNavigationUrl(submissionUrl, sourceBase) ||
+        isCommentPermalinkUrl(submissionUrl, permalink, id)),
+  );
+  const explicitMediaUrl = submissionIsNavigation ? '' : submissionUrl;
+  const extractedImageUrl = sourceUrls.find(isLikelyImageUrl) ?? hrefUrls.find(isLikelyImageUrl) ?? '';
+  const imageUrl = isLikelyImageUrl(explicitMediaUrl)
+    ? explicitMediaUrl
+    : preliminarySelftext
+      ? ''
+      : extractedImageUrl;
+  const videoUrl = isKnownHostedVideoUrl(explicitMediaUrl)
+    ? explicitMediaUrl
+    : preliminarySelftext
+      ? ''
+      : hrefUrls.find(isKnownHostedVideoUrl) ?? sourceUrls.find(isKnownHostedVideoUrl) ?? '';
   const vRedditVideoId = getVRedditVideoId(videoUrl);
   const videoFallbackUrl = videoUrl.endsWith('.gifv')
     ? videoUrl.replace(/\.gifv$/i, '.mp4')
@@ -3255,22 +3786,30 @@ function parseRssPostChild(
       : undefined;
   const iframeEmbedUrl = findIframeEmbedUrl(content, sourceBase);
   const embed =
-    hrefUrls.map(buildKnownEmbed).find((value) => value !== null) ??
+    buildKnownEmbed(explicitMediaUrl) ??
+    (!preliminarySelftext ? hrefUrls.map(buildKnownEmbed).find((value) => value !== null) : null) ??
     (iframeEmbedUrl
       ? {
           provider: inferProviderName(iframeEmbedUrl),
           embedUrl: iframeEmbedUrl,
         }
       : null);
-  const externalUrl =
-    hrefUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
-    contentUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
-    '';
+  const externalUrl = explicitMediaUrl && !isLikelyImageUrl(explicitMediaUrl) && !isKnownHostedVideoUrl(explicitMediaUrl)
+    ? explicitMediaUrl
+    : !preliminarySelftext
+      ? hrefUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
+        contentUrls.find((url) => !isSourceNavigationUrl(url, sourceBase) && !isLikelyImageUrl(url)) ??
+        ''
+      : '';
   const outboundUrl = videoUrl || externalUrl || imageUrl || normalizeUrlCandidate(link, sourceBase) || `https://www.reddit.com${permalink}`;
-  const thumbnailUrl = imageUrl || enclosureUrl;
+  const thumbnailUrl = imageUrl || extractedImageUrl || enclosureUrl;
   const selftext = cleanRssSelfText(content, title, outboundUrl);
   const domain = getUrlHostname(outboundUrl);
-  const isMediaPost = Boolean(imageUrl || videoUrl || embed || externalUrl);
+  const isGallery = /\/gallery\//i.test(getUrlPathname(explicitMediaUrl));
+  const declaredSelf = /^(?:1|true|yes)$/i.test(readXmlTag(itemXml, 'is_self_link'));
+  const isMediaPost = !declaredSelf && Boolean(imageUrl || videoUrl || embed || externalUrl || isGallery);
+  const score = readOldRedditCompactNumber(readXmlTag(itemXml, 'score') || readXmlTag(itemXml, 'ups'));
+  const numComments = readOldRedditCompactNumber(readXmlTag(itemXml, 'num_comments'));
 
   return {
     kind: 't3',
@@ -3281,17 +3820,27 @@ function parseRssPostChild(
       author,
       subreddit: itemSubreddit,
       permalink,
-      score: 0,
-      ups: 0,
-      num_comments: 0,
+      score,
+      ups: score,
+      num_comments: numComments,
       created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
       selftext,
-      over_18: false,
+      over_18: /^(?:1|true|yes)$/i.test(readXmlTag(itemXml, 'over_18') || readXmlTag(itemXml, 'nsfw')),
       url: outboundUrl,
       url_overridden_by_dest: outboundUrl,
       domain,
       is_self: !isMediaPost,
-      post_hint: videoUrl ? 'hosted:video' : embed ? 'rich:video' : imageUrl ? 'image' : externalUrl ? 'link' : undefined,
+      post_hint: isGallery
+        ? 'gallery'
+        : videoUrl
+          ? 'hosted:video'
+          : embed
+            ? 'rich:video'
+            : imageUrl
+              ? 'image'
+              : externalUrl
+                ? 'link'
+                : undefined,
       thumbnail: thumbnailUrl || undefined,
       media: embed
         ? {
@@ -3372,7 +3921,7 @@ function readRssCommentBody(itemXml: string): string {
   return stripHtmlLines(content).join('\n\n');
 }
 
-function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
+export function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
   const postId = inferCommentThreadId(upstreamPath);
 
@@ -3415,6 +3964,8 @@ function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase 
     })
     .filter((item): item is { kind: 't1'; data: { id: string; author: string; body: string; replies: '' } } => item !== null);
 
+  postChild.data.num_comments = Math.max(Number(postChild.data.num_comments) || 0, comments.length);
+
   return [
     {
       kind: 'Listing',
@@ -3435,7 +3986,7 @@ function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase 
   ];
 }
 
-function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
+export function parseRssListing(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
   const items = [...xml.matchAll(/<(item|entry)\b[^>]*>([\s\S]*?)<\/\1>/gi)];
 
   if (items.length === 0) {
@@ -3558,8 +4109,69 @@ function getStringField(data: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function isRenderableObject(value: unknown): boolean {
-  return typeof value === 'object' && value !== null;
+function isNonEmptyRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
+}
+
+function isUsableMediaUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value.trim());
+}
+
+function hasUsableMediaSource(value: unknown): boolean {
+  if (!isNonEmptyRecord(value)) {
+    return false;
+  }
+
+  return MEDIA_SOURCE_URL_FIELDS.some((key) => isUsableMediaUrl(value[key]));
+}
+
+function hasRenderableMediaObject(value: unknown): boolean {
+  if (!isNonEmptyRecord(value)) {
+    return false;
+  }
+
+  const redditVideo = value.reddit_video;
+
+  if (
+    isNonEmptyRecord(redditVideo) &&
+    [redditVideo.fallback_url, redditVideo.hls_url, redditVideo.dash_url].some(isUsableMediaUrl)
+  ) {
+    return true;
+  }
+
+  const oembed = value.oembed;
+  return isNonEmptyRecord(oembed) && Boolean(getStringField(oembed, 'html'));
+}
+
+function hasRenderableEmbedObject(value: unknown): boolean {
+  return isNonEmptyRecord(value) && Boolean(getStringField(value, 'content'));
+}
+
+function somePostTree(
+  data: Record<string, unknown>,
+  predicate: (candidate: Record<string, unknown>) => boolean,
+  depth = 0,
+  seen = new Set<Record<string, unknown>>(),
+): boolean {
+  if (depth > CROSSPOST_MEDIA_MAX_DEPTH || seen.has(data)) {
+    return false;
+  }
+
+  seen.add(data);
+
+  if (predicate(data)) {
+    return true;
+  }
+
+  if (depth === CROSSPOST_MEDIA_MAX_DEPTH || !Array.isArray(data.crosspost_parent_list)) {
+    return false;
+  }
+
+  return data.crosspost_parent_list
+    .slice(0, CROSSPOST_MEDIA_MAX_ITEMS)
+    .some((crosspost) =>
+      isNonEmptyRecord(crosspost) && somePostTree(crosspost, predicate, depth + 1, seen),
+    );
 }
 
 function isUsableThumbnail(value: unknown): boolean {
@@ -3588,22 +4200,23 @@ function isCommentPermalinkUrl(url: string, permalink: string, id: string): bool
   );
 }
 
-function hasRenderablePostData(data: Record<string, unknown>): boolean {
-  if (getStringField(data, 'selftext')) {
+function hasDirectRenderablePostData(data: Record<string, unknown>): boolean {
+  if (getStringField(data, 'selftext') || isNonEmptyRecord(data.poll_data)) {
     return true;
   }
 
-  if (isRenderableObject(data.media) || isRenderableObject(data.secure_media) || isRenderableObject(data.preview)) {
+  if (
+    hasGalleryMedia(data) ||
+    hasPreviewMedia(data) ||
+    hasRenderableMediaObject(data.media) ||
+    hasRenderableMediaObject(data.secure_media) ||
+    hasRenderableEmbedObject(data.media_embed) ||
+    hasRenderableEmbedObject(data.secure_media_embed)
+  ) {
     return true;
   }
 
   if (isUsableThumbnail(data.thumbnail)) {
-    return true;
-  }
-
-  const postHint = getStringField(data, 'post_hint');
-
-  if (postHint && postHint !== 'link') {
     return true;
   }
 
@@ -3618,6 +4231,10 @@ function hasRenderablePostData(data: Record<string, unknown>): boolean {
     getStringField(data, 'permalink'),
     getStringField(data, 'id'),
   );
+}
+
+function hasRenderablePostData(data: Record<string, unknown>): boolean {
+  return somePostTree(data, hasDirectRenderablePostData);
 }
 
 function hasRenderablePostPayload(payload: unknown, upstreamPath: string): boolean {
@@ -3637,18 +4254,115 @@ function hasRenderablePostPayload(payload: unknown, upstreamPath: string): boole
   return listingChildren(payload).some((child) => child.data ? hasRenderablePostData(child.data) : false);
 }
 
+function hasPreviewVideoMedia(data: Record<string, unknown>): boolean {
+  return Boolean(
+    isNonEmptyRecord(data.preview) &&
+    isNonEmptyRecord(data.preview.reddit_video_preview) &&
+    [
+      data.preview.reddit_video_preview.fallback_url,
+      data.preview.reddit_video_preview.hls_url,
+      data.preview.reddit_video_preview.dash_url,
+    ].some(isUsableMediaUrl),
+  );
+}
+
 function hasPreviewMedia(data: Record<string, unknown>): boolean {
-  const preview = data.preview as { images?: unknown[] } | undefined;
-  return Array.isArray(preview?.images) && preview.images.length > 0;
+  if (!isNonEmptyRecord(data.preview)) {
+    return false;
+  }
+
+  if (hasPreviewVideoMedia(data)) {
+    return true;
+  }
+
+  if (!Array.isArray(data.preview.images)) {
+    return false;
+  }
+
+  return data.preview.images.some((image) => {
+    if (!isNonEmptyRecord(image)) {
+      return false;
+    }
+
+    if (hasUsableMediaSource(image.source)) {
+      return true;
+    }
+
+    if (Array.isArray(image.resolutions) && image.resolutions.some(hasUsableMediaSource)) {
+      return true;
+    }
+
+    if (!isNonEmptyRecord(image.variants)) {
+      return false;
+    }
+
+    return Object.values(image.variants).some(
+      (variant) => isNonEmptyRecord(variant) && hasUsableMediaSource(variant.source),
+    );
+  });
 }
 
 function hasGalleryMedia(data: Record<string, unknown>): boolean {
-  const galleryData = data.gallery_data as { items?: unknown[] } | undefined;
-  return Boolean(data.is_gallery && Array.isArray(galleryData?.items) && isRenderableObject(data.media_metadata));
+  if (
+    data.is_gallery !== true ||
+    !isNonEmptyRecord(data.gallery_data) ||
+    !Array.isArray(data.gallery_data.items) ||
+    data.gallery_data.items.length === 0 ||
+    !isNonEmptyRecord(data.media_metadata)
+  ) {
+    return false;
+  }
+
+  return data.gallery_data.items.some((item) => {
+    if (!isNonEmptyRecord(item)) {
+      return false;
+    }
+
+    const mediaId = getStringField(item, 'media_id');
+    const metadata = mediaId ? data.media_metadata[mediaId] : null;
+
+    if (!isNonEmptyRecord(metadata)) {
+      return false;
+    }
+
+    return (
+      hasUsableMediaSource(metadata) ||
+      hasUsableMediaSource(metadata.s) ||
+      (Array.isArray(metadata.p) && metadata.p.some(hasUsableMediaSource))
+    );
+  });
+}
+
+function hasDirectPlayableMediaFields(data: Record<string, unknown>): boolean {
+  if (
+    hasGalleryMedia(data) ||
+    hasPreviewVideoMedia(data) ||
+    hasRenderableMediaObject(data.media) ||
+    hasRenderableMediaObject(data.secure_media) ||
+    hasRenderableEmbedObject(data.media_embed) ||
+    hasRenderableEmbedObject(data.secure_media_embed)
+  ) {
+    return true;
+  }
+
+  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
+  return Boolean(outboundUrl && (isLikelyImageUrl(outboundUrl) || isKnownHostedVideoUrl(outboundUrl)));
 }
 
 function hasPlayableMediaFields(data: Record<string, unknown>): boolean {
-  if (hasGalleryMedia(data) || isRenderableObject(data.media) || isRenderableObject(data.secure_media)) {
+  return somePostTree(data, hasDirectPlayableMediaFields);
+}
+
+function hasDirectUsableMediaFields(data: Record<string, unknown>): boolean {
+  if (
+    hasGalleryMedia(data) ||
+    hasPreviewMedia(data) ||
+    hasRenderableMediaObject(data.media) ||
+    hasRenderableMediaObject(data.secure_media) ||
+    hasRenderableEmbedObject(data.media_embed) ||
+    hasRenderableEmbedObject(data.secure_media_embed) ||
+    isUsableThumbnail(data.thumbnail)
+  ) {
     return true;
   }
 
@@ -3657,18 +4371,7 @@ function hasPlayableMediaFields(data: Record<string, unknown>): boolean {
 }
 
 function hasUsableMediaFields(data: Record<string, unknown>): boolean {
-  if (
-    hasGalleryMedia(data) ||
-    hasPreviewMedia(data) ||
-    isRenderableObject(data.media) ||
-    isRenderableObject(data.secure_media) ||
-    isUsableThumbnail(data.thumbnail)
-  ) {
-    return true;
-  }
-
-  const outboundUrl = getStringField(data, 'url_overridden_by_dest') || getStringField(data, 'url');
-  return Boolean(outboundUrl && isLikelyImageUrl(outboundUrl));
+  return somePostTree(data, hasDirectUsableMediaFields);
 }
 
 function scoreCommentThreadPayload(payload: unknown): number {
@@ -3684,15 +4387,25 @@ function scoreCommentThreadPayload(payload: unknown): number {
 
   let score = 0;
 
-  if (hasGalleryMedia(postData)) {
+  if (somePostTree(postData, hasGalleryMedia)) {
     score += 120;
   }
 
-  if (hasPreviewMedia(postData)) {
+  if (somePostTree(postData, hasPreviewMedia)) {
     score += 20;
   }
 
-  if (isRenderableObject(postData.media) || isRenderableObject(postData.secure_media)) {
+  if (
+    somePostTree(
+      postData,
+      (candidate) =>
+        hasRenderableMediaObject(candidate.media) ||
+        hasRenderableMediaObject(candidate.secure_media) ||
+        hasPreviewVideoMedia(candidate) ||
+        hasRenderableEmbedObject(candidate.media_embed) ||
+        hasRenderableEmbedObject(candidate.secure_media_embed),
+    )
+  ) {
     score += 100;
   }
 
@@ -3927,7 +4640,14 @@ async function enrichCommentThreadMediaFromOldReddit(
       return payload;
     }
 
-    applyRedditHtmlMedia(postData, body, 'https://old.reddit.com');
+    const postId = inferCommentThreadId(upstreamPath);
+    const scopedDetail = parseOldRedditPostChildren(body, upstreamPath, 'https://old.reddit.com').find(
+      (child) => child.data.id === postId,
+    )?.data;
+
+    if (scopedDetail) {
+      mergeRedlibMediaFields(postData, scopedDetail);
+    }
   } catch {
     // Keep the original fallback payload when old Reddit media enrichment fails.
   }
@@ -4004,11 +4724,15 @@ function getPublicInstanceRequestHeaders(
 }
 
 function needsRedlibDetailMediaEnrichment(data: Record<string, unknown>): boolean {
+  const postHint = getStringField(data, 'post_hint');
+
+  if (postHint === 'gallery' && !hasGalleryMedia(data)) {
+    return true;
+  }
+
   if (hasPlayableMediaFields(data)) {
     return false;
   }
-
-  const postHint = getStringField(data, 'post_hint');
 
   return Boolean(
     data.is_video ||
