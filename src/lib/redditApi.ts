@@ -552,7 +552,19 @@ function needsDetailMediaRecovery(post: RedditPostData | null | undefined): bool
     return true;
   }
 
-  return getRawPostMediaStrength(post) < 3 || isPreviewOnlyPlaceholderDetail(post);
+  if (post.is_self || hasRenderableExternalOutbound(post)) {
+    return false;
+  }
+
+  const explicitlyMedia = Boolean(
+    post.is_video ||
+      post.is_gallery ||
+      post.post_hint === 'hosted:video' ||
+      post.post_hint === 'image' ||
+      post.post_hint === 'rich:video',
+  );
+
+  return explicitlyMedia && (getRawPostMediaStrength(post) < 3 || isPreviewOnlyPlaceholderDetail(post));
 }
 
 function candidateImprovesMedia(current: RedditPostData, candidate: RedditPostData): boolean {

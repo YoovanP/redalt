@@ -41,7 +41,8 @@ const SUCCESS_RESPONSE_CACHE_TTL_MS = 5 * 60 * 1000;
 const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
 const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
-const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 4000;
+const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 1800;
+const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 6;
 const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 4000;
 const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 25_000;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
@@ -4672,7 +4673,8 @@ async function enrichRedlibListingMedia(
       Boolean(child.data && needsRedlibDetailMediaEnrichment(child.data)),
     )
     .map((child) => ({ child, detailPath: getRedlibDetailPath(child.data) }))
-    .filter((item) => item.detailPath);
+    .filter((item) => item.detailPath)
+    .slice(0, REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS);
 
   if (targets.length === 0) {
     return payload;
@@ -4737,7 +4739,6 @@ function needsRedlibDetailMediaEnrichment(data: Record<string, unknown>): boolea
   return Boolean(
     data.is_video ||
       postHint === 'hosted:video' ||
-      isUsableThumbnail(data.thumbnail) ||
       isDetailOnlyListingStub(data, postHint),
   );
 }
