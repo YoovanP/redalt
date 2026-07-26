@@ -42,7 +42,7 @@ const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
 const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
 const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 1800;
-const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 6;
+const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 8;
 const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 4000;
 const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 25_000;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
@@ -806,8 +806,11 @@ function collectHttpsUrls(value: unknown, urls: string[], seen: Set<string>): vo
   }
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, signal?: AbortSignal): Promise<Response> {
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
   const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
@@ -817,6 +820,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
     });
   } finally {
     globalThis.clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -1350,6 +1354,33 @@ function stripHtmlLines(value: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
+}
+
+function htmlToMarkdown(value: string): string {
+  const markdown = value
+    .replace(/<script\b[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<pre\b[^>]*>[\s\S]*?<\/pre>/gi, (block) => `\n\n\`\`\`\n${stripHtml(block)}\n\`\`\`\n\n`)
+    .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_match, content) => `\`${stripHtml(content)}\``)
+    .replace(/<a\b[^>]*href=(['"])(.*?)\1[^>]*>([\s\S]*?)<\/a>/gi, (_match, _quote, href, label) => {
+      const text = stripHtml(label);
+      return text ? `[${text}](${decodeXmlEntities(href)})` : '';
+    })
+    .replace(/<(?:strong|b)\b[^>]*>([\s\S]*?)<\/(?:strong|b)>/gi, '**$1**')
+    .replace(/<(?:em|i)\b[^>]*>([\s\S]*?)<\/(?:em|i)>/gi, '*$1*')
+    .replace(/<li\b[^>]*>/gi, '\n- ')
+    .replace(/<blockquote\b[^>]*>/gi, '\n> ')
+    .replace(/<h([1-6])\b[^>]*>/gi, (_match, level) => `\n${'#'.repeat(Number(level))} `)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|blockquote|h\d|ul|ol)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ');
+
+  return decodeXmlEntities(markdown)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t]+/g, ' ').trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 function readHtmlAttributes(html: string, attribute: 'href' | 'src'): string[] {
@@ -2064,7 +2095,7 @@ function parseOldRedditSearchResults(
       score,
       ups: score,
       num_comments: numComments,
-      created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : Math.floor(Date.now() / 1000),
+      created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : 0,
       selftext: '',
       over_18: false,
       url: finalUrl,
@@ -2422,7 +2453,7 @@ function parseOldRedditPostBlock(
   const subreddit = normalizeCommunityName(readHtmlAttribute(openTag, 'data-subreddit')) || fallbackSubreddit;
   const author = normalizeUserName(readHtmlAttribute(openTag, 'data-author')) || '[unknown]';
   const bodyBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'usertext-body');
-  const selftext = bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+  const selftext = bodyBlock ? htmlToMarkdown(bodyBlock.innerHtml) : '';
   const rawDomain = readHtmlAttribute(openTag, 'data-domain');
   const titleHref = readHtmlAttribute(titleBlock?.openTag ?? '', 'href');
   const outboundCandidate = normalizeUrlCandidate(
@@ -2445,7 +2476,7 @@ function parseOldRedditPostBlock(
     ? Math.floor(timestamp > 10_000_000_000 ? timestamp / 1000 : timestamp)
     : Number.isFinite(fallbackCreatedMs)
       ? Math.floor(fallbackCreatedMs / 1000)
-      : Math.floor(Date.now() / 1000);
+      : 0;
   const commentsBlock = findFirstHtmlTagBlock(innerHtml, 'a', 'comments');
   const score =
     readOldRedditNumber(readHtmlAttribute(openTag, 'data-score')) ||
@@ -2623,7 +2654,7 @@ function parseHtmlPostLinks(html: string, upstreamPath: string, sourceBase: stri
         score: 0,
         ups: 0,
         num_comments: 0,
-        created_utc: Math.floor(Date.now() / 1000),
+        created_utc: 0,
         selftext: '',
         over_18: false,
         url,
@@ -3146,7 +3177,7 @@ function parseRedlibPostBlock(
   const createdMs = Date.parse(createdTag ? readHtmlAttribute(createdTag, 'title') : '');
 
   const bodyBlock = findFirstHtmlTagBlock(innerHtml, 'div', 'post_body');
-  const selftext = bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+  const selftext = bodyBlock ? htmlToMarkdown(bodyBlock.innerHtml) : '';
   const thumbnail = redlibThumbnail(innerHtml, sourceBase);
   const instanceHost = getUrlHostname(sourceBase);
 
@@ -3160,7 +3191,7 @@ function parseRedlibPostBlock(
     score,
     ups: score,
     num_comments: redlibListingCommentCount(innerHtml),
-    created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : Math.floor(Date.now() / 1000),
+    created_utc: Number.isFinite(createdMs) ? Math.floor(createdMs / 1000) : 0,
     selftext,
     over_18: over18,
     is_self: false,
@@ -3384,7 +3415,7 @@ function readHtmlCommentBody(commentHtml: string): string {
   const bodyBlock =
     findFirstHtmlTagBlock(commentHtml, 'div', 'comment_body') ??
     findFirstHtmlTagBlock(commentHtml, 'div', 'usertext-body');
-  return bodyBlock ? stripHtmlLines(bodyBlock.innerHtml).join('\n\n') : '';
+  return bodyBlock ? htmlToMarkdown(bodyBlock.innerHtml) : '';
 }
 
 function parseHtmlCommentChildren(html: string): Array<{ kind: 't1'; data: Record<string, unknown> }> {
@@ -3824,7 +3855,7 @@ function parseRssPostChild(
       score,
       ups: score,
       num_comments: numComments,
-      created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : Math.floor(Date.now() / 1000),
+      created_utc: Number.isFinite(created) ? Math.floor(created / 1000) : 0,
       selftext,
       over_18: /^(?:1|true|yes)$/i.test(readXmlTag(itemXml, 'over_18') || readXmlTag(itemXml, 'nsfw')),
       url: outboundUrl,
@@ -3919,7 +3950,7 @@ function readRssCommentBody(itemXml: string): string {
     readXmlTag(itemXml, 'summary') ||
     readXmlTag(itemXml, 'description');
 
-  return stripHtmlLines(content).join('\n\n');
+  return htmlToMarkdown(content);
 }
 
 export function parseRssCommentsResponse(xml: string, upstreamPath: string, sourceBase = 'https://www.reddit.com'): unknown | null {
@@ -4144,6 +4175,16 @@ function hasRenderableMediaObject(value: unknown): boolean {
   return isNonEmptyRecord(oembed) && Boolean(getStringField(oembed, 'html'));
 }
 
+function hasClientPlayableMediaObject(value: unknown): boolean {
+  if (!isNonEmptyRecord(value)) return false;
+  const redditVideo = value.reddit_video;
+  if (isNonEmptyRecord(redditVideo) && [redditVideo.fallback_url, redditVideo.hls_url].some(isUsableMediaUrl)) {
+    return true;
+  }
+  const oembed = value.oembed;
+  return isNonEmptyRecord(oembed) && Boolean(getStringField(oembed, 'html'));
+}
+
 function hasRenderableEmbedObject(value: unknown): boolean {
   return isNonEmptyRecord(value) && Boolean(getStringField(value, 'content'));
 }
@@ -4262,7 +4303,6 @@ function hasPreviewVideoMedia(data: Record<string, unknown>): boolean {
     [
       data.preview.reddit_video_preview.fallback_url,
       data.preview.reddit_video_preview.hls_url,
-      data.preview.reddit_video_preview.dash_url,
     ].some(isUsableMediaUrl),
   );
 }
@@ -4338,8 +4378,8 @@ function hasDirectPlayableMediaFields(data: Record<string, unknown>): boolean {
   if (
     hasGalleryMedia(data) ||
     hasPreviewVideoMedia(data) ||
-    hasRenderableMediaObject(data.media) ||
-    hasRenderableMediaObject(data.secure_media) ||
+    hasClientPlayableMediaObject(data.media) ||
+    hasClientPlayableMediaObject(data.secure_media) ||
     hasRenderableEmbedObject(data.media_embed) ||
     hasRenderableEmbedObject(data.secure_media_embed)
   ) {
@@ -4352,6 +4392,22 @@ function hasDirectPlayableMediaFields(data: Record<string, unknown>): boolean {
 
 function hasPlayableMediaFields(data: Record<string, unknown>): boolean {
   return somePostTree(data, hasDirectPlayableMediaFields);
+}
+
+function needsCommentThreadMediaEnrichment(data: Record<string, unknown>): boolean {
+  if (hasPlayableMediaFields(data) || data.is_self === true || getStringField(data, 'selftext')) {
+    return false;
+  }
+
+  const postHint = getStringField(data, 'post_hint');
+  return Boolean(
+    data.is_video ||
+      data.is_gallery ||
+      postHint === 'gallery' ||
+      postHint === 'hosted:video' ||
+      postHint === 'image' ||
+      postHint === 'rich:video',
+  );
 }
 
 function hasDirectUsableMediaFields(data: Record<string, unknown>): boolean {
@@ -4543,6 +4599,7 @@ async function fetchRedlibDetailMediaData(
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
   mediaPref: MediaPref,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown> | null> {
   const response = await fetchWithTimeout(
     `${base}${detailPath}`,
@@ -4550,6 +4607,7 @@ async function fetchRedlibDetailMediaData(
       headers: getPublicInstanceRequestHeaders(base, 'html', env, options),
     },
     REDLIB_DETAIL_ENRICH_TIMEOUT_MS,
+    signal,
   );
 
   if (!response.ok) {
@@ -4575,10 +4633,11 @@ async function enrichCommentThreadMediaFromRedlib(
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
   mediaPref: MediaPref,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const postData = getCommentThreadPostData(payload);
 
-  if (!postData || hasPlayableMediaFields(postData)) {
+  if (!postData || !needsCommentThreadMediaEnrichment(postData)) {
     return payload;
   }
 
@@ -4589,7 +4648,7 @@ async function enrichCommentThreadMediaFromRedlib(
   }
 
   try {
-    const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref);
+    const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref, signal);
 
     if (detailData) {
       mergeRedlibMediaFields(postData, detailData);
@@ -4606,10 +4665,11 @@ async function enrichCommentThreadMediaFromOldReddit(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const postData = getCommentThreadPostData(payload);
 
-  if (!postData || hasPlayableMediaFields(postData)) {
+  if (!postData || !needsCommentThreadMediaEnrichment(postData)) {
     return payload;
   }
 
@@ -4629,6 +4689,7 @@ async function enrichCommentThreadMediaFromOldReddit(
         },
       },
       OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS,
+      signal,
     );
 
     if (!response.ok) {
@@ -4663,6 +4724,7 @@ async function enrichRedlibListingMedia(
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
   mediaPref: MediaPref,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   if (isCommentThreadPath(upstreamPath) || isPublicDiscoveryPath(upstreamPath)) {
     return payload;
@@ -4682,7 +4744,7 @@ async function enrichRedlibListingMedia(
 
   await runWithConcurrency(targets, REDLIB_DETAIL_ENRICH_CONCURRENCY, async ({ child, detailPath }) => {
     try {
-      const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref);
+      const detailData = await fetchRedlibDetailMediaData(base, detailPath, env, options, mediaPref, signal);
 
       if (detailData) {
         mergeRedlibMediaFields(child.data, detailData);
@@ -4832,6 +4894,7 @@ async function fetchFromPublicInstance(
   env: RedditProxyEnv | undefined,
   options: RedditProxyOptions,
   mediaPref: MediaPref,
+  signal?: AbortSignal,
 ): Promise<Response | null> {
   // Eddrit now sits behind an Anubis proof-of-work wall; requests only return a challenge
   // page, so skip it entirely to avoid wasted latency.
@@ -4849,6 +4912,7 @@ async function fetchFromPublicInstance(
           headers: getPublicInstanceRequestHeaders(base, request.method, env, options),
         },
         getPublicInstanceTimeoutMs(request, upstreamPath),
+        signal,
       );
 
       if (!response.ok) {
@@ -4874,10 +4938,11 @@ async function fetchFromPublicInstance(
             env,
             options,
             mediaPref,
+            signal,
           );
         }
 
-        normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options);
+        normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options, signal);
       }
 
       if (
@@ -4886,7 +4951,7 @@ async function fetchFromPublicInstance(
         !isCommentThreadPath(upstreamPath) &&
         !isPublicDiscoveryPath(upstreamPath)
       ) {
-        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options, mediaPref);
+        normalizedPayload = await enrichRedlibListingMedia(normalizedPayload, base, upstreamPath, env, options, mediaPref, signal);
       }
 
       if (!isPublicDiscoveryPath(upstreamPath) && !hasRenderablePostPayload(normalizedPayload, upstreamPath)) {
@@ -4998,42 +5063,6 @@ function raceUsablePublicInstance(
   options: RedditProxyOptions,
   mediaPref: MediaPref,
 ): Promise<{ base: string; response: Response; quality: number } | null> {
-  if (isCommentThreadPath(upstreamPath)) {
-    return Promise.all(
-      bases.map(async (base) => {
-        try {
-          const response = await fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref);
-
-          if (response) {
-            markPublicInstanceSuccess(base);
-            return {
-              base,
-              response,
-              quality: Number(response.headers.get('X-RedAlt-Payload-Quality') ?? '0') || 0,
-            };
-          }
-
-          markPublicInstanceFailure(base);
-        } catch {
-          markPublicInstanceFailure(base);
-        }
-
-        return null;
-      }),
-    ).then((results) => {
-      const winners = results.filter(
-        (result): result is { base: string; response: Response; quality: number } => Boolean(result),
-      );
-
-      if (winners.length === 0) {
-        return null;
-      }
-
-      winners.sort((left, right) => right.quality - left.quality);
-      return winners[0];
-    });
-  }
-
   return new Promise((resolve) => {
     if (bases.length === 0) {
       resolve(null);
@@ -5042,16 +5071,18 @@ function raceUsablePublicInstance(
 
     let remaining = bases.length;
     let settled = false;
+    const controllers = bases.map(() => new AbortController());
 
     const finish = (value: { base: string; response: Response; quality: number } | null) => {
       if (!settled) {
         settled = true;
+        if (value) controllers.forEach((controller) => controller.abort());
         resolve(value);
       }
     };
 
-    for (const base of bases) {
-      fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref)
+    bases.forEach((base, index) => {
+      fetchFromPublicInstance(base, upstreamPath, env, options, mediaPref, controllers[index].signal)
         .then((response) => {
           if (response) {
             markPublicInstanceSuccess(base);
@@ -5065,7 +5096,7 @@ function raceUsablePublicInstance(
           }
         })
         .catch(() => {
-          markPublicInstanceFailure(base);
+          if (!controllers[index].signal.aborted) markPublicInstanceFailure(base);
         })
         .finally(() => {
           remaining -= 1;
@@ -5074,7 +5105,7 @@ function raceUsablePublicInstance(
             finish(null);
           }
         });
-    }
+    });
   });
 }
 

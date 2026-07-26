@@ -1,5 +1,8 @@
-import { useEffect, useRef } from 'react';
-import { useUiSettings } from '../../lib/uiSettings';
+import { useEffect, useRef, useState } from 'react';
+import { usePlaybackSettings } from '../../lib/uiSettings';
+import { canClientPlayVideo } from '../../lib/mediaCapabilities';
+import { MediaShell } from './MediaShell';
+import { useNearViewport } from './useNearViewport';
 
 type VideoMediaProps = {
   sourceUrl: string;
@@ -10,6 +13,10 @@ type VideoMediaProps = {
   title: string;
   showSourceLink?: boolean;
   inline?: boolean;
+  width?: number;
+  height?: number;
+  active?: boolean;
+  nearby?: boolean;
 };
 
 export function VideoMedia({
@@ -21,19 +28,31 @@ export function VideoMedia({
   title,
   showSourceLink = true,
   inline = false,
+  width,
+  height,
+  active,
+  nearby,
 }: VideoMediaProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const {
-    settings: { autoplayVideos, autoplayWithAudio },
-  } = useUiSettings();
+  const { ref: shellRef, isNear } = useNearViewport(!inline);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [attempt, setAttempt] = useState(0);
+  const { autoplayVideos, autoplayWithAudio } = usePlaybackSettings();
 
   const shouldMute = !autoplayWithAudio;
   const sourceLinkUrl = hlsUrl || sourceUrl;
+  const shouldLoad = nearby ?? active ?? (inline || isNear);
+  const shouldAutoplay = active ?? isNear;
+  const playable = canClientPlayVideo({ sourceUrl, hlsUrl, mimeType });
+
+  useEffect(() => {
+    setStatus(shouldLoad ? 'loading' : 'idle');
+  }, [attempt, shouldLoad, sourceUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
 
-    if (!video || !hlsUrl) {
+    if (!video || !hlsUrl || !shouldLoad) {
       return;
     }
 
@@ -44,53 +63,62 @@ export function VideoMedia({
     let cancelled = false;
     let hls: import('hls.js').default | null = null;
 
-    import('hls.js').then(({ default: Hls }) => {
-      if (cancelled || !Hls.isSupported()) {
-        return;
-      }
-
-      hls = new Hls();
-      hls.loadSource(hlsUrl);
-      hls.attachMedia(video);
-    });
+    import('hls.js')
+      .then(({ default: Hls }) => {
+        if (cancelled || !Hls.isSupported()) return;
+        hls = new Hls();
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) setStatus('error');
+        });
+        hls.loadSource(hlsUrl);
+        hls.attachMedia(video);
+      })
+      .catch(() => setStatus('error'));
 
     return () => {
       cancelled = true;
       hls?.destroy();
     };
-  }, [hlsUrl]);
+  }, [attempt, hlsUrl, shouldLoad]);
 
   const player = (
     <video
+      key={attempt}
       ref={videoRef}
       className="post-video"
       controls={!isGif}
       playsInline
-      preload="metadata"
-      autoPlay={isGif || autoplayVideos}
+      preload={shouldLoad ? 'metadata' : 'none'}
+      autoPlay={shouldLoad && shouldAutoplay && (isGif || autoplayVideos)}
       loop={isGif}
       muted={isGif || shouldMute}
       poster={posterUrl}
+      onCanPlay={() => setStatus('ready')}
+      onError={() => setStatus('error')}
     >
-      {hlsUrl && <source src={hlsUrl} type="application/vnd.apple.mpegurl" />}
-      {hlsUrl && <source src={hlsUrl} type="application/x-mpegURL" />}
-      {sourceUrl !== hlsUrl && <source src={sourceUrl} type={mimeType} />}
+      {shouldLoad && hlsUrl && <source src={hlsUrl} type="application/vnd.apple.mpegurl" />}
+      {shouldLoad && hlsUrl && <source src={hlsUrl} type="application/x-mpegURL" />}
+      {shouldLoad && sourceUrl !== hlsUrl && playable && <source src={sourceUrl} type={mimeType} />}
       Your browser does not support embedded videos.
     </video>
   );
 
-  if (inline) {
-    return player;
-  }
-
   return (
-    <div className="media-block media-aspect-wrap">
+    <MediaShell
+      width={width}
+      height={height}
+      status={playable ? status : 'error'}
+      sourceUrl={sourceLinkUrl}
+      onRetry={() => setAttempt((value) => value + 1)}
+      outerRef={shellRef}
+      inline={inline}
+    >
       {player}
       {showSourceLink && (
         <a href={sourceLinkUrl} target="_blank" rel="noreferrer">
           Open video source: {title}
         </a>
       )}
-    </div>
+    </MediaShell>
   );
 }

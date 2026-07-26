@@ -1,10 +1,10 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { memo, useState } from 'react';
 import { writeStorageItem } from '../lib/browserStorage';
-import { isPostSaved, toggleSavedPost } from '../lib/localLibrary';
 import { MarkdownText } from './MarkdownText';
 import { RenderMedia } from './media/RenderMedia';
-import { useUiSettings, type CardMode } from '../lib/uiSettings';
+import { PostActions } from './post/PostActions';
+import { PostHeader } from './post/PostHeader';
+import { useOpenInNewTab, type CardMode } from '../lib/uiSettings';
 import type { NormalizedPost } from '../types/reddit';
 
 type PostCardProps = {
@@ -14,16 +14,8 @@ type PostCardProps = {
 
 const PREVIEW_TEXT_LIMIT = 320;
 
-function formatTimestamp(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString();
-}
-
-export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
-  const {
-    settings: { openInNewTab },
-  } = useUiSettings();
-  const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
-  const [saved, setSaved] = useState(() => isPostSaved(post.id));
+export const PostCard = memo(function PostCard({ post, cardMode = 'default' }: PostCardProps) {
+  const openInNewTab = useOpenInNewTab();
   const [showFullText, setShowFullText] = useState(false);
   const [showContentInfo, setShowContentInfo] = useState(false);
   const isContentOnly = cardMode === 'content-only';
@@ -35,8 +27,6 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
     isLongText && !showFullText
       ? 'self-text-markdown self-text-collapsed self-text-preview'
       : 'self-text-markdown self-text-preview';
-  const postDetailPath = `/r/${post.subreddit}/comments/${post.id}`;
-  const postRouteState = { fromSubreddit: post.subreddit, fallbackPost: post };
 
   const rememberSubredditScroll = () => {
     if (openInNewTab) {
@@ -47,55 +37,21 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
     writeStorageItem('session', `redalt.subreddit.restore.${post.subreddit}`, '1');
   };
 
-  const onShare = async () => {
-    const shareUrl = `https://www.reddit.com${post.permalink}`;
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: post.title,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-
-      setShareState('done');
-      window.setTimeout(() => setShareState('idle'), 1400);
-    } catch {
-      setShareState('error');
-      window.setTimeout(() => setShareState('idle'), 1400);
-    }
-  };
-
   return (
     <article className={`post-card post-card-${cardMode}`}>
       {showInfoBlock && (
-        <header>
-          <h2>
-            <Link
-              to={postDetailPath}
-              state={postRouteState}
-              onClick={rememberSubredditScroll}
-              target={openInNewTab ? '_blank' : undefined}
-              rel={openInNewTab ? 'noopener noreferrer' : undefined}
-            >
-              {post.title}
-            </Link>
-          </h2>
-          {post.flairText && <p className="post-flair">{post.flairText}</p>}
-          <p className="meta">
-            <Link to={`/u/${post.author}`}>u/{post.author}</Link> · {post.score} points · {post.numComments} comments · {formatTimestamp(post.createdUtc)}
-            {post.isNsfw ? ' · NSFW' : ''}
-          </p>
-        </header>
+        <PostHeader post={post} openInNewTab={openInNewTab} onNavigate={rememberSubredditScroll} />
       )}
 
       <RenderMedia post={post} />
 
       {trimmedSelfText && post.media.type !== 'text' && (
         <div>
-          <MarkdownText text={trimmedSelfText} className={textClassName} />
+          <MarkdownText
+            text={trimmedSelfText}
+            className={textClassName}
+            maxSourceLength={!showFullText && isLongText ? PREVIEW_TEXT_LIMIT : undefined}
+          />
           {isLongText && (
             <button
               type="button"
@@ -119,34 +75,8 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
       )}
 
       {showInfoBlock && (
-        <footer className="post-actions">
-          <Link
-            className="post-action-button"
-            to={postDetailPath}
-            state={postRouteState}
-            onClick={rememberSubredditScroll}
-            target={openInNewTab ? '_blank' : undefined}
-            rel={openInNewTab ? 'noopener noreferrer' : undefined}
-          >
-            Comments
-          </Link>
-          <button type="button" className="post-action-button" onClick={onShare}>
-            {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
-          </button>
-          <button
-            type="button"
-            className="post-action-button"
-            onClick={() => setSaved(toggleSavedPost(post))}
-          >
-            {saved ? 'Unsave' : 'Save'}
-          </button>
-          <a className="post-action-button" href={`https://www.reddit.com${post.permalink}`} target="_blank" rel="noreferrer">
-            Open on Reddit
-          </a>
-          <a className="post-action-button" href={post.outboundUrl} target="_blank" rel="noreferrer">
-            Open source
-          </a>
-
+        <>
+          <PostActions post={post} openInNewTab={openInNewTab} onNavigate={rememberSubredditScroll} />
           {isContentOnly && (
             <button
               type="button"
@@ -156,8 +86,8 @@ export function PostCard({ post, cardMode = 'default' }: PostCardProps) {
               Hide info
             </button>
           )}
-        </footer>
+        </>
       )}
     </article>
   );
-}
+});

@@ -290,7 +290,7 @@ export function SubredditPage() {
       ) : (
         <div className="post-list" style={{ '--post-columns': columns } as CSSProperties}>
           {visiblePosts.map((post, index) => (
-            <article
+            <div
               key={post.name}
               ref={(el) => {
                 if (el) postRefs.current.set(post.name, el);
@@ -300,7 +300,7 @@ export function SubredditPage() {
             >
               {index === triggerIndex && after && <div ref={nearEndRef} className="near-end-trigger" />}
               <PostCard post={post} cardMode={cardMode} />
-            </article>
+            </div>
           ))}
         </div>
       )}

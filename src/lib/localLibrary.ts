@@ -2,6 +2,7 @@ import type { NormalizedPost } from '../types/reddit';
 import { readStorageItem, writeStorageItem } from './browserStorage';
 
 export type LibraryItem = {
+  version?: 2;
   id: string;
   name: string;
   title: string;
@@ -16,14 +17,27 @@ export type LibraryItem = {
   mediaType: string;
   savedAt?: number;
   viewedAt?: number;
+  postPreview?: NormalizedPost;
 };
 
 const SAVED_KEY = 'redalt.savedPosts';
 const HISTORY_KEY = 'redalt.watchHistory';
 const HISTORY_LIMIT = 250;
+export const LIBRARY_UPDATE_EVENT = 'redalt-library-update';
+export type LibraryUpdateDetail = { kind: 'saved' | 'history' };
+let savedItemsCache: LibraryItem[] | null = null;
+
+function notifyLibraryUpdate(key: string): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<LibraryUpdateDetail>(LIBRARY_UPDATE_EVENT, {
+      detail: { kind: key === SAVED_KEY ? 'saved' : 'history' },
+    }));
+  }
+}
 
 function mapPostToItem(post: NormalizedPost): LibraryItem {
   return {
+    version: 2,
     id: post.id,
     name: post.name,
     title: post.title,
@@ -36,6 +50,10 @@ function mapPostToItem(post: NormalizedPost): LibraryItem {
     numComments: post.numComments,
     isNsfw: post.isNsfw,
     mediaType: post.media.type,
+    postPreview: {
+      ...post,
+      selfText: post.selfText.slice(0, 2_000),
+    },
   };
 }
 
@@ -68,19 +86,29 @@ function parseItems(raw: string | null): LibraryItem[] {
 }
 
 function readItems(key: string): LibraryItem[] {
+  if (key === SAVED_KEY && savedItemsCache) return [...savedItemsCache];
   return parseItems(readStorageItem('local', key));
 }
 
 function writeItems(key: string, items: LibraryItem[]): void {
+  if (key === SAVED_KEY) savedItemsCache = [...items];
   writeStorageItem('local', key, JSON.stringify(items));
+  notifyLibraryUpdate(key);
 }
 
 export function getSavedPosts(): LibraryItem[] {
-  return readItems(SAVED_KEY).sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+  const items = readItems(SAVED_KEY).sort((a, b) => (b.savedAt ?? 0) - (a.savedAt ?? 0));
+  savedItemsCache = [...items];
+  return items;
 }
 
 export function isPostSaved(postId: string): boolean {
-  return getSavedPosts().some((item) => item.id === postId);
+  if (!savedItemsCache) savedItemsCache = parseItems(readStorageItem('local', SAVED_KEY));
+  return savedItemsCache.some((item) => item.id === postId);
+}
+
+export function invalidateSavedPostsCache(): void {
+  savedItemsCache = null;
 }
 
 export function toggleSavedPost(post: NormalizedPost): boolean {

@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams } from 'react-router-dom';
 import { MarkdownText } from '../components/MarkdownText';
 import { RenderMedia } from '../components/media/RenderMedia';
+import { PostActions } from '../components/post/PostActions';
+import { PostHeader } from '../components/post/PostHeader';
 import { SkeletonLoader } from '../components/SkeletonLoader';
 import { StateView } from '../components/StateView';
-import { addWatchHistory, isPostSaved, toggleSavedPost } from '../lib/localLibrary';
+import { addWatchHistory } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
-import { fetchPostDetail, getRememberedPost } from '../lib/redditApi';
+import { fetchPostDetail, fetchPostMediaEnrichment, getRememberedPost, mergePostCandidates } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
-import type { NormalizedPost, PostDetailResult, RedditComment } from '../types/reddit';
+import type { NormalizedPost, PostDetailResult, RedditComment, RedditPostData } from '../types/reddit';
 
 const TOP_LEVEL_COMMENTS_STEP = 5;
 
@@ -21,73 +23,9 @@ type CommentItemProps = {
   depth?: number;
 };
 
-function getMediaStrength(post: NormalizedPost | null): number {
-  if (!post) {
-    return -1;
-  }
-
-  switch (post.media.type) {
-    case 'video':
-    case 'external':
-    case 'gallery':
-      return 4;
-    case 'image':
-      return 3;
-    case 'text':
-      return 1;
-    case 'link':
-    default:
-      return 0;
-  }
-}
-
-function isRedgifsExternalPost(post: NormalizedPost | null): boolean {
-  if (post?.media.type !== 'external') {
-    return false;
-  }
-
-  const providerValue = `${post.media.provider ?? ''} ${post.media.embedUrl ?? ''} ${post.media.outboundUrl}`.toLowerCase();
-  return providerValue.includes('redgifs');
-}
-
-function withFallbackMedia(detailPost: NormalizedPost, fallbackPost: NormalizedPost): NormalizedPost {
-  return {
-    ...detailPost,
-    flairText: detailPost.flairText || fallbackPost.flairText,
-    isNsfw: detailPost.isNsfw || fallbackPost.isNsfw,
-    outboundUrl: fallbackPost.outboundUrl || detailPost.outboundUrl,
-    selfText: detailPost.selfText || fallbackPost.selfText,
-    media: fallbackPost.media,
-  };
-}
-
-function hasPlayableNativeMedia(post: NormalizedPost): boolean {
-  return post.media.type === 'video' || post.media.type === 'gallery';
-}
-
-function preferRicherPost(detailPost: NormalizedPost, fallbackPost: NormalizedPost | null): NormalizedPost {
-  if (!fallbackPost || fallbackPost.id !== detailPost.id) {
-    return detailPost;
-  }
-
-  if (
-    isRedgifsExternalPost(fallbackPost) &&
-    !isRedgifsExternalPost(detailPost) &&
-    !hasPlayableNativeMedia(detailPost)
-  ) {
-    return withFallbackMedia(detailPost, fallbackPost);
-  }
-
-  if (getMediaStrength(detailPost) >= getMediaStrength(fallbackPost)) {
-    return detailPost;
-  }
-
-  return withFallbackMedia(detailPost, fallbackPost);
-}
-
-function CommentItem({ comment, depth = 0 }: CommentItemProps) {
+const CommentItem = memo(function CommentItem({ comment, depth = 0 }: CommentItemProps) {
   const [collapsed, setCollapsed] = useState(false);
-  const [showReplies, setShowReplies] = useState(true);
+  const [showReplies, setShowReplies] = useState(depth === 0);
   const itemClassName = depth === 0
     ? `comment-item comment-item-root${collapsed ? ' comment-root-collapsed' : ''}`
     : 'comment-item comment-item-child';
@@ -150,7 +88,7 @@ function CommentItem({ comment, depth = 0 }: CommentItemProps) {
       )}
     </li>
   );
-}
+});
 
 export function PostDetailPage() {
   const { name = 'mildlyinfuriating', id = '' } = useParams();
@@ -158,13 +96,14 @@ export function PostDetailPage() {
   const {
     settings: { fallbackMediaSource, redditApiSource },
   } = useUiSettings();
-  const [data, setData] = useState<PostDetailResult | null>(null);
+  const [postData, setPostData] = useState<RedditPostData | null>(null);
+  const [comments, setComments] = useState<RedditComment[]>([]);
+  const [commentsStatus, setCommentsStatus] = useState<PostDetailResult['commentsStatus'] | 'loading'>('loading');
+  const [mediaStatus, setMediaStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const historyPostIdRef = useRef<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
-  const [saved, setSaved] = useState(false);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
-  const [retryNonce, setRetryNonce] = useState(0);
   const rememberedPost = useMemo(() => {
     const post = getRememberedPost(id);
     return post ? normalizePost(post) : null;
@@ -181,57 +120,99 @@ export function PostDetailPage() {
   }, [id, location.state, rememberedPost]);
 
   useEffect(() => {
-    let ignore = false;
+    const controller = new AbortController();
 
     setLoading(true);
     setError(null);
-    setData(null);
+    setPostData(null);
+    setComments([]);
+    setCommentsStatus('loading');
+    setMediaStatus('idle');
     setVisibleTopLevelComments(TOP_LEVEL_COMMENTS_STEP);
 
-    fetchPostDetail(name, id)
+    fetchPostDetail(name, id, { signal: controller.signal })
       .then((result) => {
-        if (!ignore) {
-          setData(result);
-        }
+        setPostData(result.post);
+        setComments(result.comments);
+        setCommentsStatus(result.commentsStatus);
+        setMediaStatus(result.mediaStatus === 'ready' ? 'ready' : 'idle');
       })
       .catch((err) => {
-        if (!ignore) {
-          if (fallbackPost) {
-            setError(null);
-          } else {
-            setError(err instanceof Error ? err.message : 'Unable to load post detail.');
-          }
+        if (controller.signal.aborted) return;
+
+        if (fallbackPost) {
+          setCommentsStatus('unavailable');
+        } else {
+          setError(err instanceof Error ? err.message : 'Unable to load post detail.');
         }
       })
       .finally(() => {
-        if (!ignore) {
+        if (!controller.signal.aborted) {
           setLoading(false);
         }
       });
 
     return () => {
-      ignore = true;
+      controller.abort();
     };
-  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource, retryNonce]);
+  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource]);
+
+  useEffect(() => {
+    if (!postData || mediaStatus !== 'idle') {
+      return;
+    }
+
+    const controller = new AbortController();
+    setMediaStatus('loading');
+
+    fetchPostMediaEnrichment(postData, { signal: controller.signal })
+      .then((enriched) => {
+        setPostData((current) => current ? mergePostCandidates(current, [enriched]) : enriched);
+        setMediaStatus('ready');
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setMediaStatus('error');
+      });
+
+    return () => controller.abort();
+  }, [mediaStatus, postData]);
 
   const normalized = useMemo(() => {
-    if (!data) {
+    if (!postData) {
       return fallbackPost;
     }
 
-    return preferRicherPost(normalizePost(data.post), fallbackPost);
-  }, [data, fallbackPost]);
-  const comments = data?.comments ?? [];
+    return normalizePost(postData);
+  }, [postData, fallbackPost]);
   const visibleComments = comments.slice(0, visibleTopLevelComments);
   const hasMoreComments = comments.length > visibleComments.length;
+
+  const retryComments = async () => {
+    setCommentsStatus('loading');
+
+    try {
+      const result = await fetchPostDetail(name, id);
+      setPostData((current) => current ? mergePostCandidates(current, [result.post]) : result.post);
+      setComments(result.comments);
+      setCommentsStatus(result.commentsStatus);
+
+      if (result.mediaStatus === 'incomplete') {
+        setMediaStatus('idle');
+      }
+    } catch {
+      setCommentsStatus('unavailable');
+    }
+  };
 
   useEffect(() => {
     if (!normalized) {
       return;
     }
 
-    addWatchHistory(normalized);
-    setSaved(isPostSaved(normalized.id));
+    if (historyPostIdRef.current !== normalized.id) {
+      historyPostIdRef.current = normalized.id;
+      addWatchHistory(normalized);
+    }
   }, [normalized]);
 
   if (loading && !normalized) {
@@ -249,65 +230,39 @@ export function PostDetailPage() {
     return <StateView kind="error" message={error ?? 'Post unavailable.'} />;
   }
 
-  const onShare = async () => {
-    const shareUrl = `https://www.reddit.com${normalized.permalink}`;
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: normalized.title,
-          url: shareUrl,
-        });
-      } else {
-        await navigator.clipboard.writeText(shareUrl);
-      }
-
-      setShareState('done');
-      window.setTimeout(() => setShareState('idle'), 1400);
-    } catch {
-      setShareState('error');
-      window.setTimeout(() => setShareState('idle'), 1400);
-    }
-  };
-
   return (
     <section className="detail-page">
       <p>
         <Link to={`/r/${name}`}>{"<"} Back to /r/{name}</Link>
       </p>
-      <h2>{normalized.title}</h2>
-      <p className="meta">
-        <Link to={`/u/${normalized.author}`}>u/{normalized.author}</Link> | {normalized.score} points | {normalized.numComments} comments
-      </p>
+      <PostHeader post={normalized} linked={false} showSubreddit />
 
       <RenderMedia post={normalized} expanded />
+
+      {mediaStatus === 'loading' && <p className="media-status" role="status">Improving media quality...</p>}
 
       {normalized.media.type !== 'text' && normalized.selfText.trim() && (
         <MarkdownText text={normalized.selfText} className="self-text-markdown self-text" />
       )}
 
-      <p className="post-links">
-        <a href={`https://www.reddit.com${normalized.permalink}`} target="_blank" rel="noreferrer">
-          Open discussion on Reddit
-        </a>
-        <button type="button" onClick={() => setSaved(toggleSavedPost(normalized))}>
-          {saved ? 'Unsave' : 'Save'}
-        </button>
-        <button type="button" onClick={onShare}>
-          {shareState === 'idle' ? 'Share' : shareState === 'done' ? 'Shared' : 'Failed'}
-        </button>
-      </p>
+      <PostActions post={normalized} showComments={false} />
 
-      {data?.commentsStatus === 'unavailable' && (
+      {commentsStatus === 'loading' && (
+        <div className="comments-status" role="status">
+          <p>Loading comments...</p>
+        </div>
+      )}
+
+      {commentsStatus === 'unavailable' && (
         <div className="comments-status" role="status">
           <p>The post loaded, but comments are temporarily unavailable.</p>
-          <button type="button" className="load-more" onClick={() => setRetryNonce((value) => value + 1)}>
+          <button type="button" className="load-more" onClick={retryComments}>
             Retry comments
           </button>
         </div>
       )}
 
-      {data?.commentsStatus === 'empty' && <p className="comments-status">No comments yet.</p>}
+      {commentsStatus === 'empty' && <p className="comments-status">No comments yet.</p>}
 
       {comments.length > 0 && (
         <div>

@@ -349,9 +349,9 @@ export function SearchPage() {
           <h3>Posts</h3>
           <div className="post-list" style={{ '--post-columns': 1 } as CSSProperties}>
             {normalizedPosts.map((post) => (
-              <article key={post.name}>
+              <div key={post.name}>
                 <PostCard post={post} cardMode={cardMode} />
-              </article>
+              </div>
             ))}
           </div>
           {canLoadMorePosts && (

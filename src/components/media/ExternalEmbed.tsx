@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { isTrustedEmbedUrl } from '../../lib/normalizePost';
+import { MediaShell } from './MediaShell';
+import { useNearViewport } from './useNearViewport';
 
 type ExternalEmbedProps = {
   embedUrl?: string;
@@ -10,6 +12,8 @@ type ExternalEmbedProps = {
   embedWidth?: number;
   embedHeight?: number;
   showOutboundLink?: boolean;
+  active?: boolean;
+  nearby?: boolean;
 };
 
 type ProviderType = 'youtube' | 'vimeo' | 'redgifs' | 'other';
@@ -222,10 +226,14 @@ export function ExternalEmbed({
   embedWidth,
   embedHeight,
   showOutboundLink = true,
+  active,
+  nearby,
 }: ExternalEmbedProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const { ref: containerRef, isNear } = useNearViewport();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const [htmlEmbedHeight, setHtmlEmbedHeight] = useState<number | null>(null);
+  const loadTimeoutRef = useRef<number | undefined>(undefined);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [attempt, setAttempt] = useState(0);
   const providerType = useMemo(
     () => getEmbedProviderType(embedUrl, outboundUrl, provider),
     [embedUrl, outboundUrl, provider],
@@ -247,10 +255,18 @@ export function ExternalEmbed({
     [resolvedEmbedHtml, resolvedEmbedUrl],
   );
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
+  const shouldMount = nearby ?? active ?? isNear;
 
   useEffect(() => {
-    setHtmlEmbedHeight(null);
-  }, [resolvedEmbedUrl, resolvedEmbedHtml]);
+    if (!shouldMount || (!resolvedEmbedUrl && !embedDocument)) {
+      setStatus('idle');
+      return;
+    }
+
+    setStatus('loading');
+    loadTimeoutRef.current = window.setTimeout(() => setStatus('error'), 12_000);
+    return () => window.clearTimeout(loadTimeoutRef.current);
+  }, [attempt, embedDocument, resolvedEmbedUrl, shouldMount]);
 
   useEffect(() => {
     const target = containerRef.current;
@@ -279,53 +295,19 @@ export function ExternalEmbed({
     };
   }, [providerType, resolvedEmbedUrl]);
 
-  useEffect(() => {
-    if (!embedDocument) {
-      return;
-    }
-
-    const onMessage = (event: MessageEvent) => {
-      if (event.source !== iframeRef.current?.contentWindow || !event.data || typeof event.data !== 'object') {
-        return;
-      }
-
-      const payload = event.data as { type?: unknown; height?: unknown };
-
-      if (payload.type !== 'redalt-embed-height') {
-        return;
-      }
-
-      const nextHeight = Number(payload.height);
-
-      if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
-        return;
-      }
-
-      setHtmlEmbedHeight(Math.min(Math.max(Math.round(nextHeight), vertical ? 460 : 360), 1600));
-    };
-
-    window.addEventListener('message', onMessage);
-
-    return () => {
-      window.removeEventListener('message', onMessage);
-    };
-  }, [embedDocument, vertical]);
-
-  const frameStyle = embedDocument
-    ? {
-        aspectRatio: 'auto',
-        height: `${htmlEmbedHeight ?? embedHeight ?? (vertical ? 560 : 420)}px`,
-      }
-    : embedWidth && embedHeight
-      ? {
-          aspectRatio: `${embedWidth} / ${embedHeight}`,
-        }
-      : undefined;
-
   return (
-    <div className="media-block external-media" ref={containerRef}>
-      {resolvedEmbedUrl ? (
+    <MediaShell
+      outerRef={containerRef}
+      width={embedWidth ?? (vertical ? 9 : 16)}
+      height={embedHeight ?? (vertical ? 16 : 9)}
+      className={`external-media${vertical ? ' external-media-vertical' : ''}`}
+      status={resolvedEmbedUrl || embedDocument ? status : thumbnailUrl ? 'ready' : 'error'}
+      sourceUrl={outboundUrl}
+      onRetry={() => setAttempt((value) => value + 1)}
+    >
+      {shouldMount && resolvedEmbedUrl ? (
         <iframe
+          key={attempt}
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           src={resolvedEmbedUrl}
@@ -334,10 +316,15 @@ export function ExternalEmbed({
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           sandbox="allow-forms allow-popups allow-presentation allow-same-origin allow-scripts"
           referrerPolicy="strict-origin-when-cross-origin"
-          style={frameStyle}
+          onLoad={() => {
+            window.clearTimeout(loadTimeoutRef.current);
+            setStatus('ready');
+          }}
+          onError={() => setStatus('error')}
         />
-      ) : embedDocument ? (
+      ) : shouldMount && embedDocument ? (
         <iframe
+          key={attempt}
           ref={iframeRef}
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           srcDoc={embedDocument}
@@ -346,7 +333,11 @@ export function ExternalEmbed({
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           sandbox="allow-forms allow-popups allow-presentation allow-scripts"
           referrerPolicy="no-referrer"
-          style={frameStyle}
+          onLoad={() => {
+            window.clearTimeout(loadTimeoutRef.current);
+            setStatus('ready');
+          }}
+          onError={() => setStatus('error')}
         />
       ) : thumbnailUrl ? (
         <a href={outboundUrl} target="_blank" rel="noreferrer">
@@ -358,13 +349,17 @@ export function ExternalEmbed({
             referrerPolicy="no-referrer"
           />
         </a>
-      ) : null}
+      ) : (
+        <a className="external-placeholder" href={outboundUrl} target="_blank" rel="noreferrer">
+          Open {provider ?? 'external media'}
+        </a>
+      )}
 
       {showOutboundLink && (
         <a href={outboundUrl} target="_blank" rel="noreferrer">
           Open on {provider ?? 'external site'}
         </a>
       )}
-    </div>
+    </MediaShell>
   );
 }

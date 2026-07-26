@@ -393,8 +393,9 @@ function hasUsableMediaSource(value: unknown): boolean {
 }
 
 function hasPreviewImagesDirect(post: RedditPostData): boolean {
+  const images = Array.isArray(post.preview?.images) ? post.preview.images : [];
   return Boolean(
-    post.preview?.images?.some((image) =>
+    images.some((image) =>
       hasUsableMediaSource(image.source) ||
       Object.values(image.variants ?? {}).some((variant) => hasUsableMediaSource(variant?.source)),
     ),
@@ -483,7 +484,7 @@ function hasRenderableEmbed(post: RedditPostData | null | undefined): boolean {
 }
 
 function hasGalleryMediaDirect(post: RedditPostData): boolean {
-  if (!post.is_gallery || !post.gallery_data?.items?.length || !hasNonEmptyObject(post.media_metadata)) {
+  if (!Array.isArray(post.gallery_data?.items) || post.gallery_data.items.length === 0 || !hasNonEmptyObject(post.media_metadata)) {
     return false;
   }
 
@@ -557,8 +558,9 @@ function needsDetailMediaRecovery(post: RedditPostData | null | undefined): bool
   }
 
   const explicitlyMedia = Boolean(
-    post.is_video ||
+      post.is_video ||
       post.is_gallery ||
+      post.post_hint === 'gallery' ||
       post.post_hint === 'hosted:video' ||
       post.post_hint === 'image' ||
       post.post_hint === 'rich:video',
@@ -664,6 +666,27 @@ function mergePostMediaFields(detailPost: RedditPostData, mediaPost: RedditPostD
   };
 }
 
+export function mergePostCandidates(
+  primary: RedditPostData,
+  candidates: Array<RedditPostData | null | undefined>,
+): RedditPostData {
+  return candidates.reduce<RedditPostData>((current, candidate) => {
+    if (!candidate || candidate.id !== current.id) {
+      return current;
+    }
+
+    if (candidateImprovesMedia(current, candidate)) {
+      return mergePostMediaFields(current, candidate);
+    }
+
+    if ((candidate.num_comments ?? 0) > (current.num_comments ?? 0) || (candidate.score ?? 0) > (current.score ?? 0)) {
+      return mergePostMediaFields(candidate, current);
+    }
+
+    return current;
+  }, primary);
+}
+
 function chooseBetterCachedPost(current: RedditPostData, candidate: RedditPostData): RedditPostData {
   const currentStrength = getRawPostMediaStrength(current);
   const candidateStrength = getRawPostMediaStrength(candidate);
@@ -672,15 +695,7 @@ function chooseBetterCachedPost(current: RedditPostData, candidate: RedditPostDa
     return current;
   }
 
-  if (candidateImprovesMedia(current, candidate)) {
-    return candidate;
-  }
-
-  if ((candidate.num_comments ?? 0) > (current.num_comments ?? 0) || (candidate.score ?? 0) > (current.score ?? 0)) {
-    return mergePostMediaFields(candidate, current);
-  }
-
-  return current;
+  return mergePostCandidates(current, [candidate]);
 }
 
 function rememberPosts(posts: RedditPostData[]): void {
@@ -730,11 +745,7 @@ export function getRememberedPost(postId: string): RedditPostData | null {
 }
 
 function useRicherPostMedia(detailPost: RedditPostData, candidate: RedditPostData | null): RedditPostData {
-  if (!candidate || candidate.id !== detailPost.id) {
-    return detailPost;
-  }
-
-  return candidateImprovesMedia(detailPost, candidate) ? mergePostMediaFields(detailPost, candidate) : detailPost;
+  return mergePostCandidates(detailPost, [candidate]);
 }
 
 async function fetchListingFallback(
@@ -742,6 +753,7 @@ async function fetchListingFallback(
   sort: ListingSort,
   postId: string,
   topTimeRange: TopTimeRange = 'day',
+  signal?: AbortSignal,
 ): Promise<RedditPostData | null> {
   const queryParts = ['raw_json=1', 'limit=' + DETAIL_FALLBACK_PAGE_SIZE];
 
@@ -751,7 +763,7 @@ async function fetchListingFallback(
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/r/' + encodeURIComponent(subreddit) + '/' + sort + '.json?' + queryParts.join('&'),
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -759,7 +771,7 @@ async function fetchListingFallback(
   return posts.find((post) => post.id === postId) ?? null;
 }
 
-async function fetchUserFallback(author: string, postId: string): Promise<RedditPostData | null> {
+async function fetchUserFallback(author: string, postId: string, signal?: AbortSignal): Promise<RedditPostData | null> {
   const cleanedAuthor = normalizeUserName(author);
 
   if (!cleanedAuthor || cleanedAuthor === '[deleted]' || cleanedAuthor === '[unknown]') {
@@ -768,7 +780,7 @@ async function fetchUserFallback(author: string, postId: string): Promise<Reddit
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/user/' + encodeURIComponent(cleanedAuthor) + '/submitted.json?raw_json=1&limit=' + DETAIL_FALLBACK_PAGE_SIZE + '&sort=new',
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -776,7 +788,12 @@ async function fetchUserFallback(author: string, postId: string): Promise<Reddit
   return posts.find((post) => post.id === postId) ?? null;
 }
 
-async function fetchSearchFallback(subreddit: string, title: string, postId: string): Promise<RedditPostData | null> {
+async function fetchSearchFallback(
+  subreddit: string,
+  title: string,
+  postId: string,
+  signal?: AbortSignal,
+): Promise<RedditPostData | null> {
   const query = title.trim();
 
   if (!query) {
@@ -785,7 +802,7 @@ async function fetchSearchFallback(subreddit: string, title: string, postId: str
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/r/' + encodeURIComponent(subreddit) + '/search.json?raw_json=1&restrict_sr=1&sort=relevance&limit=10&q=' + encodeURIComponent(query),
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS },
+    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -797,13 +814,14 @@ async function recoverPostFromFallbackSources(
   postId: string,
   author?: string,
   title?: string,
+  signal?: AbortSignal,
 ): Promise<RedditPostData | null> {
   const attempts = [
-    title ? () => fetchSearchFallback(subreddit, title, postId) : null,
-    () => fetchListingFallback(subreddit, 'new', postId),
-    () => fetchUserFallback(author ?? '', postId),
-    () => fetchListingFallback(subreddit, 'hot', postId),
-    () => fetchListingFallback(subreddit, 'top', postId, 'week'),
+    title ? () => fetchSearchFallback(subreddit, title, postId, signal) : null,
+    () => fetchListingFallback(subreddit, 'new', postId, 'day', signal),
+    () => fetchUserFallback(author ?? '', postId, signal),
+    () => fetchListingFallback(subreddit, 'hot', postId, 'day', signal),
+    () => fetchListingFallback(subreddit, 'top', postId, 'week', signal),
   ].filter((attempt): attempt is () => Promise<RedditPostData | null> => Boolean(attempt));
 
   const results = await Promise.all(
@@ -1020,6 +1038,7 @@ type FetchRedditOptions = {
   timeoutMs?: number;
   strategy?: FetchRedditStrategy;
   staggerMs?: number;
+  signal?: AbortSignal;
 };
 
 type FetchFailureStatusMode = 'retrying' | 'failed' | 'silent';
@@ -1133,15 +1152,25 @@ async function fetchRedditFromBase<T>(
   }
 }
 
-async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number): Promise<T> {
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
 
   for (let cycle = 0; cycle < 2; cycle += 1) {
     for (const base of getRedditBaseCandidates()) {
+      signal?.throwIfAborted();
+
       try {
-        return await fetchRedditFromBase<T>(base, requestPath, timeoutMs);
+        return await fetchRedditFromBase<T>(base, requestPath, timeoutMs, signal);
       } catch (error) {
+        if (signal?.aborted || isAbortError(error)) {
+          throw error;
+        }
+
         lastError = error;
 
         const apiError = handleFetchRedditFailure(base, error);
@@ -1180,11 +1209,16 @@ async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number):
   throw new RedditApiError('Network error while contacting Reddit.', 0);
 }
 
-async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, staggerMs: number): Promise<T> {
+async function fetchRedditStaggered<T>(
+  requestPath: string,
+  timeoutMs: number,
+  staggerMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
   const bases = getRedditBaseCandidates();
 
   if (bases.length <= 1) {
-    return fetchRedditSequential<T>(requestPath, timeoutMs);
+    return fetchRedditSequential<T>(requestPath, timeoutMs, signal);
   }
 
   let lastError: unknown;
@@ -1194,6 +1228,21 @@ async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, s
   const controllers = bases.map(() => new AbortController());
 
   return new Promise<T>((resolve, reject) => {
+    const abortAll = () => controllers.forEach((controller) => controller.abort());
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      abortAll();
+      reject(signal?.reason ?? new DOMException('Request aborted.', 'AbortError'));
+    };
+
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+
     const rejectIfDone = () => {
       if (settled || completed < bases.length) {
         return;
@@ -1235,6 +1284,7 @@ async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, s
           }
 
           settled = true;
+          signal?.removeEventListener('abort', onAbort);
           controllers.forEach((controller, controllerIndex) => {
             if (controllerIndex !== index) {
               controller.abort();
@@ -1243,6 +1293,10 @@ async function fetchRedditStaggered<T>(requestPath: string, timeoutMs: number, s
           resolve(payload);
         } catch (error) {
           if (settled && controllers[index].signal.aborted) {
+            return;
+          }
+
+          if (signal?.aborted || isAbortError(error)) {
             return;
           }
 
@@ -1267,10 +1321,10 @@ async function fetchReddit<T>(path: string, options: FetchRedditOptions = {}): P
   const strategy = options.strategy ?? 'sequential';
 
   if (strategy === 'staggered') {
-    return fetchRedditStaggered<T>(requestPath, timeoutMs, options.staggerMs ?? 0);
+    return fetchRedditStaggered<T>(requestPath, timeoutMs, options.staggerMs ?? 0, options.signal);
   }
 
-  return fetchRedditSequential<T>(requestPath, timeoutMs);
+  return fetchRedditSequential<T>(requestPath, timeoutMs, options.signal);
 }
 
 async function readApiErrorMessage(response: Response): Promise<string> {
@@ -1688,13 +1742,17 @@ function extractComments(listing: RedditListingResponse, parentAuthor?: string):
   return comments;
 }
 
+export type FetchPostDetailOptions = {
+  signal?: AbortSignal;
+};
+
 export async function fetchPostDetail(
   subredditInput: string,
   postId: string,
+  options: FetchPostDetailOptions = {},
 ): Promise<PostDetailResult> {
   const subreddit = normalizeSubredditName(subredditInput) || 'mildlyinfuriating';
   const cachedPost = getCachedPost(postId);
-  const cachedTitle = cachedPost?.title;
 
   try {
     const response = await fetchReddit<RedditCommentsResponse>(
@@ -1703,6 +1761,7 @@ export async function fetchPostDetail(
         timeoutMs: DETAIL_FETCH_TIMEOUT_MS,
         strategy: 'staggered',
         staggerMs: DETAIL_FETCH_STAGGER_MS,
+        signal: options.signal,
       },
     );
 
@@ -1712,18 +1771,7 @@ export async function fetchPostDetail(
       throw new RedditApiError('Post not found.', 404);
     }
 
-    let post = useRicherPostMedia(detailPost, cachedPost);
-
-    if (needsDetailMediaRecovery(post)) {
-      const recoveredPost = await recoverPostFromFallbackSources(
-        subreddit,
-        postId,
-        detailPost.author || cachedPost?.author,
-        detailPost.title || cachedTitle,
-      );
-
-      post = useRicherPostMedia(post, recoveredPost);
-    }
+    const post = useRicherPostMedia(detailPost, cachedPost);
 
     rememberPosts([post]);
 
@@ -1734,9 +1782,14 @@ export async function fetchPostDetail(
       post,
       comments,
       commentsStatus: commentsUnavailable ? 'unavailable' : comments.length > 0 ? 'loaded' : 'empty',
+      mediaStatus: needsDetailMediaRecovery(post) ? 'incomplete' : 'ready',
     };
   } catch (error) {
-    const fallbackPost = cachedPost ?? (await recoverPostFromFallbackSources(subreddit, postId, undefined, cachedTitle));
+    if (options.signal?.aborted || isAbortError(error)) {
+      throw error;
+    }
+
+    const fallbackPost = cachedPost;
 
     if (fallbackPost) {
       rememberPosts([fallbackPost]);
@@ -1744,9 +1797,30 @@ export async function fetchPostDetail(
         post: fallbackPost,
         comments: [],
         commentsStatus: 'unavailable',
+        mediaStatus: needsDetailMediaRecovery(fallbackPost) ? 'incomplete' : 'ready',
       };
     }
 
     throw error;
   }
+}
+
+export async function fetchPostMediaEnrichment(
+  post: RedditPostData,
+  options: FetchPostDetailOptions = {},
+): Promise<RedditPostData> {
+  if (!needsDetailMediaRecovery(post)) {
+    return post;
+  }
+
+  const recovered = await recoverPostFromFallbackSources(
+    post.subreddit,
+    post.id,
+    post.author,
+    post.title,
+    options.signal,
+  );
+  const merged = mergePostCandidates(post, [recovered]);
+  rememberPosts([merged]);
+  return merged;
 }

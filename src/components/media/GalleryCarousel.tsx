@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
 import type { GalleryItem } from '../../types/reddit';
+import { MediaShell } from './MediaShell';
 import { VideoMedia } from './VideoMedia';
 
 type GalleryCarouselProps = {
   items: GalleryItem[];
   title: string;
+  active?: boolean;
 };
 
-export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
+export function GalleryCarousel({ items, title, active: galleryActive }: GalleryCarouselProps) {
   const [index, setIndex] = useState(0);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   const boundedIndex = items.length === 0 ? 0 : Math.min(index, items.length - 1);
 
@@ -16,39 +19,59 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
     setIndex((current) => (items.length === 0 ? 0 : Math.min(current, items.length - 1)));
   }, [items.length]);
 
+  useEffect(() => setStatus('loading'), [boundedIndex]);
+
   if (items.length === 0) {
     return null;
   }
 
   const active = items[boundedIndex];
-  const hasDimensions = typeof active.width === 'number' && typeof active.height === 'number' && active.width > 0 && active.height > 0;
+  const srcSet = active.type === 'image'
+    ? active.sources?.map((source) => `${source.url} ${source.width}w`).join(', ')
+    : undefined;
 
   return (
-    <div className="media-block gallery" style={hasDimensions ? { aspectRatio: `${active.width} / ${active.height}`, maxHeight: '80vh' } : { aspectRatio: '16 / 9', maxHeight: '520px' }}>
-      {active.type === 'video' ? (
-        <VideoMedia
-          key={active.id}
-          sourceUrl={active.sourceUrl}
-          hlsUrl={active.hlsUrl}
-          mimeType={active.mimeType}
-          posterUrl={active.posterUrl}
-          isGif={active.isGif}
-          title={title}
-          showSourceLink={false}
-          inline
-        />
-      ) : (
-        <img
-          key={active.id}
-          className="post-image"
-          src={active.url}
-          alt={`${title} (${boundedIndex + 1}/${items.length})`}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-        />
-      )}
-      {items.length > 1 && (
-        <div className="gallery-controls">
+    <div className="gallery-block">
+      <MediaShell
+        width={active.width}
+        height={active.height}
+        className="gallery"
+        status={active.type === 'video' ? 'ready' : status}
+        sourceUrl={active.type === 'video' ? active.sourceUrl : active.url}
+      >
+        {active.type === 'video' ? (
+          <VideoMedia
+            key={active.id}
+            sourceUrl={active.sourceUrl}
+            hlsUrl={active.hlsUrl}
+            mimeType={active.mimeType}
+            posterUrl={active.posterUrl}
+            isGif={active.isGif}
+            title={title}
+            showSourceLink={false}
+            width={active.width}
+            height={active.height}
+            active={galleryActive}
+            inline
+          />
+        ) : (
+          <img
+            key={active.id}
+            className="post-image"
+            src={active.url}
+            srcSet={srcSet || undefined}
+            sizes="(max-width: 900px) 100vw, 50vw"
+            alt={`${title} (${boundedIndex + 1}/${items.length})`}
+            width={active.width}
+            height={active.height}
+            loading="lazy"
+            decoding="async"
+            referrerPolicy="no-referrer"
+            onLoad={() => setStatus('ready')}
+            onError={() => setStatus('error')}
+          />
+        )}
+        {items.length > 1 && <div className="gallery-controls">
           <button
             type="button"
             className="gallery-nav gallery-nav-prev"
@@ -76,6 +99,12 @@ export function GalleryCarousel({ items, title }: GalleryCarouselProps) {
           >
             →
           </button>
+        </div>}
+      </MediaShell>
+      {(active.caption || active.outboundUrl) && (
+        <div className="gallery-caption">
+          {active.caption && <span>{active.caption}</span>}
+          {active.outboundUrl && <a href={active.outboundUrl} target="_blank" rel="noreferrer">Open item</a>}
         </div>
       )}
     </div>

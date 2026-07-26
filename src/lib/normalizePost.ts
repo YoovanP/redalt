@@ -5,6 +5,7 @@ import type {
   RedditMedia,
   RedditPostData,
   RedditVideo,
+  ResponsiveImageSource,
 } from '../types/reddit';
 
 const TRUSTED_EMBED_HOSTS = [
@@ -115,6 +116,26 @@ function fullSizeRedditImageUrl(url: string): string {
   return url;
 }
 
+function buildResponsiveImageSources(values: Array<RedditImageSource | undefined>): ResponsiveImageSource[] {
+  const byWidth = new Map<number, ResponsiveImageSource>();
+
+  for (const value of values) {
+    const url = normalizeUrl(value?.url || value?.u);
+    const width = value?.width ?? value?.x;
+    const height = value?.height ?? value?.y;
+
+    if (!url || !width || width <= 0) continue;
+    byWidth.set(width, { url, width, height });
+  }
+
+  return [...byWidth.values()].sort((left, right) => left.width - right.width);
+}
+
+function getPostResponsiveImageSources(post: RedditPostData): ResponsiveImageSource[] {
+  const image = Array.isArray(post.preview?.images) ? post.preview.images[0] : undefined;
+  return buildResponsiveImageSources([...(image?.resolutions ?? []), image?.source]);
+}
+
 function getBestImage(source: RedditImageSource | undefined, fallbackUrl: string, preferFallback = false): {
   url: string;
   width?: number;
@@ -145,7 +166,7 @@ function parseEmbedUrl(html: string | undefined): string | undefined {
 }
 
 function buildGalleryItems(post: RedditPostData): GalleryItem[] {
-  if (!post.gallery_data?.items?.length || !post.media_metadata) {
+  if (!Array.isArray(post.gallery_data?.items) || post.gallery_data.items.length === 0 || !post.media_metadata || typeof post.media_metadata !== 'object') {
     return [];
   }
 
@@ -154,7 +175,8 @@ function buildGalleryItems(post: RedditPostData): GalleryItem[] {
   for (const item of post.gallery_data.items) {
     const media = post.media_metadata?.[item.media_id];
     const source = media?.s;
-    const previewSource = media?.p?.[media.p.length - 1];
+    const previews = Array.isArray(media?.p) ? media.p : [];
+    const previewSource = previews[previews.length - 1];
     const resolvedSource = source?.url || source?.u ? source : previewSource;
     const resolvedUrl = getSourceUrl(resolvedSource);
     const animatedUrl = fullSizeRedditImageUrl(normalizeUrl(source?.gif));
@@ -174,7 +196,8 @@ function buildGalleryItems(post: RedditPostData): GalleryItem[] {
       mediaKind === 'redditvideo' ||
       mediaMimeType.startsWith('video/') ||
       Boolean(mp4Url || hlsUrl || dashUrl);
-    const videoSourceUrl = mp4Url || hlsUrl || dashUrl;
+    const videoSourceUrl = mp4Url || hlsUrl;
+    const sources = buildResponsiveImageSources([...previews, resolvedSource]);
 
     if (videoSourceUrl && (isAnimated || isVideo)) {
       items.push({
@@ -183,7 +206,7 @@ function buildGalleryItems(post: RedditPostData): GalleryItem[] {
         sourceUrl: videoSourceUrl,
         hlsUrl: hlsUrl || undefined,
         dashUrl: dashUrl || undefined,
-        mimeType: mp4Url ? 'video/mp4' : dashUrl && !hlsUrl ? 'application/dash+xml' : undefined,
+        mimeType: mp4Url ? 'video/mp4' : undefined,
         posterUrl: resolvedUrl || undefined,
         width,
         height,
@@ -204,6 +227,7 @@ function buildGalleryItems(post: RedditPostData): GalleryItem[] {
         mimeType: animatedUrl ? 'image/gif' : mediaMimeType || undefined,
         width,
         height,
+        ...(sources.length > 0 ? { sources } : {}),
         caption,
         outboundUrl,
       });
@@ -377,7 +401,8 @@ function getVideoMedia(post: RedditPostData, includePreviewMp4 = true) {
     return redditVideoPreview;
   }
 
-  const previewMp4 = post.preview?.images?.[0]?.variants?.mp4?.source;
+  const previewImage = Array.isArray(post.preview?.images) ? post.preview.images[0] : undefined;
+  const previewMp4 = previewImage?.variants?.mp4?.source;
   const previewMp4Url = normalizeUrl(previewMp4?.url || previewMp4?.u);
 
   if (previewMp4Url) {
@@ -417,7 +442,7 @@ function isLikelyThumbnailUrl(url: string | undefined): url is string {
 }
 
 function getPreviewImage(post: RedditPostData): RedditImageSource | undefined {
-  return post.preview?.images?.[0]?.source;
+  return Array.isArray(post.preview?.images) ? post.preview.images[0]?.source : undefined;
 }
 
 function getThumbnailUrl(post: RedditPostData): string {
@@ -970,9 +995,10 @@ function hasMediaObject(value: RedditPostData['media']): boolean {
 }
 
 function hasPreviewData(value: RedditPostData['preview']): boolean {
+  const images = Array.isArray(value?.images) ? value.images : [];
   return Boolean(
     normalizeRedditVideo(value?.reddit_video_preview) ||
-      value?.images?.some((image) =>
+      images.some((image) =>
         Boolean(
           getSourceUrl(image.source) ||
             Object.values(image.variants ?? {}).some((variant) => getSourceUrl(variant?.source)),
@@ -1052,6 +1078,7 @@ function resolveMediaSourcePost(post: RedditPostData): RedditPostData {
   const outerOutboundUrl = getPostOutboundUrl(post);
   const outboundUrl = parentOutboundUrl || outerOutboundUrl;
   const parentDomain = typeof parent.domain === 'string' ? parent.domain.trim() : '';
+  const parentHasGallery = Array.isArray(parent.gallery_data?.items) && parent.gallery_data.items.length > 0;
 
   return {
     ...post,
@@ -1064,15 +1091,15 @@ function resolveMediaSourcePost(post: RedditPostData): RedditPostData {
         : post.selftext,
     over_18: Boolean(post.over_18 || parent.over_18),
     is_self: Boolean(parent.is_self),
-    is_gallery: Boolean(parent.is_gallery || parent.gallery_data?.items?.length),
+    is_gallery: Boolean(parent.is_gallery || parentHasGallery),
     is_video: Boolean(parent.is_video),
     post_hint: parent.post_hint || post.post_hint,
     thumbnail:
       (typeof parent.thumbnail === 'string' && parent.thumbnail.trim() ? parent.thumbnail : undefined) ??
       post.thumbnail,
     preview: hasPreviewData(parent.preview) ? parent.preview : post.preview,
-    gallery_data: parent.gallery_data?.items?.length ? parent.gallery_data : post.gallery_data,
-    media_metadata: parent.gallery_data?.items?.length ? parent.media_metadata : post.media_metadata,
+    gallery_data: parentHasGallery ? parent.gallery_data : post.gallery_data,
+    media_metadata: parentHasGallery ? parent.media_metadata : post.media_metadata,
     media: hasMediaObject(parent.media) ? parent.media : post.media,
     secure_media: hasMediaObject(parent.secure_media) ? parent.secure_media : post.secure_media,
     media_embed: parent.media_embed?.content ? parent.media_embed : post.media_embed,
@@ -1146,9 +1173,11 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
     } else if (primaryVideo) {
       media = primaryVideo;
     } else if (isLikelyImageUrl(outboundUrl)) {
+      const sources = getPostResponsiveImageSources(mediaPost);
       media = {
         type: 'image',
         ...getBestImage(imageSource, outboundUrl, true),
+        ...(sources.length > 0 ? { sources } : {}),
       };
     } else {
       const external = getExternalMedia(mediaPost);
@@ -1166,9 +1195,11 @@ export function normalizePost(post: RedditPostData): NormalizedPost {
         const hasImageCandidate = Boolean(getSourceUrl(imageSource) || imageFallbackUrl);
 
         if (canUseImageFallback && hasImageCandidate) {
+          const sources = getPostResponsiveImageSources(mediaPost);
           media = {
             type: 'image',
             ...getBestImage(imageSource, imageFallbackUrl),
+            ...(sources.length > 0 ? { sources } : {}),
           };
         } else {
           media = { type: 'link', outboundUrl };

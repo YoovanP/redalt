@@ -338,3 +338,16 @@ test('normalizes an identifiable malformed fallback post without throwing', () =
   assert.equal(normalized.selfText, '');
   assert.equal(normalized.media.type, 'link');
 });
+
+test('ignores malformed nested media collections without throwing', () => {
+  const malformedValues = [null, 'broken', {}, 42];
+
+  for (const malformed of malformedValues) {
+    assert.doesNotThrow(() => normalizePost(postFixture({
+      preview: { images: malformed },
+      gallery_data: { items: malformed },
+      media_metadata: malformed,
+      crosspost_parent_list: malformed,
+    })));
+  }
+});

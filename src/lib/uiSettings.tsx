@@ -58,6 +58,8 @@ const defaultSettings: UiSettings = {
 };
 
 const UiSettingsContext = createContext<UiSettingsContextType | null>(null);
+const PlaybackSettingsContext = createContext({ autoplayVideos: false, autoplayWithAudio: false });
+const OpenInNewTabContext = createContext(false);
 
 function normalizeSettings(input: unknown): UiSettings {
   if (!input || typeof input !== 'object') {
@@ -158,7 +160,28 @@ export function UiSettingsProvider({ children }: { children: React.ReactNode }) 
     [settings],
   );
 
-  return <UiSettingsContext.Provider value={value}>{children}</UiSettingsContext.Provider>;
+  const playbackSettings = useMemo(() => ({
+    autoplayVideos: settings.autoplayVideos,
+    autoplayWithAudio: settings.autoplayWithAudio,
+  }), [settings.autoplayVideos, settings.autoplayWithAudio]);
+
+  return (
+    <UiSettingsContext.Provider value={value}>
+      <PlaybackSettingsContext.Provider value={playbackSettings}>
+        <OpenInNewTabContext.Provider value={settings.openInNewTab}>
+          {children}
+        </OpenInNewTabContext.Provider>
+      </PlaybackSettingsContext.Provider>
+    </UiSettingsContext.Provider>
+  );
+}
+
+export function usePlaybackSettings() {
+  return useContext(PlaybackSettingsContext);
+}
+
+export function useOpenInNewTab() {
+  return useContext(OpenInNewTabContext);
 }
 
 export function useUiSettings() {

@@ -38,6 +38,7 @@ export interface RedditPostData {
     enabled?: boolean;
     images?: Array<{
       source?: RedditImageSource;
+      resolutions?: RedditImageSource[];
       variants?: {
         gif?: { source?: RedditImageSource };
         mp4?: { source?: RedditImageSource };
@@ -91,6 +92,12 @@ export interface RedditImageSource {
   y?: number;
 }
 
+export interface ResponsiveImageSource {
+  url: string;
+  width: number;
+  height?: number;
+}
+
 export interface RedditVideo {
   fallback_url?: string;
   hls_url?: string;
@@ -131,7 +138,7 @@ export interface RedditEmbedContent {
 
 export type NormalizedMedia =
   | { type: 'text' }
-  | { type: 'image'; url: string; width?: number; height?: number }
+  | { type: 'image'; url: string; width?: number; height?: number; sources?: ResponsiveImageSource[] }
   | { type: 'gallery'; items: GalleryItem[] }
   | {
       type: 'video';
@@ -164,6 +171,7 @@ export type GalleryItem =
       mimeType?: string;
       width?: number;
       height?: number;
+      sources?: ResponsiveImageSource[];
       caption?: string;
       outboundUrl?: string;
     }
@@ -216,4 +224,5 @@ export interface PostDetailResult {
   post: RedditPostData;
   comments: RedditComment[];
   commentsStatus: 'loaded' | 'empty' | 'unavailable';
+  mediaStatus: 'ready' | 'incomplete';
 }

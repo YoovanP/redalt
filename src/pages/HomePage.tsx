@@ -4,7 +4,8 @@ import { readCustomFeedSubreddits } from '../lib/customFeed';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchSubredditListing } from '../lib/redditApi';
 import { SkeletonLoader } from '../components/SkeletonLoader';
-import { RenderMedia } from '../components/media/RenderMedia';
+import { PostHeader } from '../components/post/PostHeader';
+import { PostThumbnail } from '../components/post/PostThumbnail';
 import { useUiSettings } from '../lib/uiSettings';
 import { useNearEndLoadMore } from '../lib/usePostListingFeed';
 import type { NormalizedPost } from '../types/reddit';
@@ -212,26 +213,10 @@ export function HomePage() {
                     <div ref={nearEndRef} className="near-end-trigger" />
                   )}
                   <div className="home-trending-media">
-                    {post.media.type !== 'text' && post.media.type !== 'link' ? (
-                      <RenderMedia post={post} mode="shorts" />
-                    ) : (
-                      <div className="home-trending-placeholder">
-                        <span className="home-trending-placeholder-icon">📄</span>
-                      </div>
-                    )}
+                    <PostThumbnail post={post} />
                   </div>
                   <div className="home-trending-info">
-                    <h4>
-                      <Link
-                        to={`/r/${post.subreddit}/comments/${post.id}`}
-                        state={{ fallbackPost: post }}
-                      >
-                        {post.title}
-                      </Link>
-                    </h4>
-                    <p className="home-trending-meta">
-                      r/{post.subreddit} · {post.score} points
-                    </p>
+                    <PostHeader post={post} headingLevel={4} showSubreddit />
                   </div>
                 </article>
               ))}

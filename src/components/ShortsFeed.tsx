@@ -18,6 +18,8 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const nearEndRef = useRef<HTMLDivElement | null>(null);
   const itemRefs = useRef<Array<HTMLElement | null>>([]);
   const videoRefs = useRef<Map<string, HTMLVideoElement | null>>(new Map());
+  const intersectionRatiosRef = useRef<Map<number, number>>(new Map());
+  const previousActivePostRef = useRef<string | null>(null);
   const gestureRef = useRef<{
     index: number;
     startX: number;
@@ -72,28 +74,6 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
 
   useEffect(() => {
     const feed = feedRef.current;
-
-    if (!feed || !hasMore || loadingMore) {
-      return;
-    }
-
-    const onScroll = () => {
-      const remaining = feed.scrollHeight - (feed.scrollTop + feed.clientHeight);
-
-      if (remaining < 820) {
-        onNearEnd();
-      }
-    };
-
-    feed.addEventListener('scroll', onScroll, { passive: true });
-
-    return () => {
-      feed.removeEventListener('scroll', onScroll);
-    };
-  }, [hasMore, loadingMore, onNearEnd, posts.length]);
-
-  useEffect(() => {
-    const feed = feedRef.current;
     const target = nearEndRef.current;
 
     if (!feed || !target || !hasMore || loadingMore) {
@@ -132,21 +112,20 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
 
     const observer = new IntersectionObserver(
       (entries) => {
-        let bestIndex = activeIndex;
-        let bestRatio = 0;
-
         for (const entry of entries) {
           const indexValue = Number((entry.target as HTMLElement).dataset.index ?? '-1');
+          if (indexValue >= 0) intersectionRatiosRef.current.set(indexValue, entry.isIntersecting ? entry.intersectionRatio : 0);
+        }
 
-          if (entry.isIntersecting && indexValue >= 0 && entry.intersectionRatio > bestRatio) {
-            bestRatio = entry.intersectionRatio;
+        let bestIndex = 0;
+        let bestRatio = -1;
+        for (const [indexValue, ratio] of intersectionRatiosRef.current) {
+          if (ratio > bestRatio) {
             bestIndex = indexValue;
+            bestRatio = ratio;
           }
         }
-
-        if (bestIndex !== activeIndex) {
-          setActiveIndex(bestIndex);
-        }
+        setActiveIndex((current) => bestRatio > 0 && bestIndex !== current ? bestIndex : current);
       },
       {
         root: feed,
@@ -163,7 +142,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
     return () => {
       observer.disconnect();
     };
-  }, [posts.length, activeIndex]);
+  }, [posts.length]);
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -196,21 +175,19 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
 
   useEffect(() => {
     const activePostName = posts[activeIndex]?.name;
+    const previousVideo = previousActivePostRef.current
+      ? videoRefs.current.get(previousActivePostRef.current)
+      : null;
+    previousVideo?.pause();
 
-    for (const [postName, video] of videoRefs.current) {
-      if (video) {
-        video.muted = shortsMuted;
-        video.playbackRate = playbackRate;
-
-        if (postName !== activePostName) {
-          video.pause();
-        } else if (video.autoplay) {
-          void video.play().catch(() => {
-            // Browser autoplay policies can still require an explicit user gesture.
-          });
-        }
-      }
+    const activeVideo = activePostName ? videoRefs.current.get(activePostName) : null;
+    if (activeVideo) {
+      activeVideo.muted = shortsMuted;
+      activeVideo.playbackRate = playbackRate;
+      if (activeVideo.autoplay) void activeVideo.play().catch(() => undefined);
     }
+
+    previousActivePostRef.current = activePostName ?? null;
   }, [activeIndex, playbackRate, posts, shortsMuted]);
 
   const triggerIndex = Math.max(0, posts.length - 3);
@@ -396,7 +373,13 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
               }
             }}
           >
-            <RenderMedia post={post} expanded mode="shorts" />
+            <RenderMedia
+              post={post}
+              expanded
+              mode="shorts"
+              active={index === activeIndex}
+              nearby={Math.abs(index - activeIndex) <= 1}
+            />
           </div>
           {showOverlay && (
             <div className="shorts-overlay">

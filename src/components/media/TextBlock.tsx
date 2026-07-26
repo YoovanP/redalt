@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { MarkdownText } from '../MarkdownText';
 
 type TextBlockProps = {
   text: string;
@@ -23,16 +22,11 @@ export function TextBlock({ text, expanded = false }: TextBlockProps) {
 
   return (
     <div>
-      <div className={markdownClassName}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
-          }}
-        >
-          {trimmedText}
-        </ReactMarkdown>
-      </div>
+      <MarkdownText
+        text={trimmedText}
+        className={markdownClassName}
+        maxSourceLength={collapsed ? TEXT_PREVIEW_LIMIT : undefined}
+      />
       {!expanded && isLongText && (
         <button
           type="button"

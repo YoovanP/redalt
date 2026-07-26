@@ -126,6 +126,7 @@ test('keeps old Reddit detail media scoped to the post instead of comments or si
   assert.equal(result.secure_media, undefined);
   assert.equal(result.url, 'https://www.reddit.com/r/test/comments/self1/scoped_self_post/');
   assert.equal(payload[1].data.children[0].data.body.includes('Unrelated clip'), true);
+  assert.equal(payload[1].data.children[0].data.body.includes('[video](https://v.redd.it/unrelated-video)'), true);
 });
 
 test('parses Redlib GIF detail media and removes flair/status labels from the title', () => {

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { NormalizedPost } from '../../types/reddit';
 import { ExternalEmbed } from './ExternalEmbed';
 import { GalleryCarousel } from './GalleryCarousel';
@@ -9,9 +10,11 @@ type RenderMediaProps = {
   post: NormalizedPost;
   expanded?: boolean;
   mode?: 'default' | 'shorts';
+  active?: boolean;
+  nearby?: boolean;
 };
 
-export function RenderMedia({ post, expanded = false, mode = 'default' }: RenderMediaProps) {
+export const RenderMedia = memo(function RenderMedia({ post, expanded = false, mode = 'default', active, nearby }: RenderMediaProps) {
   const { media } = post;
   const isShorts = mode === 'shorts';
 
@@ -20,11 +23,11 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
   }
 
   if (media.type === 'image') {
-    return <ImageMedia url={media.url} alt={post.title} width={media.width} height={media.height} />;
+    return <ImageMedia url={media.url} alt={post.title} width={media.width} height={media.height} sources={media.sources} />;
   }
 
   if (media.type === 'gallery') {
-    return <GalleryCarousel items={media.items} title={post.title} />;
+    return <GalleryCarousel items={media.items} title={post.title} active={active} />;
   }
 
   if (media.type === 'video') {
@@ -37,6 +40,10 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
         isGif={media.isGif}
         title={post.title}
         showSourceLink={!isShorts}
+        width={media.width}
+        height={media.height}
+        active={active}
+        nearby={nearby}
       />
     );
   }
@@ -52,6 +59,8 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
         embedWidth={media.embedWidth}
         embedHeight={media.embedHeight}
         showOutboundLink={!isShorts}
+        active={active}
+        nearby={nearby}
       />
     );
   }
@@ -67,4 +76,4 @@ export function RenderMedia({ post, expanded = false, mode = 'default' }: Render
       </a>
     </div>
   );
-}
+});

@@ -131,10 +131,10 @@ export function UserPage() {
       ) : (
         <div className="post-list" style={{ '--post-columns': columns } as CSSProperties}>
           {visiblePosts.map((post, index) => (
-            <article key={post.name}>
+            <div key={post.name}>
               {index === triggerIndex && after && <div ref={nearEndRef} className="near-end-trigger" />}
               <PostCard post={post} cardMode={cardMode} />
-            </article>
+            </div>
           ))}
         </div>
       )}

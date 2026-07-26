@@ -1374,6 +1374,37 @@ input:focus, select:focus {
   max-height: none;
 }
 
+.post-thumbnail,
+.post-thumbnail-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+.post-thumbnail {
+  display: block;
+  object-fit: cover;
+}
+
+.post-thumbnail-placeholder {
+  display: grid;
+  place-content: center;
+  color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.home-trending-info .post-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+}
+
+.home-trending-info .post-flair,
+.home-trending-info .post-meta time,
+.home-trending-info .post-meta span:nth-of-type(n + 4) {
+  display: none;
+}
+
 .home-trending-placeholder {
   width: 100%;
   height: 100%;
@@ -1583,8 +1614,14 @@ input:focus, select:focus {
 .post-list {
   display: grid;
   gap: 1.4rem;
-  grid-template-columns: repeat(var(--post-columns, 1), minmax(0, 1fr));
+  --preferred-card-width: calc((100% - (var(--post-columns, 1) - 1) * 1.4rem) / var(--post-columns, 1));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, max(260px, var(--preferred-card-width))), 1fr));
   animation: fadeInUp 0.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.post-list > * {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 640px;
 }
 
 .post-card,
@@ -1612,9 +1649,9 @@ input:focus, select:focus {
   animation: fadeInUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 }
 
-.post-card:nth-child(1) { animation-delay: 0.05s; }
-.post-card:nth-child(2) { animation-delay: 0.1s; }
-.post-card:nth-child(3) { animation-delay: 0.15s; }
+.post-list > :nth-child(1) .post-card { animation-delay: 0.05s; }
+.post-list > :nth-child(2) .post-card { animation-delay: 0.1s; }
+.post-list > :nth-child(3) .post-card { animation-delay: 0.15s; }
 
 @keyframes fadeInUp {
   from {
@@ -1666,6 +1703,12 @@ article[data-focused='true'] > .post-card {
 
 .post-card-compact .media-block {
   margin: 0.25rem 0 0.45rem;
+}
+
+.post-card-compact .media-shell {
+  height: min(340px, 55vw);
+  max-height: 340px;
+  aspect-ratio: auto !important;
 }
 
 .post-card-compact .post-image,
@@ -1800,6 +1843,42 @@ article[data-focused='true'] > .post-card {
   overflow: hidden;
 }
 
+.media-shell {
+  position: relative;
+  width: 100%;
+  max-height: min(80vh, 720px);
+  overflow: hidden;
+  background: var(--media-bg);
+  contain: layout paint;
+}
+
+.media-shell-status {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-content: center;
+  gap: 0.65rem;
+  padding: 1rem;
+  text-align: center;
+  background: color-mix(in srgb, var(--media-bg) 88%, transparent);
+  color: var(--text);
+}
+
+.media-shell[data-media-status='ready'] .media-shell-status {
+  display: none;
+}
+
+.media-shell-error button,
+.media-shell-error a {
+  justify-self: center;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 0.4rem 0.7rem;
+}
+
 .post-image,
 .post-video,
 .external-frame {
@@ -1809,7 +1888,7 @@ article[data-focused='true'] > .post-card {
   border: 2px solid var(--input-border);
   object-fit: contain;
   background: var(--media-bg);
-  transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
   box-shadow: inset 0 0 16px color-mix(in srgb, var(--link) 5%, transparent);
 }
 
@@ -1818,13 +1897,20 @@ article[data-focused='true'] > .post-card {
 .external-frame:hover {
   border-color: color-mix(in srgb, var(--input-border) 50%, var(--link) 50%);
   box-shadow: inset 0 0 16px color-mix(in srgb, var(--link) 8%, transparent), 0 0 20px color-mix(in srgb, var(--link) 12%, transparent);
-  transform: scale(1.01);
 }
 
 .external-frame {
   display: block;
-  min-height: 320px;
-  aspect-ratio: 16 / 9;
+  min-height: 0;
+}
+
+.external-placeholder {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-content: center;
+  padding: 1rem;
+  text-align: center;
 }
 
 .external-embed-consent {
@@ -1850,6 +1936,17 @@ article[data-focused='true'] > .post-card {
 
 .gallery {
   position: relative;
+}
+
+.gallery-caption {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: -0.4rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--input-border);
+  border-top: 0;
+  font-size: 0.82rem;
 }
 
 .gallery-controls {
@@ -2246,8 +2343,15 @@ article[data-focused='true'] > .post-card {
   background: var(--media-bg);
 }
 
+.shorts-media-wrap .media-shell {
+  width: 100%;
+  aspect-ratio: auto !important;
+}
+
 .shorts-feed-fullscreen .shorts-media-wrap .media-block {
   min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
   border-radius: 0;
 }
 

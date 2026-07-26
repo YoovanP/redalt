@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { normalizePost } from './normalizePost';
 import { isMediaPost } from './feedUtils';
 import type { FetchListingOptions } from './redditApi';
-import type { PostListingResult, RedditPostData } from '../types/reddit';
+import type { NormalizedPost, PostListingResult, RedditPostData } from '../types/reddit';
 
 type FetchListingPage = (options: FetchListingOptions) => Promise<PostListingResult>;
 
@@ -23,6 +23,15 @@ type UseNearEndLoadMoreOptions = {
 };
 
 const MEDIA_PAGE_SCAN_LIMIT = 4;
+const normalizedPostCache = new WeakMap<RedditPostData, NormalizedPost>();
+
+function normalizePostCached(post: RedditPostData): NormalizedPost {
+  const cached = normalizedPostCache.get(post);
+  if (cached) return cached;
+  const normalized = normalizePost(post);
+  normalizedPostCache.set(post, normalized);
+  return normalized;
+}
 
 async function fetchInitialListingPages(
   fetchPage: FetchListingPage,
@@ -30,7 +39,7 @@ async function fetchInitialListingPages(
 ): Promise<PostListingResult> {
   let result = await fetchPage({});
 
-  if (!videoFeedMode || result.posts.some((post) => isMediaPost(normalizePost(post).media.type))) {
+  if (!videoFeedMode || result.posts.some((post) => isMediaPost(normalizePostCached(post).media.type))) {
     return result;
   }
 
@@ -58,7 +67,7 @@ async function fetchInitialListingPages(
     attempts += 1;
 
     if (
-      result.posts.some((post) => isMediaPost(normalizePost(post).media.type)) ||
+      result.posts.some((post) => isMediaPost(normalizePostCached(post).media.type)) ||
       after === requestedCursor
     ) {
       break;
@@ -81,6 +90,7 @@ export function usePostListingFeed({
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const loadMoreInFlightRef = useRef(false);
 
   useEffect(() => {
     let ignore = false;
@@ -116,13 +126,14 @@ export function usePostListingFeed({
     };
   }, [fetchPage, initialErrorMessage, sourceKey, videoFeedMode]);
 
-  const normalizedPosts = useMemo(() => posts.map(normalizePost), [posts]);
+  const normalizedPosts = useMemo(() => posts.map(normalizePostCached), [posts]);
 
   const loadMore = useCallback(async () => {
-    if (!after || loadingMore) {
+    if (!after || loadMoreInFlightRef.current) {
       return;
     }
 
+    loadMoreInFlightRef.current = true;
     setLoadMoreError(null);
     setLoadingMore(true);
 
@@ -141,7 +152,7 @@ export function usePostListingFeed({
         nextAfter = result.after;
         attempts += 1;
 
-        if (!videoFeedMode || result.posts.some((post) => isMediaPost(normalizePost(post).media.type))) {
+        if (!videoFeedMode || result.posts.some((post) => isMediaPost(normalizePostCached(post).media.type))) {
           break;
         }
 
@@ -175,9 +186,10 @@ export function usePostListingFeed({
     } catch (err) {
       setLoadMoreError(err instanceof Error ? err.message : loadMoreErrorMessage);
     } finally {
+      loadMoreInFlightRef.current = false;
       setLoadingMore(false);
     }
-  }, [after, fetchPage, loadMoreErrorMessage, loadingMore, posts, videoFeedMode]);
+  }, [after, fetchPage, loadMoreErrorMessage, posts, videoFeedMode]);
 
   return {
     posts,

@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { StateView } from '../components/StateView';
-import { useUiSettings } from '../lib/uiSettings';
+import { PostActions } from '../components/post/PostActions';
+import { PostHeader } from '../components/post/PostHeader';
+import { useOpenInNewTab } from '../lib/uiSettings';
 import {
   clearSavedPosts,
   clearWatchHistory,
   getSavedPosts,
   getWatchHistory,
+  invalidateSavedPostsCache,
   removeSavedPost,
+  LIBRARY_UPDATE_EVENT,
   type LibraryItem,
 } from '../lib/localLibrary';
 import type { NormalizedPost } from '../types/reddit';
@@ -15,10 +18,6 @@ import type { NormalizedPost } from '../types/reddit';
 type LibraryPageProps = {
   mode: 'saved' | 'history';
 };
-
-function formatTimestamp(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString();
-}
 
 function formatRecordedAt(item: LibraryItem, mode: 'saved' | 'history'): string {
   const stamp = mode === 'saved' ? item.savedAt : item.viewedAt;
@@ -31,6 +30,8 @@ function formatRecordedAt(item: LibraryItem, mode: 'saved' | 'history'): string 
 }
 
 function getFallbackPost(item: LibraryItem): NormalizedPost {
+  if (item.postPreview) return item.postPreview;
+
   return {
     id: item.id,
     name: item.name,
@@ -49,9 +50,7 @@ function getFallbackPost(item: LibraryItem): NormalizedPost {
 }
 
 export function LibraryPage({ mode }: LibraryPageProps) {
-  const {
-    settings: { openInNewTab },
-  } = useUiSettings();
+  const openInNewTab = useOpenInNewTab();
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [confirmClear, setConfirmClear] = useState(false);
 
@@ -63,13 +62,18 @@ export function LibraryPage({ mode }: LibraryPageProps) {
     refresh();
 
     const onStorage = () => {
+      invalidateSavedPostsCache();
       refresh();
     };
 
+    const onLibraryUpdate = () => refresh();
+
     window.addEventListener('storage', onStorage);
+    window.addEventListener(LIBRARY_UPDATE_EVENT, onLibraryUpdate);
 
     return () => {
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener(LIBRARY_UPDATE_EVENT, onLibraryUpdate);
     };
   }, [refresh]);
 
@@ -107,39 +111,11 @@ export function LibraryPage({ mode }: LibraryPageProps) {
       <div className="library-list">
         {items.map((item) => (
           <article key={item.id} className="library-item">
-            <h3>
-              <Link
-                to={`/r/${item.subreddit}/comments/${item.id}`}
-                state={{ fallbackPost: getFallbackPost(item) }}
-                target={openInNewTab ? '_blank' : undefined}
-                rel={openInNewTab ? 'noopener noreferrer' : undefined}
-              >
-                {item.title}
-              </Link>
-            </h3>
-            <p className="meta">
-              <Link to={`/u/${item.author}`}>u/{item.author}</Link> · r/{item.subreddit} · {item.score} points ·{' '}
-              {item.numComments} comments · {formatTimestamp(item.createdUtc)}
-              {item.isNsfw ? ' · NSFW' : ''}
-            </p>
-            <p className="meta">{mode === 'saved' ? 'Saved' : 'Viewed'}: {formatRecordedAt(item, mode)}</p>
+            <PostHeader post={getFallbackPost(item)} headingLevel={3} showSubreddit openInNewTab={openInNewTab} />
+            <p className="library-recorded-at">{mode === 'saved' ? 'Saved' : 'Viewed'}: {formatRecordedAt(item, mode)}</p>
 
+            <PostActions post={getFallbackPost(item)} openInNewTab={openInNewTab} />
             <div className="post-actions">
-              <Link
-                className="post-action-button"
-                to={`/r/${item.subreddit}/comments/${item.id}`}
-                state={{ fallbackPost: getFallbackPost(item) }}
-                target={openInNewTab ? '_blank' : undefined}
-                rel={openInNewTab ? 'noopener noreferrer' : undefined}
-              >
-                Open in RedAlt
-              </Link>
-              <a className="post-action-button" href={`https://www.reddit.com${item.permalink}`} target="_blank" rel="noreferrer">
-                Open on Reddit
-              </a>
-              <a className="post-action-button" href={item.outboundUrl} target="_blank" rel="noreferrer">
-                Open source
-              </a>
               {mode === 'saved' && (
                 <button
                   type="button"
