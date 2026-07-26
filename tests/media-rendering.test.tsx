@@ -36,6 +36,16 @@ describe('media rendering', () => {
     expect(screen.getByRole('link', { name: /Open external media/i })).toHaveAttribute('href', 'https://example.com/article');
   });
 
+  test('mounts a trusted provider iframe when the post is near the viewport', () => {
+    renderMedia(post({
+      type: 'external',
+      outboundUrl: 'https://www.youtube.com/watch?v=fixture',
+      provider: 'YouTube',
+      embedUrl: 'https://www.youtube.com/embed/fixture',
+    }));
+    expect(screen.getByTitle('YouTube')).toHaveAttribute('src', expect.stringContaining('/embed/fixture'));
+  });
+
   test('renders gallery captions and item links', () => {
     renderMedia(post({
       type: 'gallery',

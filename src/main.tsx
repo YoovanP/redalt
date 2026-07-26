@@ -31,9 +31,23 @@ if ('serviceWorker' in navigator) {
       return;
     }
 
-    void navigator.serviceWorker.register('/sw.js').catch(() => {
-      // The app remains usable when service-worker registration is blocked.
+    let reloadingForWorker = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!reloadingForWorker) {
+        reloadingForWorker = true;
+        window.location.reload();
+      }
     });
+
+    void navigator.serviceWorker
+      .register('/sw.js', { updateViaCache: 'none' })
+      .then((registration) => {
+        registration.waiting?.postMessage({ type: 'redalt-skip-waiting' });
+        return registration.update();
+      })
+      .catch(() => {
+        // The app remains usable when service-worker registration is blocked.
+      });
   });
 }
 

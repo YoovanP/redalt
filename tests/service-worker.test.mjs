@@ -12,3 +12,8 @@ test('clones network responses before scheduling asynchronous cache writes', () 
   assert.match(apiHandler, /const cacheResponse = response\.clone\(\);\s*event\.waitUntil\(storeApiResponse\(request, cacheResponse\)\.catch/);
   assert.doesNotMatch(source, /cache\.put\(request, response\.clone\(\)\)/);
 });
+
+test('activates new workers without waiting for existing tabs to close', () => {
+  assert.match(source, /self\.skipWaiting\(\)/);
+  assert.match(source, /self\.addEventListener\('message'/);
+});

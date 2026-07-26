@@ -256,6 +256,7 @@ export function ExternalEmbed({
   );
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
   const shouldMount = nearby ?? active ?? isNear;
+  const showEmbed = shouldMount && status !== 'error';
 
   useEffect(() => {
     if (!shouldMount || (!resolvedEmbedUrl && !embedDocument)) {
@@ -301,11 +302,11 @@ export function ExternalEmbed({
       width={embedWidth ?? (vertical ? 9 : 16)}
       height={embedHeight ?? (vertical ? 16 : 9)}
       className={`external-media${vertical ? ' external-media-vertical' : ''}`}
-      status={resolvedEmbedUrl || embedDocument ? status : thumbnailUrl ? 'ready' : 'error'}
+      status={status === 'error' && thumbnailUrl ? 'ready' : resolvedEmbedUrl || embedDocument ? status : thumbnailUrl ? 'ready' : 'error'}
       sourceUrl={outboundUrl}
       onRetry={() => setAttempt((value) => value + 1)}
     >
-      {shouldMount && resolvedEmbedUrl ? (
+      {showEmbed && resolvedEmbedUrl ? (
         <iframe
           key={attempt}
           ref={iframeRef}
@@ -322,7 +323,7 @@ export function ExternalEmbed({
           }}
           onError={() => setStatus('error')}
         />
-      ) : shouldMount && embedDocument ? (
+      ) : showEmbed && embedDocument ? (
         <iframe
           key={attempt}
           ref={iframeRef}

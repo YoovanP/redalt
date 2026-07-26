@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'redalt-v6';
+const CACHE_VERSION = 'redalt-v7';
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const ASSET_CACHE = `${CACHE_VERSION}-assets`;
 const API_CACHE = `${CACHE_VERSION}-api`;
@@ -78,7 +78,18 @@ async function readFreshApiResponse(request) {
 }
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL_FILES)));
+  event.waitUntil(
+    Promise.all([
+      caches.open(APP_SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL_FILES)),
+      self.skipWaiting(),
+    ]),
+  );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'redalt-skip-waiting') {
+    void self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
