@@ -1,4 +1,4 @@
-import { handleRedditProxyRequest, type RedditProxyEnv } from '../../../api/redditProxy';
+import { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT, type RedditProxyEnv } from '../../../api/redditProxy';
 
 type PagesFunctionContext = {
   request: Request;
@@ -53,7 +53,7 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
   const incomingUrl = new URL(context.request.url);
   const upstreamPath = buildUpstreamPath(context.params.path, incomingUrl);
   const response = await handleRedditProxyRequest(upstreamPath, context.env, {
-    userAgentFallback: 'RedAlt/1.0 (Cloudflare Pages proxy)',
+    userAgentFallback: REDDIT_MOBILE_USER_AGENT,
   });
 
   return new Response(response.body, {

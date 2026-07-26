@@ -61,7 +61,7 @@ This means:
 Proxy env vars:
 
 ```bash
-REDDIT_PROXY_USER_AGENT="RedAlt/1.0 by your-reddit-username"
+REDDIT_PROXY_USER_AGENT="Reddit/2025.12.1 (Android 15; Pixel 8 Pro)"
 ENABLE_PUBLIC_INSTANCE_FALLBACK=true
 REDDIT_PUBLIC_INSTANCE_BASES=
 ```

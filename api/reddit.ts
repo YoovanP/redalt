@@ -1,4 +1,4 @@
-import { handleRedditProxyRequest, type RedditProxyEnv } from './redditProxy';
+import { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT, type RedditProxyEnv } from './redditProxy';
 
 const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
 
@@ -56,7 +56,7 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
   const upstreamPath = buildUpstreamPath(req.query?.path, incomingUrl);
   const response = await handleRedditProxyRequest(upstreamPath, process.env as RedditProxyEnv, {
     cloudflareProxyBase: CLOUDFLARE_PROXY_BASE,
-    userAgentFallback: 'RedAlt/1.0 (Vercel proxy)',
+    userAgentFallback: REDDIT_MOBILE_USER_AGENT,
   });
 
   await sendResponse(res, response);

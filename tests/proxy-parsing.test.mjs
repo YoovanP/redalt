@@ -95,6 +95,22 @@ test('parses old Reddit listing metadata and media from the matching thing block
   assert.equal(result.preview.images[0].source.url, 'https://i.redd.it/full-image.jpg');
 });
 
+test('uses the Reddit mobile client agent for direct upstream requests', { concurrency: false }, async () => {
+  const payload = listing(post('mobile-agent', { selftext: 'Mobile agent fixture' }));
+
+  await withFixtureFetch(
+    (url) => (url === `https://www.reddit.com${TEST_PATH}` ? Response.json(payload) : null),
+    async (calls) => {
+      const { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false' });
+      const directRequest = calls.find(({ url }) => url === `https://www.reddit.com${TEST_PATH}`);
+
+      assert.equal(response.status, 200);
+      assert.equal(directRequest.init.headers['User-Agent'], REDDIT_MOBILE_USER_AGENT);
+    },
+  );
+});
+
 test('keeps old Reddit detail media scoped to the post instead of comments or sidebar', () => {
   const html = `
     <div class="thing link self" data-fullname="t3_self1" data-permalink="/r/test/comments/self1/scoped_self_post/"

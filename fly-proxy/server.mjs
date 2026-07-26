@@ -6,7 +6,7 @@ const { handleRedditProxyRequest, isAllowedRedditPath } = await import(
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? '0.0.0.0';
-const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'RedAlt/1.0 (Render proxy)';
+const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'Reddit/2025.12.1 (Android 15; Pixel 8 Pro)';
 const MIRROR_ENABLED = (process.env.ENABLE_MIRROR_FALLBACK ?? 'true').toLowerCase() !== 'false';
 const REDDIT_PROXY_PREFIX = '/api/reddit';
 const CORS_HEADERS = {

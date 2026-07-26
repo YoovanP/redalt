@@ -1,4 +1,5 @@
 export type RedditProxyEnv = Record<string, string | undefined>;
+export const REDDIT_MOBILE_USER_AGENT = 'Reddit/2025.12.1 (Android 15; Pixel 8 Pro)';
 
 type RedditProxyOptions = {
   cloudflareProxyBase?: string;
@@ -662,7 +663,7 @@ async function fetchViaAllOrigins(
 }
 
 function getProxyUserAgent(env: RedditProxyEnv | undefined, options: RedditProxyOptions): string {
-  return env?.REDDIT_PROXY_USER_AGENT ?? options.userAgentFallback ?? 'RedAlt/1.0 (Reddit proxy)';
+  return env?.REDDIT_PROXY_USER_AGENT ?? options.userAgentFallback ?? REDDIT_MOBILE_USER_AGENT;
 }
 
 function publicInstanceFallbackEnabled(env: RedditProxyEnv | undefined): boolean {
