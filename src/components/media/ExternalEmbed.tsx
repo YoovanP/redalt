@@ -229,7 +229,7 @@ export function ExternalEmbed({
   active,
   nearby,
 }: ExternalEmbedProps) {
-  const { ref: containerRef, isNear } = useNearViewport();
+  const { ref: containerRef } = useNearViewport();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const loadTimeoutRef = useRef<number | undefined>(undefined);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -255,7 +255,9 @@ export function ExternalEmbed({
     [resolvedEmbedHtml, resolvedEmbedUrl],
   );
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
-  const shouldMount = nearby ?? active ?? isNear;
+  // Native iframe lazy loading handles ordinary feeds more reliably than a second observer gate.
+  // Shorts still supplies `nearby` to keep its mounted media window bounded.
+  const shouldMount = nearby ?? active ?? true;
   const showEmbed = shouldMount && status !== 'error';
 
   useEffect(() => {
