@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'redalt-v5';
+const CACHE_VERSION = 'redalt-v6';
 const APP_SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const ASSET_CACHE = `${CACHE_VERSION}-assets`;
 const API_CACHE = `${CACHE_VERSION}-api`;
@@ -36,7 +36,7 @@ async function storeAsset(request, response) {
   }
 
   const cache = await caches.open(ASSET_CACHE);
-  await cache.put(request, response.clone());
+  await cache.put(request, response);
   await trimCache(ASSET_CACHE, MAX_ASSET_ENTRIES);
 }
 
@@ -49,7 +49,7 @@ async function storeApiResponse(request, response) {
 
   const headers = new Headers(response.headers);
   headers.set('x-redalt-cache-time', String(Date.now()));
-  const cachedResponse = new Response(await response.clone().blob(), {
+  const cachedResponse = new Response(await response.blob(), {
     status: response.status,
     statusText: response.statusText,
     headers,
@@ -119,7 +119,9 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          event.waitUntil(storeApiResponse(request, response));
+          // Clone before returning so the browser cannot consume the stream first.
+          const cacheResponse = response.clone();
+          event.waitUntil(storeApiResponse(request, cacheResponse).catch(() => undefined));
           return response;
         })
         .catch(async () => {
@@ -144,7 +146,9 @@ self.addEventListener('fetch', (event) => {
       }
 
       return fetch(request).then((response) => {
-        event.waitUntil(storeAsset(request, response));
+        // Clone before returning so the browser cannot consume the stream first.
+        const cacheResponse = response.clone();
+        event.waitUntil(storeAsset(request, cacheResponse).catch(() => undefined));
         return response;
       });
     }),
