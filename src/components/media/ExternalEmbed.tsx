@@ -229,9 +229,10 @@ export function ExternalEmbed({
   active,
   nearby,
 }: ExternalEmbedProps) {
-  const { ref: containerRef } = useNearViewport();
+  const { ref: containerRef, isNear } = useNearViewport();
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const loadTimeoutRef = useRef<number | undefined>(undefined);
+  const mountedRef = useRef(false);
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [attempt, setAttempt] = useState(0);
   const providerType = useMemo(
@@ -255,10 +256,14 @@ export function ExternalEmbed({
     [resolvedEmbedHtml, resolvedEmbedUrl],
   );
   const vertical = isLikelyVerticalEmbed(resolvedEmbedUrl, outboundUrl, provider);
-  // Native iframe lazy loading handles ordinary feeds more reliably than a second observer gate.
-  // Shorts still supplies `nearby` to keep its mounted media window bounded.
-  const shouldMount = nearby ?? active ?? true;
+  const shouldMount = nearby ?? active ?? (mountedRef.current || isNear);
   const showEmbed = shouldMount && status !== 'error';
+
+  useEffect(() => {
+    if (shouldMount) {
+      mountedRef.current = true;
+    }
+  }, [shouldMount]);
 
   useEffect(() => {
     if (!shouldMount || (!resolvedEmbedUrl && !embedDocument)) {
@@ -315,7 +320,6 @@ export function ExternalEmbed({
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           src={resolvedEmbedUrl}
           title={provider ?? 'External embed'}
-          loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           sandbox="allow-forms allow-popups allow-presentation allow-same-origin allow-scripts"
           referrerPolicy="strict-origin-when-cross-origin"
@@ -332,7 +336,6 @@ export function ExternalEmbed({
           className={`external-frame${vertical ? ' external-frame-vertical' : ''}`}
           srcDoc={embedDocument}
           title={provider ?? 'External embed'}
-          loading="lazy"
           allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture; web-share"
           sandbox="allow-forms allow-popups allow-presentation allow-scripts"
           referrerPolicy="no-referrer"

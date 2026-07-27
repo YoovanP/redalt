@@ -1079,6 +1079,12 @@ function resolveMediaSourcePost(post: RedditPostData): RedditPostData {
   const outboundUrl = parentOutboundUrl || outerOutboundUrl;
   const parentDomain = typeof parent.domain === 'string' ? parent.domain.trim() : '';
   const parentHasGallery = Array.isArray(parent.gallery_data?.items) && parent.gallery_data.items.length > 0;
+  const parentHasMedia =
+    parentHasGallery ||
+    parent.is_video ||
+    hasMediaObject(parent.media) ||
+    hasMediaObject(parent.secure_media) ||
+    hasPreviewData(parent.preview);
 
   return {
     ...post,
@@ -1090,7 +1096,7 @@ function resolveMediaSourcePost(post: RedditPostData): RedditPostData {
         ? parent.selftext
         : post.selftext,
     over_18: Boolean(post.over_18 || parent.over_18),
-    is_self: Boolean(parent.is_self),
+    is_self: parentHasMedia ? Boolean(post.is_self) : Boolean(parent.is_self),
     is_gallery: Boolean(parent.is_gallery || parentHasGallery),
     is_video: Boolean(parent.is_video),
     post_hint: parent.post_hint || post.post_hint,

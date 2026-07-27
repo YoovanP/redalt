@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 export function useNearViewport(enabled = true, rootMargin = '600px 0px') {
   const ref = useRef<HTMLDivElement | null>(null);
-  const [isNear, setIsNear] = useState(() => typeof IntersectionObserver === 'undefined');
+  const [isNear, setIsNear] = useState(true);
 
   useEffect(() => {
     const target = ref.current;
