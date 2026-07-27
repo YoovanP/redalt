@@ -272,7 +272,7 @@ export function ExternalEmbed({
     }
 
     setStatus('loading');
-    loadTimeoutRef.current = window.setTimeout(() => setStatus('error'), 12_000);
+    loadTimeoutRef.current = window.setTimeout(() => setStatus('error'), 30_000);
     return () => window.clearTimeout(loadTimeoutRef.current);
   }, [attempt, embedDocument, resolvedEmbedUrl, shouldMount]);
 
@@ -309,7 +309,7 @@ export function ExternalEmbed({
       width={embedWidth ?? (vertical ? 9 : 16)}
       height={embedHeight ?? (vertical ? 16 : 9)}
       className={`external-media${vertical ? ' external-media-vertical' : ''}`}
-      status={status === 'error' && thumbnailUrl ? 'ready' : resolvedEmbedUrl || embedDocument ? status : thumbnailUrl ? 'ready' : 'error'}
+      status={resolvedEmbedUrl || embedDocument ? status : thumbnailUrl ? 'ready' : 'error'}
       sourceUrl={outboundUrl}
       onRetry={() => setAttempt((value) => value + 1)}
     >

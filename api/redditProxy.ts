@@ -4361,7 +4361,7 @@ function hasGalleryMedia(data: Record<string, unknown>): boolean {
     }
 
     const mediaId = getStringField(item, 'media_id');
-    const metadata = mediaId ? data.media_metadata[mediaId] : null;
+    const metadata = mediaId ? (data.media_metadata as Record<string, unknown>)[mediaId] : null;
 
     if (!isNonEmptyRecord(metadata)) {
       return false;

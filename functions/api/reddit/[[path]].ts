@@ -52,13 +52,27 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
 
   const incomingUrl = new URL(context.request.url);
   const upstreamPath = buildUpstreamPath(context.params.path, incomingUrl);
-  const response = await handleRedditProxyRequest(upstreamPath, context.env, {
-    userAgentFallback: REDDIT_MOBILE_USER_AGENT,
-  });
 
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: withCors(response.headers),
-  });
+  try {
+    const response = await handleRedditProxyRequest(upstreamPath, context.env, {
+      userAgentFallback: REDDIT_MOBILE_USER_AGENT,
+    });
+
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: withCors(response.headers),
+    });
+  } catch {
+    return new Response(
+      JSON.stringify({ error: 'proxy_failure' }),
+      {
+        status: 502,
+        headers: withCors({
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        }),
+      },
+    );
+  }
 }
