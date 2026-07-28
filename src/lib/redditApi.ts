@@ -85,7 +85,7 @@ function shouldAvoidPersistingRedditBase(): boolean {
 
 function getDefaultRedditBases(): string[] {
   if (isViteDevServer()) {
-    return [DEFAULT_REDDIT_BASE, ...REMOTE_REDDIT_BASES];
+    return [...REMOTE_REDDIT_BASES];
   }
 
   if (isCloudflarePagesHost()) {
