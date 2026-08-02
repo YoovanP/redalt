@@ -101,8 +101,10 @@ export function PostDetailPage() {
   const [commentsStatus, setCommentsStatus] = useState<PostDetailResult['commentsStatus'] | 'loading'>('loading');
   const [mediaStatus, setMediaStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const historyPostIdRef = useRef<string | null>(null);
+  const mediaEnrichmentControllerRef = useRef<AbortController | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [retryVersion, setRetryVersion] = useState(0);
   const [visibleTopLevelComments, setVisibleTopLevelComments] = useState(TOP_LEVEL_COMMENTS_STEP);
   const rememberedPost = useMemo(() => {
     const post = getRememberedPost(id);
@@ -142,6 +144,7 @@ export function PostDetailPage() {
 
         if (fallbackPost) {
           setCommentsStatus('unavailable');
+          setMediaStatus('ready');
         } else {
           setError(err instanceof Error ? err.message : 'Unable to load post detail.');
         }
@@ -155,27 +158,11 @@ export function PostDetailPage() {
     return () => {
       controller.abort();
     };
-  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource]);
+  }, [name, id, fallbackPost, fallbackMediaSource, redditApiSource, retryVersion]);
 
   useEffect(() => {
-    if (!postData || mediaStatus !== 'idle') {
-      return;
-    }
-
-    const controller = new AbortController();
-    setMediaStatus('loading');
-
-    fetchPostMediaEnrichment(postData, { signal: controller.signal })
-      .then((enriched) => {
-        setPostData((current) => current ? mergePostCandidates(current, [enriched]) : enriched);
-        setMediaStatus('ready');
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setMediaStatus('error');
-      });
-
-    return () => controller.abort();
-  }, [mediaStatus, postData]);
+    return () => mediaEnrichmentControllerRef.current?.abort();
+  }, [id, name]);
 
   const normalized = useMemo(() => {
     if (!postData) {
@@ -204,6 +191,39 @@ export function PostDetailPage() {
     }
   };
 
+  const retryPost = () => {
+    setRetryVersion((version) => version + 1);
+  };
+
+  const improveMedia = () => {
+    if (!postData || mediaStatus === 'loading') {
+      return;
+    }
+
+    mediaEnrichmentControllerRef.current?.abort();
+    const controller = new AbortController();
+    mediaEnrichmentControllerRef.current = controller;
+    setMediaStatus('loading');
+
+    fetchPostMediaEnrichment(postData, { signal: controller.signal })
+      .then((enriched) => {
+        if (!controller.signal.aborted) {
+          setPostData((current) => current ? mergePostCandidates(current, [enriched]) : enriched);
+          setMediaStatus('ready');
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setMediaStatus('error');
+        }
+      })
+      .finally(() => {
+        if (mediaEnrichmentControllerRef.current === controller) {
+          mediaEnrichmentControllerRef.current = null;
+        }
+      });
+  };
+
   useEffect(() => {
     if (!normalized) {
       return;
@@ -227,7 +247,17 @@ export function PostDetailPage() {
   }
 
   if (error || !normalized) {
-    return <StateView kind="error" message={error ?? 'Post unavailable.'} />;
+    return (
+      <StateView
+        kind="error"
+        message="This post is temporarily unavailable."
+        detail={error ?? 'The post could not be recovered from the current Reddit source.'}
+        actionLabel="Try again"
+        onAction={retryPost}
+        alternateActionLabel="Open on Reddit"
+        alternateActionHref={`https://www.reddit.com/r/${encodeURIComponent(name)}/comments/${encodeURIComponent(id)}/`}
+      />
+    );
   }
 
   return (
@@ -240,6 +270,22 @@ export function PostDetailPage() {
       <RenderMedia post={normalized} expanded />
 
       {mediaStatus === 'loading' && <p className="media-status" role="status">Improving media quality...</p>}
+      {mediaStatus === 'idle' && normalized.media.type !== 'text' && (
+        <div className="media-status" role="status">
+          <p>Some media details are missing. The post is still usable; you can request a one-time repair if needed.</p>
+          <button type="button" className="load-more" onClick={improveMedia}>
+            Improve media
+          </button>
+        </div>
+      )}
+      {mediaStatus === 'error' && (
+        <div className="media-status" role="status">
+          <p>Media details could not be improved right now.</p>
+          <button type="button" className="load-more" onClick={improveMedia}>
+            Retry media repair
+          </button>
+        </div>
+      )}
 
       {normalized.media.type !== 'text' && normalized.selfText.trim() && (
         <MarkdownText text={normalized.selfText} className="self-text-markdown self-text" />

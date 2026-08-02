@@ -1,6 +1,6 @@
 import { type CSSProperties, useCallback, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { LoadMoreButton } from '../components/LoadMoreButton';
+import { LoadMoreButton, LoadMoreRecovery } from '../components/LoadMoreButton';
 import { SortControls } from '../components/SortControls';
 import { PostCard } from '../components/PostCard';
 import { ShortsFeed } from '../components/ShortsFeed';
@@ -55,7 +55,10 @@ export function UserPage() {
     loadingMore,
     error,
     loadMoreError,
+    loadMoreRetryAt,
     loadMore,
+    retryLoadMore,
+    retry,
   } = usePostListingFeed({
     sourceKey: `${username}:${sort}:${topTimeRange}:${fallbackMediaSource}:${redditApiSource}`,
     fetchPage,
@@ -73,7 +76,7 @@ export function UserPage() {
   const { nearEndRef, triggerIndex } = useNearEndLoadMore({
     after,
     loadingMore,
-    disabled: videoFeedMode || loadMoreMode === 'button',
+    disabled: videoFeedMode || loadMoreMode === 'button' || Boolean(loadMoreError),
     itemCount: visiblePosts.length,
     loadMore,
   });
@@ -83,7 +86,17 @@ export function UserPage() {
   }
 
   if (error) {
-    return <StateView kind="error" message={error} />;
+    return (
+      <StateView
+        kind="error"
+        message="Posts from this user are temporarily unavailable."
+        detail={error}
+        actionLabel="Try again"
+        onAction={retry}
+        alternateActionLabel="Open on Reddit"
+        alternateActionHref={`https://www.reddit.com/user/${encodeURIComponent(username)}/`}
+      />
+    );
   }
 
   if (visiblePosts.length === 0) {
@@ -95,10 +108,13 @@ export function UserPage() {
         />
         {after && (
           <div>
-            <LoadMoreButton loading={loadingMore} onClick={loadMore}>
-              Check more posts
-            </LoadMoreButton>
-            {loadMoreError && <p className="meta">{loadMoreError}</p>}
+            {loadMoreError ? (
+              <LoadMoreRecovery message={loadMoreError} loading={loadingMore} onRetry={retryLoadMore} retryAt={loadMoreRetryAt} />
+            ) : (
+              <LoadMoreButton loading={loadingMore} onClick={loadMore}>
+                Check more posts
+              </LoadMoreButton>
+            )}
           </div>
         )}
       </section>
@@ -126,7 +142,10 @@ export function UserPage() {
           posts={visiblePosts}
           hasMore={Boolean(after)}
           loadingMore={loadingMore}
+          loadMoreError={loadMoreError}
+          loadMoreRetryAt={loadMoreRetryAt}
           onNearEnd={loadMore}
+          onRetryLoadMore={retryLoadMore}
         />
       ) : (
         <div className="post-list" style={{ '--post-columns': columns } as CSSProperties}>
@@ -141,10 +160,13 @@ export function UserPage() {
 
       {after && !videoFeedMode && (
         <div>
-          <LoadMoreButton loading={loadingMore} onClick={loadMore}>
-            Load more
-          </LoadMoreButton>
-          {loadMoreError && <p className="meta">{loadMoreError}</p>}
+          {loadMoreError ? (
+            <LoadMoreRecovery message={loadMoreError} loading={loadingMore} onRetry={retryLoadMore} retryAt={loadMoreRetryAt} />
+          ) : (
+            <LoadMoreButton loading={loadingMore} onClick={loadMore}>
+              Load more
+            </LoadMoreButton>
+          )}
         </div>
       )}
     </section>

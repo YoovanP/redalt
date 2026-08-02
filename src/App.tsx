@@ -18,6 +18,13 @@ function currentSubreddit(pathname: string): string {
   return match?.[1] ?? '';
 }
 
+function formatRetryCountdown(milliseconds: number): string {
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 export default function App() {
   return (
     <UiSettingsProvider>
@@ -29,7 +36,8 @@ export default function App() {
 function AppLayout() {
   const location = useLocation();
   const subreddit = currentSubreddit(location.pathname);
-  const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string } | null>(null);
+  const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string; retryAt?: number } | null>(null);
+  const [statusNow, setStatusNow] = useState(() => Date.now());
   const [headerExpanded, setHeaderExpanded] = useState(() => {
     const raw = readStorageItem('local', 'redalt.headerExpanded');
     return raw === null ? true : raw === 'true';
@@ -45,7 +53,11 @@ function AppLayout() {
 
   useEffect(() => {
     const onApiStatus = (event: Event) => {
-      const detail = (event as CustomEvent<{ level: 'ok' | 'warn' | 'error'; message: string }>).detail;
+      const detail = (event as CustomEvent<{
+        level: 'ok' | 'warn' | 'error';
+        message: string;
+        retryAt?: number;
+      }>).detail;
 
       if (!detail) {
         return;
@@ -59,6 +71,7 @@ function AppLayout() {
       setApiStatus({
         level: detail.level,
         message: detail.message,
+        retryAt: typeof detail.retryAt === 'number' && detail.retryAt > Date.now() ? detail.retryAt : undefined,
       });
     };
 
@@ -69,11 +82,41 @@ function AppLayout() {
     };
   }, []);
 
+  useEffect(() => {
+    const retryAt = apiStatus?.retryAt;
+
+    if (!retryAt) {
+      return;
+    }
+
+    const tick = () => {
+      const now = Date.now();
+      setStatusNow(now);
+
+      if (now >= retryAt) {
+        setApiStatus((current) =>
+          current?.retryAt === retryAt
+            ? { ...current, message: 'You can retry Reddit now.', retryAt: undefined }
+            : current,
+        );
+      }
+    };
+
+    tick();
+    const intervalId = window.setInterval(tick, 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [apiStatus?.retryAt]);
+
+  const retryCountdown = apiStatus?.retryAt ? formatRetryCountdown(apiStatus.retryAt - statusNow) : null;
+
   return (
     <div className="app-shell">
       {apiStatus && (
         <div className={`api-status-banner api-status-${apiStatus.level}`} role="status" aria-live="polite">
-          <span>{apiStatus.message}</span>
+          <div className="api-status-copy">
+            <span>{apiStatus.message}</span>
+            {retryCountdown && <strong>Try again in {retryCountdown}</strong>}
+          </div>
           <button type="button" onClick={() => setApiStatus(null)}>
             Dismiss
           </button>

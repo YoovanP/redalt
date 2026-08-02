@@ -95,7 +95,7 @@ test('parses old Reddit listing metadata and media from the matching thing block
   assert.equal(result.preview.images[0].source.url, 'https://i.redd.it/full-image.jpg');
 });
 
-test('uses the Reddit mobile client agent for direct upstream requests', { concurrency: false }, async () => {
+test('uses the configured RedAlt agent for direct upstream requests', { concurrency: false }, async () => {
   const payload = listing(post('mobile-agent', { selftext: 'Mobile agent fixture' }));
 
   await withFixtureFetch(
@@ -109,6 +109,126 @@ test('uses the Reddit mobile client agent for direct upstream requests', { concu
       assert.equal(directRequest.init.headers['User-Agent'], REDDIT_MOBILE_USER_AGENT);
     },
   );
+});
+
+test('prefers the official OAuth API and keeps credentials on the server', { concurrency: false }, async () => {
+  const payload = listing(post('official-oauth', { selftext: 'Official API fixture' }));
+
+  await withFixtureFetch(
+    (url) => {
+      if (url === 'https://www.reddit.com/api/v1/access_token') {
+        return Response.json({ access_token: 'fixture-access-token', expires_in: 3600 });
+      }
+
+      if (url === `https://oauth.reddit.com${TEST_PATH}`) {
+        return Response.json(payload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {
+        REDDIT_CLIENT_ID: 'fixture-client-id',
+        REDDIT_CLIENT_SECRET: 'fixture-client-secret',
+      });
+      const tokenRequest = calls.find(({ url }) => url === 'https://www.reddit.com/api/v1/access_token');
+      const apiRequest = calls.find(({ url }) => url === `https://oauth.reddit.com${TEST_PATH}`);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-source'), 'official-oauth');
+      assert.ok(tokenRequest, 'OAuth token request was not made');
+      assert.ok(apiRequest, 'Official Reddit API request was not made');
+      assert.match(String(tokenRequest.init.headers.Authorization), /^Basic /);
+      assert.equal(apiRequest.init.headers.Authorization, 'Bearer fixture-access-token');
+      assert.equal(calls.some(({ url }) => url === `https://www.reddit.com${TEST_PATH}`), false);
+    },
+  );
+});
+
+test('shares one OAuth token exchange across concurrent cold requests', { concurrency: false }, async () => {
+  let tokenRequests = 0;
+  const credentials = {
+    REDDIT_CLIENT_ID: 'fixture-client-id',
+    REDDIT_CLIENT_SECRET: 'fixture-client-secret',
+  };
+
+  await withFixtureFetch(
+    async (url) => {
+      if (url === 'https://www.reddit.com/api/v1/access_token') {
+        tokenRequests += 1;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return Response.json({ access_token: 'fixture-access-token', expires_in: 3600 });
+      }
+
+      if (url === `https://oauth.reddit.com${TEST_PATH}` || url === 'https://oauth.reddit.com/r/test/new.json?limit=3') {
+        return Response.json(listing(post('single-flight', { selftext: 'Shared token fixture' })));
+      }
+
+      return null;
+    },
+    async () => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const [firstResponse, secondResponse] = await Promise.all([
+        handleRedditProxyRequest(TEST_PATH, credentials),
+        handleRedditProxyRequest('/r/test/new.json?limit=3', credentials),
+      ]);
+
+      assert.equal(firstResponse.status, 200);
+      assert.equal(secondResponse.status, 200);
+      assert.equal(tokenRequests, 1);
+    },
+  );
+});
+
+test('returns an actionable rate limit response without falling through to a weaker source', { concurrency: false }, async () => {
+  await withFixtureFetch(
+    (url) => {
+      if (url === `https://oauth.reddit.com${TEST_PATH}`) {
+        return new Response(JSON.stringify({ reason: 'too many requests' }), {
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            'Retry-After': '7',
+          },
+        });
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {
+        REDDIT_OAUTH_ACCESS_TOKEN: 'fixture-static-token',
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 429);
+      assert.equal(response.headers.get('retry-after'), '7');
+      assert.equal(payload.retryAfterSeconds, 7);
+      assert.equal(payload.retryable, true);
+      assert.equal(calls.some(({ url }) => url === `https://www.reddit.com${TEST_PATH}`), false);
+    },
+  );
+});
+
+test('reports safe OAuth configuration status without exposing credentials', async () => {
+  const { getRedditProxyStatus } = await importFreshProxy();
+  const unconfigured = getRedditProxyStatus({});
+  const configured = getRedditProxyStatus({
+    REDDIT_CLIENT_ID: 'fixture-client-id',
+    REDDIT_CLIENT_SECRET: 'fixture-client-secret',
+    REDDIT_REFRESH_TOKEN: 'fixture-refresh-token',
+    ENABLE_MIRROR_FALLBACK: 'true',
+  });
+
+  assert.equal(unconfigured.service, 'redalt-reddit-gateway');
+  assert.equal(unconfigured.status, 'degraded');
+  assert.equal(unconfigured.oauth.configured, false);
+  assert.equal(configured.status, 'ready');
+  assert.equal(configured.oauth.mode, 'refresh-token');
+  assert.equal(configured.fallbacks.mirror, true);
+  assert.doesNotMatch(JSON.stringify(configured), /fixture-client-secret|fixture-refresh-token/);
 });
 
 test('keeps old Reddit detail media scoped to the post instead of comments or sidebar', () => {

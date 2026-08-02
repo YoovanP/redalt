@@ -20,7 +20,7 @@ export type FallbackMediaSource = 'instance' | 'reddit';
 
 export type LoadMoreMode = 'scroll' | 'button';
 
-export type RedditApiSource = 'auto' | 'same-origin' | 'render' | 'cloudflare';
+export type RedditApiSource = 'auto' | 'same-origin';
 
 export type UiSettings = {
   theme: ThemeName;
@@ -99,9 +99,7 @@ function normalizeSettings(input: unknown): UiSettings {
 
   const redditApiSource =
     value.redditApiSource === 'auto' ||
-    value.redditApiSource === 'same-origin' ||
-    value.redditApiSource === 'render' ||
-    value.redditApiSource === 'cloudflare'
+    value.redditApiSource === 'same-origin'
       ? value.redditApiSource
       : defaultSettings.redditApiSource;
 

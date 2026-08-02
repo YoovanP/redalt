@@ -1,218 +1,100 @@
 # RedAlt
 
-RedAlt is a modern Reddit alternative frontend built with React + TypeScript + Vite, with multi-backend API proxy support (Vercel, Cloudflare Pages, and Render).
+RedAlt is a React + TypeScript Reddit reader with a Reddit-style feed, media view, comments, saved posts, history, custom feeds, and video mode.
 
-## Deploy Buttons
+## Reliability architecture
 
-[![Deploy on Vercel](https://img.shields.io/badge/Deploy_on-Vercel-000000?style=for-the-badge&logo=vercel)](https://vercel.com/new/clone?repository-url=https://github.com/YoovanP/redalt-vercel)
-[![Deploy on Cloudflare Pages](https://img.shields.io/badge/Deploy_on-Cloudflare%20Pages-F38020?style=for-the-badge&logo=cloudflare)](https://dash.cloudflare.com/?to=/:account/pages/new)
-[![Deploy on Render](https://img.shields.io/badge/Deploy_on-Render-46E3B7?style=for-the-badge&logo=render&logoColor=000)](https://render.com/deploy?repo=https://github.com/YoovanP/redalt)
-[![Deploy on Railway](https://img.shields.io/badge/Deploy_on-Railway-7B3FE4?style=for-the-badge&logo=railway&logoColor=fff)](https://railway.app/new)
+The browser talks to one same-origin gateway: `/api/reddit`. It does not rotate through public proxies during an ordinary feed load.
 
-Notes:
-- Vercel and Render links are repo-wired.
-- Cloudflare and Railway links open new project flows (you can import either repo there).
-
-## Active Instances
-
-- Frontend (Vercel): https://redalt.vercel.app
-- Cloudflare Pages: https://redalt.pages.dev
-- Render API Proxy: https://redalt-vercel.onrender.com
-
-## Repository Layout (Both Repos)
-
-This project is actively used across two GitHub repositories:
-
-- `YoovanP/redalt`
-  - Primary source and Cloudflare Pages deployment target.
-  - Includes Pages Functions proxy in `functions/api/reddit/[[path]].ts`.
-- `YoovanP/redalt-vercel`
-  - Vercel-facing mirror/fork used for frontend deployment and cross-platform proxy routing.
-  - Commonly paired with Render API proxy (`fly-proxy/`).
-
-Both repos run the same app architecture and can be kept in sync.
-
-## How It Works
-
-RedAlt loads Reddit JSON through proxy backends to reduce direct client-side rate-limit/CORS issues.
-Production proxies use anonymous Reddit JSON requests, mirror fallbacks, and public alternative frontend
-instances. Reddit may still block requests from shared hosting egress IPs, so keep multiple proxy bases
-configured where possible.
-
-### Request Flow
-
-1. Frontend reads `VITE_REDDIT_API_BASES`.
-2. For each API call, RedAlt tries bases in order until one succeeds.
-3. Responses are normalized and rendered as posts/comments/media.
-4. If one backend is blocked/down, fallback continues automatically.
-
-Recommended production chain:
-
-```bash
-VITE_REDDIT_API_BASES=https://redalt-vercel.onrender.com/api/reddit,https://redalt.pages.dev/api/reddit,/api/reddit
+```text
+Browser → /api/reddit → official Reddit OAuth API
+                         ↓ only if explicitly enabled
+                   bounded degraded fallbacks
 ```
 
-This means:
+- Feed requests have a short overall deadline and are aborted when the user changes route or retries.
+- Post detail loads comments and the primary post in one request. Media repair is explicit instead of silently fanning out into several extra feed requests.
+- The gateway prefers the official OAuth API, validates payload shape before returning it, caches successful JSON briefly, and shares one cold OAuth token exchange across concurrent requests.
+- Public Redlib/Teddit/mirror scraping is opt-in and bounded. It is a degraded compatibility mode, not the normal production path.
+- `Retry-After` is carried from Reddit through the gateway to a visible countdown. Failed pagination pauses until the reader deliberately retries it, rather than repeatedly requesting the same cursor.
 
-1. Render proxy as primary
-2. Cloudflare Pages proxy as secondary
-3. Same-origin Vercel API route as final fallback
+Reddit access must use the developer-documented authorization flow and may be rate-limited. See the [Reddit Data API Terms](https://redditinc.com/policies/data-api-terms) and [API documentation](https://www.reddit.com/dev/api/).
 
-Proxy env vars:
+## Configure the gateway
+
+Copy `.env.example` to `.env.local` for local development. Keep the browser on its local gateway:
 
 ```bash
-REDDIT_PROXY_USER_AGENT="Reddit/2025.12.1 (Android 15; Pixel 8 Pro)"
+VITE_REDDIT_API_BASES=/api/reddit
+```
+
+Create a Reddit OAuth application at <https://www.reddit.com/prefs/apps>, then set these **server-only** variables. Do not prefix them with `VITE_`.
+
+```bash
+REDDIT_PROXY_USER_AGENT="web:RedAlt:0.2.0 (public read-only client)"
+REDDIT_CLIENT_ID=...
+REDDIT_CLIENT_SECRET=...
+# Optional for user-authorized access:
+REDDIT_REFRESH_TOKEN=...
+```
+
+`REDDIT_OAUTH_ACCESS_TOKEN` is available as a short-lived development override, but client credentials or a refresh token is the normal deployment setup. The Vite development gateway loads these values only in Node; they are not bundled into the browser.
+
+### Degraded fallbacks
+
+These are disabled by default because they have inconsistent availability and can return incomplete media. Enable them only if you intentionally operate and monitor them:
+
+```bash
 ENABLE_PUBLIC_INSTANCE_FALLBACK=true
-REDDIT_PUBLIC_INSTANCE_BASES=
+REDDIT_PUBLIC_INSTANCE_BASES=https://your-redlib.example
+ENABLE_PUBLIC_INSTANCE_DISCOVERY=false
+ENABLE_MIRROR_FALLBACK=false
+ENABLE_LEGACY_SCRAPE_FALLBACK=false
 ```
 
-### Proxy Fallbacks
+If the official gateway is not configured or unavailable, the UI shows a clear bounded failure state with Retry and an “Open on Reddit” escape hatch instead of an endless skeleton.
 
-Each proxy tries upstreams in this order:
+### Gateway status
 
-1. Same-project proxy fallback, where available.
-2. Public alternative frontend instances for post JSON.
-3. Direct Reddit JSON hosts: `www.reddit.com`, `api.reddit.com`, and `old.reddit.com`.
-4. AllOrigins mirror fallback, when enabled.
-5. Reddit RSS fallback for compatible listing routes.
+`GET /api/status` is available through Vercel, Cloudflare Pages, Render/Node, and local Vite development. It returns only safe operational state: whether OAuth is configured, its non-secret mode, whether an access token is cached, enabled degraded fallbacks, and the response-cache entry count. It is not an upstream liveness check and never returns OAuth values or credentials.
 
-The public-instance fallback is enabled by default with `ENABLE_PUBLIC_INSTANCE_FALLBACK=true`. It only runs for public post/listing JSON routes such as subreddit feeds, user submitted feeds, search results, and post detail threads. The proxy validates that the response is Reddit-shaped JSON before returning it to the app, so HTML block pages or incompatible frontend responses are skipped.
+Use it after a deployment before testing a real listing. A healthy configured environment reports `"status": "ready"`; an unconfigured gateway reports `"status": "degraded"` and will only have its bounded degraded path available.
 
-Built-in public fallback sources include Redlib, Libreddit, Teddit, Eddrit, and Troddit. Redlib and Libreddit instance lists are refreshed from their public JSON lists and cached briefly by the proxy; the other projects are included as static public bases because their public instance metadata is less consistent.
-
-You can prefer your own public or self-hosted instances with a comma-separated list:
-
-```bash
-REDDIT_PUBLIC_INSTANCE_BASES=https://redlib.example.com,https://teddit.example.com
-```
-
-Set `ENABLE_PUBLIC_INSTANCE_FALLBACK=false` to disable this behavior.
-
-## Features
-
-- Subreddit feed and post detail views
-- Sort controls (`hot`, `rising`, `new`, `top`) with top time range support
-- Multi-theme UI with persisted user settings
-- Multi-subreddit custom feed builder
-- Video shorts mode with infinite loading
-- Rich media support:
-  - Self/text posts with Markdown + GFM
-  - Images
-  - Gallery/carousel posts
-  - Reddit-hosted videos
-  - External embeds (including RedGIFs when metadata is available)
-- Flair filtering (including discovered flairs from loaded posts)
-- Threaded comments with collapse/expand and paged top-level loading
-- Saved posts and watch history library
-
-## Technologies Used
-
-### Frontend
-
-- React
-- TypeScript
-- Vite
-- React Router
-- `react-markdown` + `remark-gfm`
-
-### Backend/Proxy Runtime
-
-- Node.js (Render proxy via `fly-proxy/server.mjs`)
-- Cloudflare Pages Functions (`functions/api/reddit/[[path]].ts`)
-- Vercel Serverless API routes (`api/reddit/*`)
-
-### Deployment Platforms
-
-- Vercel (frontend + optional API fallback)
-- Cloudflare Pages (frontend/proxy path support)
-- Render Web Service (dedicated Reddit proxy)
-- Railway (optional host for proxy/frontend)
-
-## Local Development
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open: http://localhost:5173 (or next available Vite port)
+Open the Vite URL shown in the terminal. `/api/reddit/*` and `/api/status` are handled by `viteRedditProxy.ts`, using the same shared proxy core as production.
 
-### Local Environment
+## Deploy
 
-Create `.env.local` as needed:
+The shared gateway core is `api/redditProxy.ts`.
 
-```bash
-VITE_REDDIT_API_BASES=/api/reddit
-```
+- **Vercel:** `api/reddit.ts` provides the same-origin serverless route; `api/status.ts` exposes safe configuration status.
+- **Cloudflare Pages:** `functions/api/reddit/[[path]].ts` provides the Pages Function; `functions/api/status.ts` exposes safe configuration status.
+- **Render / Node:** `fly-proxy/server.mjs` exposes `/api/reddit/*`, `/api/status`, and `/healthz`; `render.yaml` includes the required secret placeholders.
 
-You can also set multiple proxies:
-
-```bash
-VITE_REDDIT_API_BASES=https://proxy-a.example.com/api/reddit,https://proxy-b.example.com/api/reddit,/api/reddit
-```
-
-## Build
-
-```bash
-npm run build
-```
+Set `VITE_REDDIT_API_BASES=/api/reddit` for a frontend and configure the OAuth secrets in the environment of the server that serves that route. There is no required cross-host proxy chain.
 
 ## Tests
 
 ```bash
 npm test
+npm run test:components
+npm run build
+npm run test:e2e
 ```
 
-The zero-dependency Node tests cover storage failure handling and proxy route authorization.
+The Node tests cover proxy path validation and payload parsing. Component and end-to-end tests cover feed rendering and failure/retry behavior.
 
-## Deploying by Platform
+## Product features
 
-### Vercel
-
-```bash
-npm i -g vercel
-vercel login
-vercel --prod
-```
-
-Set `VITE_REDDIT_API_BASES` in Project Settings -> Environment Variables.
-Also set `REDDIT_PROXY_USER_AGENT` and `ENABLE_PUBLIC_INSTANCE_FALLBACK` for the API route.
-
-### Render (Proxy Service)
-
-Use the repository root so the service can load the shared `api/redditProxy.ts` core.
-
-- Runtime: Node
-- Build Command: `npm --prefix fly-proxy ci --omit=dev`
-- Start Command: `npm --prefix fly-proxy run start`
-- Health Check Path: `/healthz`
-- Env: `ENABLE_MIRROR_FALLBACK=true`
-- Env: `ENABLE_PUBLIC_INSTANCE_FALLBACK=true`
-- Env: `REDDIT_PROXY_USER_AGENT`
-
-You can deploy via [render.yaml](render.yaml) blueprint or dashboard setup.
-
-Health endpoint:
-
-- `GET /healthz` -> `{ "ok": true }`
-
-### Cloudflare Pages
-
-- Connect repo in Cloudflare Pages.
-- Build command: `npm run build`
-- Output directory: `dist`
-- Ensure Functions are enabled so `functions/api/reddit/[[path]].ts` is active.
-- Set `REDDIT_PROXY_USER_AGENT` and `ENABLE_PUBLIC_INSTANCE_FALLBACK` as Pages environment variables.
-
-### Railway
-
-- Create a new Railway project from this repo.
-- Keep the repository root as the service root.
-- Use the same prefixed Node build/start commands as Render.
-
-## Project Notes
-
-- Uses Reddit `raw_json=1` endpoints for cleaner payload parsing.
-- API failures (403/451/etc.) are mapped to user-friendly UI messages.
-- Cloudflare Pages and Vercel routes include CORS-aware proxy handling.
-- Local development can fall back to direct Reddit API when proxy routes are unavailable.
+- Subreddit, user, search, and custom feeds
+- Sort controls, flair filters, cursor pagination, and keyboard feed navigation
+- Text, galleries, Reddit-hosted video, and external embeds
+- Threaded comments with collapse/expand controls
+- Video shorts mode
+- Local saved posts, history, themes, and layout preferences

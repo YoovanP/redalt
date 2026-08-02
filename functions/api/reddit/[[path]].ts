@@ -1,4 +1,4 @@
-import { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT, type RedditProxyEnv } from '../../../api/redditProxy';
+import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from '../../../api/redditProxy';
 
 type PagesFunctionContext = {
   request: Request;
@@ -55,7 +55,7 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
 
   try {
     const response = await handleRedditProxyRequest(upstreamPath, context.env, {
-      userAgentFallback: REDDIT_MOBILE_USER_AGENT,
+      userAgentFallback: REDDIT_PROXY_USER_AGENT,
     });
 
     return new Response(response.body, {
@@ -65,7 +65,11 @@ export async function onRequest(context: PagesFunctionContext): Promise<Response
     });
   } catch {
     return new Response(
-      JSON.stringify({ error: 'proxy_failure' }),
+      JSON.stringify({
+        error: 'proxy_failure',
+        message: 'The Reddit gateway failed before a response was available. Please try again.',
+        retryable: true,
+      }),
       {
         status: 502,
         headers: withCors({

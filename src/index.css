@@ -315,7 +315,22 @@ input:focus, select:focus {
   font-size: 0.9rem;
 }
 
+.api-status-copy {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
+.api-status-copy strong {
+  color: color-mix(in srgb, var(--text) 92%, var(--link) 8%);
+  font-family: "Courier New", monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .api-status-banner button {
+  flex: 0 0 auto;
   border: 1px solid var(--input-border);
   background: var(--input-bg);
   color: var(--text);
@@ -1594,6 +1609,7 @@ input:focus, select:focus {
 .subreddit-form input,
 .subreddit-form button,
 .load-more,
+.load-more-retry,
 .gallery-controls button,
 .post-links button {
   border: 1px solid var(--input-border);
@@ -1606,9 +1622,28 @@ input:focus, select:focus {
 .subreddit-form button,
 .custom-feed-form button,
 .load-more,
+.load-more-retry,
 .post-links button,
 .menu-toggle {
   min-height: 38px;
+}
+
+.load-more-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  max-width: 48rem;
+  margin: 1rem 0;
+  padding: 0.72rem 0.82rem;
+  border: 1px solid color-mix(in srgb, var(--link) 48%, var(--panel-border));
+  border-left: 4px solid var(--link);
+  background: color-mix(in srgb, var(--panel) 90%, var(--link) 10%);
+}
+
+.load-more-recovery p {
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 .post-list {
@@ -1632,6 +1667,97 @@ input:focus, select:focus {
   border-radius: 0;
   padding: 1.35rem;
   position: relative;
+}
+
+.state-view {
+  max-width: 760px;
+  overflow: hidden;
+  border-left-color: var(--link);
+}
+
+.state-view::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(to bottom, transparent, var(--link) 18%, var(--link) 82%, transparent);
+  opacity: 0.9;
+}
+
+.state-copy {
+  position: relative;
+  z-index: 1;
+  max-width: 56rem;
+}
+
+.state-label {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: var(--link);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+}
+
+.state-message {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.state-detail {
+  max-width: 42rem;
+  margin: 0.55rem 0 0;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  line-height: 1.5;
+}
+
+.state-loading > div[aria-hidden='true'] {
+  margin-top: 1.15rem;
+  opacity: 0.82;
+}
+
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  margin-top: 1.15rem;
+}
+
+.state-action {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--input-border);
+  border-radius: 0;
+  font-weight: 700;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.state-action-primary {
+  border-color: var(--link);
+  background: var(--link);
+  color: var(--bg);
+}
+
+.state-action-primary:hover {
+  color: var(--bg);
+  background: color-mix(in srgb, var(--link) 86%, #fff);
+}
+
+.state-action-secondary {
+  background: transparent;
+  color: var(--text);
+}
+
+.state-action-secondary:hover {
+  color: var(--link);
+  border-color: var(--link);
 }
 
 .post-card::before {
@@ -2330,6 +2456,29 @@ article[data-focused='true'] > .post-card {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.shorts-load-more-recovery {
+  min-height: 100dvh;
+  display: grid;
+  place-content: center;
+  gap: 0.8rem;
+  padding: 2rem;
+  text-align: center;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 88%, var(--link) 12%), var(--bg)),
+    repeating-linear-gradient(135deg, transparent 0 12px, color-mix(in srgb, var(--link) 6%, transparent) 12px 13px);
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.shorts-load-more-recovery p {
+  max-width: 36rem;
+  margin: 0;
+}
+
+.shorts-load-more-recovery button {
+  justify-self: center;
 }
 
 .shorts-media-wrap .media-block {

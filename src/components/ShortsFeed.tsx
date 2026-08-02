@@ -9,10 +9,21 @@ type ShortsFeedProps = {
   posts: NormalizedPost[];
   hasMore: boolean;
   loadingMore: boolean;
+  loadMoreError?: string | null;
+  loadMoreRetryAt?: number | null;
   onNearEnd: () => void;
+  onRetryLoadMore?: () => void;
 };
 
-export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFeedProps) {
+export function ShortsFeed({
+  posts,
+  hasMore,
+  loadingMore,
+  loadMoreError = null,
+  loadMoreRetryAt = null,
+  onNearEnd,
+  onRetryLoadMore,
+}: ShortsFeedProps) {
   const navigate = useNavigate();
   const feedRef = useRef<HTMLDivElement | null>(null);
   const nearEndRef = useRef<HTMLDivElement | null>(null);
@@ -39,6 +50,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   const [activeIndex, setActiveIndex] = useState(0);
   const [quickMenuIndex, setQuickMenuIndex] = useState<number | null>(null);
   const [gestureMessage, setGestureMessage] = useState<string | null>(null);
+  const [recoveryNow, setRecoveryNow] = useState(() => Date.now());
   const [shortsMuted, setShortsMuted] = useState(() => {
     const raw = readStorageItem('local', 'redalt.shortsMuted');
     return raw === null ? true : raw === 'true';
@@ -55,6 +67,23 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   useEffect(() => {
     writeStorageItem('local', 'redalt.shortsMuted', String(shortsMuted));
   }, [shortsMuted]);
+
+  useEffect(() => {
+    if (!loadMoreRetryAt || loadMoreRetryAt <= Date.now()) {
+      return;
+    }
+
+    setRecoveryNow(Date.now());
+    const intervalId = window.setInterval(() => {
+      const nextNow = Date.now();
+      setRecoveryNow(nextNow);
+
+      if (nextNow >= loadMoreRetryAt) {
+        window.clearInterval(intervalId);
+      }
+    }, 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [loadMoreRetryAt]);
 
   useEffect(() => {
     writeStorageItem('local', 'redalt.shortsPlaybackRate', String(playbackRate));
@@ -76,7 +105,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
     const feed = feedRef.current;
     const target = nearEndRef.current;
 
-    if (!feed || !target || !hasMore || loadingMore) {
+    if (!feed || !target || !hasMore || loadingMore || loadMoreError) {
       return;
     }
 
@@ -101,7 +130,7 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
     return () => {
       observer.disconnect();
     };
-  }, [hasMore, loadingMore, onNearEnd, posts.length]);
+  }, [hasMore, loadMoreError, loadingMore, onNearEnd, posts.length]);
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -191,6 +220,9 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
   }, [activeIndex, playbackRate, posts, shortsMuted]);
 
   const triggerIndex = Math.max(0, posts.length - 3);
+  const retryCountdown = loadMoreRetryAt && loadMoreRetryAt > recoveryNow
+    ? Math.max(0, Math.ceil((loadMoreRetryAt - recoveryNow) / 1000))
+    : null;
 
   const scrollToIndex = (index: number) => {
     const clamped = Math.max(0, Math.min(posts.length - 1, index));
@@ -431,6 +463,19 @@ export function ShortsFeed({ posts, hasMore, loadingMore, onNearEnd }: ShortsFee
           )}
         </article>
       ))}
+
+      {loadMoreError && onRetryLoadMore && (
+        <div className="shorts-load-more-recovery" role="status" aria-live="polite">
+          <p>{loadMoreError}</p>
+          <button type="button" className="post-action-button" disabled={loadingMore || Boolean(retryCountdown)} onClick={onRetryLoadMore}>
+            {loadingMore
+              ? 'Retrying...'
+              : retryCountdown
+                ? `Retry in ${String(Math.floor(retryCountdown / 60)).padStart(2, '0')}:${String(retryCountdown % 60).padStart(2, '0')}`
+                : 'Retry load more'}
+          </button>
+        </div>
+      )}
 
       {gestureMessage && <div className="shorts-gesture-message">{gestureMessage}</div>}
     </div>

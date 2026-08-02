@@ -1,10 +1,12 @@
 export class RedditApiError extends Error {
   readonly status: number;
+  readonly retryAfterSeconds?: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, retryAfterSeconds?: number) {
     super(message);
     this.name = 'RedditApiError';
     this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -14,7 +16,7 @@ export function getApiErrorMessage(status: number): string {
   }
 
   if (status === 451 || status === 403) {
-    return 'This subreddit or content is restricted in your region or behind access controls.';
+    return 'The selected Reddit source is unavailable or access-controlled. Please try again.';
   }
 
   if (status === 429) {

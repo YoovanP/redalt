@@ -1,13 +1,13 @@
 import http from 'node:http';
 
-const { handleRedditProxyRequest, isAllowedRedditPath } = await import(
+const { getRedditProxyStatus, handleRedditProxyRequest, isAllowedRedditPath } = await import(
   new URL('../api/redditProxy.ts', import.meta.url).href,
 );
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? '0.0.0.0';
-const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'Reddit/2025.12.1 (Android 15; Pixel 8 Pro)';
-const MIRROR_ENABLED = (process.env.ENABLE_MIRROR_FALLBACK ?? 'true').toLowerCase() !== 'false';
+const USER_AGENT = process.env.REDDIT_PROXY_USER_AGENT ?? 'web:RedAlt:0.2.0 (public read-only client)';
+const MIRROR_ENABLED = process.env.ENABLE_MIRROR_FALLBACK?.toLowerCase() === 'true';
 const REDDIT_PROXY_PREFIX = '/api/reddit';
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -92,6 +92,20 @@ async function proxyRequest(req, res) {
     return;
   }
 
+  if (url.pathname === '/api/status') {
+    await sendResponse(
+      res,
+      new Response(JSON.stringify(getRedditProxyStatus(process.env, { enableMirrorFallback: MIRROR_ENABLED })), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        },
+      }),
+    );
+    return;
+  }
+
   const upstreamPath = buildUpstreamPath(url);
 
   if (!upstreamPath || !isAllowedRedditPath(upstreamPath)) {
@@ -139,7 +153,11 @@ const server = http.createServer((req, res) => {
     console.error('Proxy error:', error);
     await sendResponse(
       res,
-      new Response(JSON.stringify({ error: 'proxy_failure' }), {
+      new Response(JSON.stringify({
+        error: 'proxy_failure',
+        message: 'The Reddit gateway failed before a response was available. Please try again.',
+        retryable: true,
+      }), {
         status: 502,
         headers: {
           'Content-Type': 'application/json; charset=utf-8',

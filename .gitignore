@@ -6,6 +6,7 @@ dist/
 Thumbs.db
 .env
 .env.*
+!.env.example
 coverage/
 test-results/
 playwright-report/

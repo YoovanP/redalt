@@ -1,257 +1,157 @@
 # RedAlt Project Memory
 
-Last reviewed: 2026-06-17.
+Last reviewed: 2026-08-02.
 
-This file is a working memory for the RedAlt project. It describes what the
-project is, how it works, what it currently achieves, what is known to work,
-and what remains fragile or unsupported. Update it when major behavior,
-deployment topology, or proxy fallback behavior changes.
+## Product and limits
 
-## What The Project Is
+RedAlt is a public, read-only Reddit reader built with React, TypeScript, and
+Vite. It supports subreddit/user/search feeds, post details and comments,
+media, custom feeds, themes, saved posts, history, and a media-first shorts
+mode. Browser personalization is local only.
 
-RedAlt is a public Reddit alternative frontend built with React, TypeScript,
-and Vite. It lets users browse Reddit content through RedAlt-controlled proxy
-routes instead of calling Reddit directly from the browser.
+It is not an account client: there is no Reddit login, voting, posting,
+commenting, moderation, messaging, subscription sync, or account-library sync.
 
-The core goal is resilience: Reddit frequently blocks shared hosting egress IPs
-or returns non-JSON block pages, so RedAlt uses multiple proxy backends and
-fallback sources to keep public feeds, search results, media, and comments
-usable when one source fails.
+## Current request architecture
 
-RedAlt is not a Reddit account client. It does not implement login, voting,
-posting, commenting, inbox, moderation, or account sync. It focuses on public
-read-only browsing.
+```text
+React browser
+  └─ /api/reddit (one same-origin request boundary)
+       └─ api/redditProxy.ts
+            ├─ official Reddit OAuth API (normal production path)
+            └─ explicitly enabled degraded fallbacks only
+```
 
-## What It Achieves
+- `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
+  additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
+  automatically hop through public Render/Pages deployments.
+- Feed calls have individual and whole-request deadlines. The client attempts
+  at most two configured bases and does not repeat a full retry cycle.
+- `usePostListingFeed` supplies an `AbortSignal`; route changes and React
+  development re-mounts cancel stale work instead of allowing duplicate loads.
+- `PostDetailPage` uses one detail request. If media metadata is incomplete,
+  recovery is a user-triggered “Improve media” action with at most two bounded
+  repair attempts; opening a post never starts a five-request repair fanout.
+- Error states are actionable: feed/detail failures show Retry and an Open on
+  Reddit escape hatch. Skeletons include visible status text.
+- Reddit `Retry-After` data travels through the shared gateway and client. A
+  rate-limited source is held until its exact retry window ends; generic
+  connection failures remain manually retryable. Failed pagination pauses its
+  observer and shows an inline countdown/retry surface instead of reissuing the
+  same cursor automatically.
 
-- Browses public subreddit feeds, user submitted feeds, global search, and post
-  detail pages.
-- Renders common Reddit media types: Markdown text, images, galleries,
-  Reddit-hosted videos, and known external embeds such as YouTube, Vimeo, and
-  RedGIFs when enough metadata exists.
-- Provides local-only personalization: themes, feed layout settings, custom
-  feed subreddit lists, saved posts, watch history, and media-feed preferences.
-- Provides a media-first "shorts" mode for scrolling through image/video-heavy
-  feeds.
-- Uses several API/proxy targets so one blocked or unavailable backend does not
-  immediately break the frontend.
-- Converts public-instance HTML/RSS/Atom fallback responses back into the
-  Reddit JSON shapes expected by the React app.
-- Ships deploy paths for Vercel, Cloudflare Pages Functions, and a Render
-  Node proxy service.
+## Shared server gateway
 
-## Technology Stack
+`api/redditProxy.ts` is the canonical gateway core. It validates allowed Reddit
+paths, strips RedAlt-only query parameters, validates response shape before
+returning JSON, caches successful responses briefly, shares concurrent OAuth
+token exchanges, and normalizes upstream 429 responses into structured JSON.
 
-- Frontend: React 19, TypeScript, Vite, React Router, `react-markdown`, and
-  `remark-gfm`.
-- Browser state: `localStorage` and `sessionStorage`.
-- Serverless/proxy paths:
-  - `api/reddit.ts`: Vercel API adapter.
-  - `functions/api/reddit/[[path]].ts`: Cloudflare Pages Function adapter.
-  - `api/redditProxy.ts`: shared TypeScript proxy core used by the Vercel and
-    Cloudflare adapters.
-  - `fly-proxy/server.mjs`: standalone Node proxy used by Render.
-- PWA pieces: `public/manifest.webmanifest` and `public/sw.js`.
+Normal server behavior:
 
-## Main Product Surfaces
+1. Use `REDDIT_OAUTH_ACCESS_TOKEN`, or exchange `REDDIT_CLIENT_ID` and
+   `REDDIT_CLIENT_SECRET` for an OAuth token. `REDDIT_REFRESH_TOKEN` is
+   supported for user-authorized access.
+2. Fetch the requested path from `https://oauth.reddit.com` with an honest
+   `REDDIT_PROXY_USER_AGENT`.
+3. Use a small anonymous direct request only as best-effort degraded behavior.
+4. Return a structured, retryable failure before the request deadline if no
+   usable source responds.
 
-- `/`: home page with search, quick subreddit links, recent custom-feed
-  subreddits, and a small trending preview from `popular` or `all`.
-- `/r/:name`: subreddit feed with sort controls, top-time range support,
-  discovered flair filtering, keyboard navigation, scroll restoration,
-  infinite/load-more behavior, card layout settings, and media-feed mode.
-- `/u/:username` and `/user/:username`: user submitted-post feed with the same
-  general listing behavior as subreddit feeds.
-- `/search`: post, subreddit, and user search with sort, top range, subreddit
-  scoping, NSFW toggle, media-type filtering, and "view more" limits.
-- `/r/:name/comments/:id`: post detail, media rendering, top-level comment
-  pagination, nested comment rendering, collapse/expand, save/share/open links,
-  and watch-history recording.
-- `/saved` and `/history`: local saved-post and watch-history library views.
+`getRedditProxyStatus` is the safe, configuration-level status surface. It
+never exposes a credential or token. Adapters serve it at `GET /api/status`;
+`ready` means OAuth is configured, while `degraded` means the gateway lacks the
+normal OAuth path. It is not a Reddit upstream liveness probe.
 
-## How Data Flows
+The OAuth values are server-only and must never use a `VITE_` prefix. Local
+Vite development loads them only in `viteRedditProxy.ts`'s Node process.
 
-The frontend request layer is `src/lib/redditApi.ts`.
+### Explicit degraded fallback mode
 
-1. It builds API paths for Reddit-style JSON endpoints.
-2. It chooses proxy bases from `VITE_REDDIT_API_BASES`, or from built-in
-   defaults when the env var is missing.
-3. Current built-in default order in code is:
-   `https://redalt-vercel.onrender.com/api/reddit`,
-   `https://redalt.pages.dev/api/reddit`,
-   then `/api/reddit`.
-4. In Vite dev mode, `/api/reddit` is removed from the default base list unless
-   explicitly configured, because the plain Vite server does not provide the
-   serverless API route.
-5. After a proxy returns valid JSON, the client pins that base for the browser
-   session using `sessionStorage` key `redalt.redditApiBase`, with an in-memory
-   fallback if storage is unavailable.
-6. Network errors, 429, 403, 451, and 5xx responses can clear the session pin
-   and put a base on cooldown, allowing the client to try another proxy.
-7. Valid payloads are normalized in `src/lib/normalizePost.ts`.
-8. `src/components/media/RenderMedia.tsx` chooses the concrete renderer for
-   text, image, gallery, video, external embed, or plain link posts.
+Public instances, dynamic instance discovery, AllOrigins, and old-Reddit/RSS
+scraping are disabled by default. They are compatibility paths with slower,
+less reliable media and HTML-dependent parsing.
 
-The built-in production order is Render, Cloudflare Pages, then same-origin.
-Set `VITE_REDDIT_API_BASES` explicitly to override that priority.
+- `ENABLE_PUBLIC_INSTANCE_FALLBACK=true` enables bounded public-instance use.
+- `REDDIT_PUBLIC_INSTANCE_BASES` gives operator-provided instances priority.
+- `ENABLE_PUBLIC_INSTANCE_DISCOVERY=true` allows dynamic instance-list lookup.
+- `ENABLE_MIRROR_FALLBACK=true` enables AllOrigins.
+- `ENABLE_LEGACY_SCRAPE_FALLBACK=true` enables old-Reddit HTML and RSS parsing.
 
-## Proxy Behavior
+Do not enable these just to hide an OAuth/deployment problem. First verify the
+official gateway's credentials, user agent, and deployment logs.
 
-`api/redditProxy.ts` is the shared proxy core for Vercel and Cloudflare Pages.
-It only allows public Reddit paths under:
+## Runtime adapters
 
-- `/r/`
-- `/user/`
-- `/search.json`
-- `/subreddits/`
-- `/users/`
-- `/api/search_reddit_names.json`
+- `api/reddit.ts` and `api/status.ts`: Vercel adapters. The former calls the
+  shared core directly; the latter exposes safe gateway configuration.
+- `functions/api/reddit/[[path]].ts` and `functions/api/status.ts`: Cloudflare
+  Pages adapters for requests and safe gateway configuration.
+- `viteRedditProxy.ts`: local Vite adapter that loads private `.env.local`
+  values without putting them in the browser bundle; it also serves `/api/status`.
+- `fly-proxy/server.mjs`: Render/Node adapter with `/healthz` and `/api/status`;
+  it imports the shared core and its deployment root must include `api/redditProxy.ts`.
 
-The proxy strips RedAlt-only query parameters such as `redalt_media` before
-calling upstream services. The media preference lets the frontend choose
-whether fallback images stay on the public instance host or are rewritten back
-to Reddit CDN URLs when possible.
+All adapters should return structured JSON failures rather than allowing a
+runtime exception to become an opaque host-level 500.
 
-The Vercel adapter can try the Cloudflare Pages proxy first. After that, the
-shared proxy attempts:
+## Main code surfaces
 
-1. Public alternative frontend instances, including configured instances,
-   static known bases, and dynamically fetched Redlib/Libreddit instance lists.
-2. Direct Reddit JSON hosts: `www.reddit.com`, `api.reddit.com`, and
-   `old.reddit.com`.
-3. AllOrigins mirror fallback when enabled.
-4. Reddit RSS/Atom fallback for compatible listing and comment routes.
+- `src/lib/redditApi.ts`: API paths, timeouts, cache/payload merge, source
+  selection, detail media repair.
+- `src/lib/usePostListingFeed.ts`: shared feed lifecycle, pagination,
+  cancellation, and retry.
+- `src/lib/normalizePost.ts`: converts Reddit-shaped data to renderable post
+  data. Fix data quality here or in the gateway before changing cards.
+- `src/components/media/RenderMedia.tsx`: chooses media renderers.
+- `src/pages/SubredditPage.tsx`, `UserPage.tsx`, `HomePage.tsx`, and
+  `PostDetailPage.tsx`: user-facing loading/error/recovery flows.
+- `src/components/StateView.tsx`: coherent visible loading, empty, and error
+  states.
 
-The Render/Fly proxy in `fly-proxy/server.mjs` is a standalone Node HTTP adapter
-with `/healthz` that imports the shared `api/redditProxy.ts` core. Its deploy
-context must remain the repository root so that shared module is packaged.
+## Deployment notes
 
-## What Works
+Set `VITE_REDDIT_API_BASES=/api/reddit` for the frontend served by a gateway.
+Add these secrets/values to that gateway's environment:
 
-- The React app has complete route coverage for home, subreddit feeds, user
-  feeds, search, post detail, saved posts, and history.
-- Subreddit/user listing state is centralized in `usePostListingFeed`, including
-  initial load, load-more state, error state, duplicate filtering, and media-mode
-  fetching behavior.
-- Feed sorting supports `hot`, `new`, `rising`, and `top`, with top-time ranges.
-- Subreddit flair filtering works from flairs discovered in already loaded
-  posts.
-- Search can return posts, subreddits, and users. It supports filters and local
-  "view more" expansion by requesting larger limits.
-- Post cards support save/unsave, share/copy, opening Reddit discussion, opening
-  the original source URL, card modes, open-in-new-tab behavior, long-text
-  preview expansion, and scroll restoration.
-- Post detail can render a route-provided fallback post while the detail request
-  is failing or still loading, so the UI can still show the opened post when it
-  was reached from a listing.
-- Comments render nested replies and support top-level paging and collapse.
-- Local saved posts and watch history work through `localStorage`.
-- Custom feed subreddit storage works through `localStorage` and the
-  `redalt-custom-feed-update` event.
-- UI settings persist through `localStorage` and include theme, autoplay,
-  columns, media-feed mode, card mode, sticky header, open-in-new-tab, and
-  fallback media-source preference.
-- The service worker caches the app shell and successful runtime GET responses,
-  including previously fetched Reddit proxy responses.
-- The proxy can reject degenerate fallback payloads that only contain title/link
-  stubs and no renderable content.
-- Public-instance fallback can parse Redlib-style HTML listings and comment
-  pages into Reddit-shaped post/comment payloads.
-- RSS/Atom fallback supports both `<item>` and `<entry>` formats and locally
-  paginates fallback listings when upstream cursors are unavailable.
+```bash
+REDDIT_PROXY_USER_AGENT="web:RedAlt:0.2.0 (public read-only client)"
+REDDIT_CLIENT_ID=...
+REDDIT_CLIENT_SECRET=...
+# optional
+REDDIT_REFRESH_TOKEN=...
+```
 
-## What Is Fragile Or Does Not Work
+`render.yaml` declares the relevant secret placeholders. Cross-host source
+chains are no longer required. A previous Vercel deployment returned
+`FUNCTION_INVOCATION_FAILED` even for an invalid path; validate a fresh deploy
+with `/api/reddit/not-allowed` (expected 400) before treating it as healthy.
 
-- RedAlt does not support authenticated Reddit actions: login, voting, saving to
-  Reddit, commenting, posting, messaging, subscriptions, moderation, or account
-  data.
-- Reddit OAuth was removed from this codebase. The current model is anonymous
-  public browsing through proxies and fallbacks.
-- Live deployment health is not guaranteed by the repo. The README lists
-  `https://redalt.vercel.app`, `https://redalt.pages.dev`, and
-  `https://redalt-vercel.onrender.com`, but this file does not verify their
-  current uptime.
-- Reddit and public instances can still block requests with 403/451, bot checks,
-  CAPTCHA-style pages, Anubis proof-of-work pages, or unexpected HTML. The proxy
-  tries to work around this but cannot guarantee every route.
-- Public-instance parsing is inherently brittle because it depends on third-party
-  HTML structure and public instance availability.
-- RSS/Atom fallback is lower fidelity than Reddit JSON or Redlib HTML. It may
-  miss media metadata, scores, flair, exact comment counts, gallery structure,
-  or nested comments depending on the source feed.
-- Search can be partial. On Cloudflare Pages hosts, some block-prone search
-  endpoints are skipped by the client, so user search/typeahead behavior can be
-  reduced compared with other hosts.
-- The browser library is local-only. Clearing browser storage or switching
-  browsers/devices loses saved posts, history, custom feeds, and settings.
-- The service worker may serve cached runtime responses while offline. This is
-  useful for resilience but can make stale Reddit content appear if the network
-  is unavailable.
-- `npm test` covers safe browser-storage behavior and proxy route authorization.
-  Parser fixtures and browser-level interaction tests are still missing, so
-  `npm run build` remains part of the main verification flow.
-- Plain Vite local development relies on the remote default proxies unless
-  `VITE_REDDIT_API_BASES` is set. The same-origin `/api/reddit` route is not
-  available from Vite alone.
+## Verification matrix
 
-## Deployment And Configuration Notes
+Run after gateway or UI changes:
 
-Important environment variables:
-
-- `VITE_REDDIT_API_BASES`: comma-separated frontend proxy base list.
-- `REDDIT_PROXY_USER_AGENT`: user agent sent by proxy requests.
-- `ENABLE_PUBLIC_INSTANCE_FALLBACK`: defaults to enabled unless set to `false`.
-- `REDDIT_PUBLIC_INSTANCE_BASES`: optional comma-separated preferred public or
-  self-hosted fallback instances.
-- `ENABLE_MIRROR_FALLBACK`: used by the Render proxy to control AllOrigins
-  mirror fallback.
-
-Deployment paths:
-
-- Vercel uses `api/reddit.ts` and `api/redditProxy.ts`.
-- Cloudflare Pages uses `functions/api/reddit/[[path]].ts` and
-  `api/redditProxy.ts`.
-- Render uses the repository root plus `fly-proxy/server.mjs`,
-  `fly-proxy/package.json`, `api/redditProxy.ts`, and `render.yaml`.
-
-## Verification Notes
-
-Use these checks after meaningful code changes:
-
+- `npm test`
+- `npm run test:components`
+- `npx tsc -b --pretty false`
 - `npm run build`
-- Direct proxy probes against representative paths, for example:
-  - `/api/reddit/r/popular/hot.json?raw_json=1&limit=8`
-  - `/api/reddit/search.json?raw_json=1&type=link&q=mildlyinfuriating`
-  - `/api/reddit/r/<subreddit>/comments/<postId>.json?raw_json=1&limit=100`
-- Browser checks for:
-  - a subreddit feed,
-  - load-more behavior,
-  - a media-heavy post,
-  - a post detail page with comments,
-  - search results,
-  - saved/history behavior,
-  - media-feed mode.
+- `$env:PLAYWRIGHT_PORT='5191'; npm run test:e2e`
+- `node --check fly-proxy/server.mjs`
+- `git diff --check`
 
-On Windows/PowerShell, use `-LiteralPath` for
-`functions/api/reddit/[[path]].ts` because brackets are treated as wildcard
-syntax otherwise.
+Probe `GET /api/status` first, then an OAuth-configured deployment directly for
+a feed, search, and detail thread. Check status, JSON content type,
+`X-RedAlt-Source: official-oauth`, payload renderability, and response time.
+Then browser-check initial feed, retry UI, rate-limit countdown, load more,
+detail/comments, explicit media repair, search, and shorts mode.
 
-Known local friction on this machine includes occasional Windows/OneDrive or
-sandbox-related `spawn EPERM` failures. Re-run the same build or git operation
-with the needed permissions before treating that as a code regression.
+## Maintenance rules
 
-## Maintenance Rules
-
-- If Reddit loading breaks, inspect direct proxy responses and payload shape
-  before changing UI components.
-- If fallback content loads but looks wrong, fix normalization or proxy parsing
-  first; `PostCard` and `RenderMedia` can only render what normalized payloads
-  contain.
-- Keep `api/redditProxy.ts` and `fly-proxy/server.mjs` behaviorally aligned for
-  proxy fixes.
-- Keep `api/reddit.ts` and `functions/api/reddit/[[path]].ts` thin adapters over
-  the shared proxy core.
-- Prefer direct HTTP probes over browser-only checks when diagnosing Reddit
-  proxy issues.
-- Add focused parser/build checks before large changes to RSS, Redlib HTML, or
-  public-instance fallback behavior.
+- Diagnose live request/payload behavior before styling around an error.
+- Keep `api/redditProxy.ts` as the behavior source of truth; adapters remain
+  thin.
+- Treat scraper and public-instance changes as opt-in compatibility work, with
+  focused parser tests and hard request caps.
+- Keep credentials server-only and never log or return them.
+- On Windows/PowerShell, use `-LiteralPath` for
+  `functions/api/reddit/[[path]].ts` because brackets are wildcard syntax.

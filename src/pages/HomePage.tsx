@@ -1,9 +1,12 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { readCustomFeedSubreddits } from '../lib/customFeed';
 import { normalizePost } from '../lib/normalizePost';
 import { fetchSubredditListing } from '../lib/redditApi';
+import { RedditApiError } from '../lib/errors';
 import { SkeletonLoader } from '../components/SkeletonLoader';
+import { LoadMoreRecovery } from '../components/LoadMoreButton';
+import { StateView } from '../components/StateView';
 import { PostHeader } from '../components/post/PostHeader';
 import { PostThumbnail } from '../components/post/PostThumbnail';
 import { useUiSettings } from '../lib/uiSettings';
@@ -30,10 +33,15 @@ export function HomePage() {
   const [query, setQuery] = useState('');
   const [trendingPosts, setTrendingPosts] = useState<NormalizedPost[]>([]);
   const [trendingLoading, setTrendingLoading] = useState(true);
+  const [trendingError, setTrendingError] = useState<string | null>(null);
+  const [trendingRetryVersion, setTrendingRetryVersion] = useState(0);
   const [visibleCount, setVisibleCount] = useState(3);
   const [after, setAfter] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [trendingLoadMoreError, setTrendingLoadMoreError] = useState<string | null>(null);
+  const [trendingLoadMoreRetryAt, setTrendingLoadMoreRetryAt] = useState<number | null>(null);
   const [currentSource, setCurrentSource] = useState<'popular' | 'all'>('popular');
+  const loadMorePausedRef = useRef(false);
 
   const {
     settings: { loadMoreMode, fallbackMediaSource, redditApiSource },
@@ -41,18 +49,23 @@ export function HomePage() {
 
   useEffect(() => {
     let ignore = false;
+    const controller = new AbortController();
 
     async function loadTrendingPosts() {
       setTrendingLoading(true);
+      setTrendingError(null);
+      setTrendingLoadMoreError(null);
+      setTrendingLoadMoreRetryAt(null);
+      loadMorePausedRef.current = false;
 
       try {
-        let result = await fetchSubredditListing('popular', { sort: 'hot' });
+        let result = await fetchSubredditListing('popular', { sort: 'hot', signal: controller.signal });
         if (!ignore) {
           setCurrentSource('popular');
         }
 
         if (result.posts.length === 0) {
-          result = await fetchSubredditListing('all', { sort: 'hot' });
+          result = await fetchSubredditListing('all', { sort: 'hot', signal: controller.signal });
           if (!ignore) {
             setCurrentSource('all');
           }
@@ -62,22 +75,14 @@ export function HomePage() {
           setTrendingPosts(result.posts.map(normalizePost));
           setAfter(result.after);
         }
-      } catch {
-        try {
-          const result = await fetchSubredditListing('all', { sort: 'hot' });
-          if (!ignore) {
-            setCurrentSource('all');
-            setTrendingPosts(result.posts.map(normalizePost));
-            setAfter(result.after);
-          }
-        } catch {
-          if (!ignore) {
-            setTrendingPosts([]);
-            setAfter(null);
-          }
+      } catch (error) {
+        if (!ignore && !controller.signal.aborted) {
+          setTrendingPosts([]);
+          setAfter(null);
+          setTrendingError(error instanceof Error ? error.message : 'Unable to load trending posts.');
         }
       } finally {
-        if (!ignore) {
+        if (!ignore && !controller.signal.aborted) {
           setTrendingLoading(false);
         }
       }
@@ -87,14 +92,17 @@ export function HomePage() {
 
     return () => {
       ignore = true;
+      controller.abort();
     };
-  }, [fallbackMediaSource, redditApiSource]);
+  }, [fallbackMediaSource, redditApiSource, trendingRetryVersion]);
 
   const loadMore = async () => {
-    if (!after || loadingMore) {
+    if (!after || loadingMore || loadMorePausedRef.current) {
       return;
     }
 
+    setTrendingLoadMoreError(null);
+    setTrendingLoadMoreRetryAt(null);
     setLoadingMore(true);
 
     try {
@@ -102,17 +110,40 @@ export function HomePage() {
       setTrendingPosts((prev) => [...prev, ...result.posts.map(normalizePost)]);
       setAfter(result.after);
       setVisibleCount((prev) => prev + 6);
-    } catch {
-      // Keep existing posts on error
+    } catch (error) {
+      // Keep the useful first page visible and let the reader decide when to
+      // retry instead of silently hammering the same pagination cursor.
+      loadMorePausedRef.current = true;
+      setTrendingLoadMoreError(error instanceof Error ? error.message : 'Unable to load more trending posts.');
+      setTrendingLoadMoreRetryAt(
+        error instanceof RedditApiError && error.retryAfterSeconds
+          ? Date.now() + error.retryAfterSeconds * 1000
+          : null,
+      );
     } finally {
       setLoadingMore(false);
     }
   };
 
+  const retryLoadMore = () => {
+    if (!after || loadingMore || (trendingLoadMoreRetryAt !== null && trendingLoadMoreRetryAt > Date.now())) {
+      return;
+    }
+
+    loadMorePausedRef.current = false;
+    setTrendingLoadMoreError(null);
+    setTrendingLoadMoreRetryAt(null);
+    void loadMore();
+  };
+
   const handleLoadMore = () => {
     const nextCount = visibleCount + 6;
     if (nextCount > trendingPosts.length && after) {
-      loadMore();
+      if (trendingLoadMoreError) {
+        retryLoadMore();
+      } else {
+        void loadMore();
+      }
     } else {
       setVisibleCount(nextCount);
     }
@@ -121,7 +152,7 @@ export function HomePage() {
   const { nearEndRef, triggerIndex } = useNearEndLoadMore({
     after: (after || visibleCount < trendingPosts.length) ? 'has-more' : null,
     loadingMore,
-    disabled: loadMoreMode === 'button',
+    disabled: loadMoreMode === 'button' || Boolean(trendingLoadMoreError),
     itemCount: Math.min(visibleCount, trendingPosts.length),
     loadMore: handleLoadMore,
   });
@@ -201,6 +232,16 @@ export function HomePage() {
           <div className="home-trending-grid">
             <SkeletonLoader kind="post-card" count={3} />
           </div>
+        ) : trendingError ? (
+          <StateView
+            kind="error"
+            message="Trending posts are temporarily unavailable."
+            detail={trendingError}
+            actionLabel="Try again"
+            onAction={() => setTrendingRetryVersion((version) => version + 1)}
+            alternateActionLabel="Open popular on Reddit"
+            alternateActionHref="https://www.reddit.com/r/popular/"
+          />
         ) : trendingPosts.length > 0 ? (
           <>
             <div className="home-trending-grid">
@@ -222,7 +263,14 @@ export function HomePage() {
               ))}
             </div>
             <div className="home-trending-actions" style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
-              {(visibleCount < trendingPosts.length || after) && (
+              {trendingLoadMoreError ? (
+                <LoadMoreRecovery
+                  message={trendingLoadMoreError}
+                  loading={loadingMore}
+                  onRetry={retryLoadMore}
+                  retryAt={trendingLoadMoreRetryAt}
+                />
+              ) : (visibleCount < trendingPosts.length || after) && (
                 <button
                   type="button"
                   className="home-search-submit"

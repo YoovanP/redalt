@@ -1,6 +1,4 @@
-import { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT, type RedditProxyEnv } from './redditProxy';
-
-const CLOUDFLARE_PROXY_BASE = 'https://redalt.pages.dev/api/reddit';
+import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from './redditProxy';
 
 type VercelRequestLike = {
   method?: string;
@@ -54,10 +52,21 @@ export default async function handler(req: VercelRequestLike, res: VercelRespons
 
   const incomingUrl = new URL(req.url ?? '/', 'http://localhost');
   const upstreamPath = buildUpstreamPath(req.query?.path, incomingUrl);
-  const response = await handleRedditProxyRequest(upstreamPath, process.env as RedditProxyEnv, {
-    cloudflareProxyBase: CLOUDFLARE_PROXY_BASE,
-    userAgentFallback: REDDIT_MOBILE_USER_AGENT,
-  });
+  try {
+    const response = await handleRedditProxyRequest(upstreamPath, process.env as RedditProxyEnv, {
+      userAgentFallback: REDDIT_PROXY_USER_AGENT,
+    });
 
-  await sendResponse(res, response);
+    await sendResponse(res, response);
+  } catch {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(502).send(
+      JSON.stringify({
+        error: 'proxy_failure',
+        message: 'The Reddit gateway failed before a response was available. Please try again.',
+        retryable: true,
+      }),
+    );
+  }
 }

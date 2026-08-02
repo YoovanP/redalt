@@ -12,10 +12,8 @@ import {
 } from '../lib/uiSettings';
 
 const REDDIT_SOURCE_OPTIONS: Array<{ value: RedditApiSource; label: string }> = [
-  { value: 'auto', label: 'Auto failover' },
-  { value: 'same-origin', label: 'Current deployment' },
-  { value: 'render', label: 'Render proxy' },
-  { value: 'cloudflare', label: 'Cloudflare Pages proxy' },
+  { value: 'auto', label: 'Configured gateway (recommended)' },
+  { value: 'same-origin', label: 'This deployment only' },
 ];
 
 export function SettingsPage() {
@@ -80,7 +78,7 @@ export function SettingsPage() {
         <h3 id="settings-source-heading">Source</h3>
         <div className="settings-field-list">
           <label className="settings-field">
-            <span>Reddit instance</span>
+            <span>Reddit gateway</span>
             <select
               value={draftSettings.redditApiSource}
               onChange={(event) => updateDraftSettings({ redditApiSource: event.target.value as RedditApiSource })}

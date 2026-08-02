@@ -11,6 +11,18 @@ services:
       - key: NODE_VERSION
         value: "22"
       - key: ENABLE_MIRROR_FALLBACK
-        value: "true"
+        value: "false"
+      - key: ENABLE_PUBLIC_INSTANCE_FALLBACK
+        value: "false"
+      - key: ENABLE_PUBLIC_INSTANCE_DISCOVERY
+        value: "false"
       - key: REDDIT_PROXY_USER_AGENT
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_REFRESH_TOKEN
+        sync: false
+      - key: REDDIT_OAUTH_ACCESS_TOKEN
         sync: false

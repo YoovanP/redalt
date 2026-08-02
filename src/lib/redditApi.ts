@@ -9,21 +9,18 @@ import type {
 } from '../types/reddit';
 
 const DEFAULT_REDDIT_BASE = '/api/reddit';
-const REMOTE_REDDIT_BASES = [
-  'https://redalt-vercel.onrender.com/api/reddit',
-  'https://redalt.pages.dev/api/reddit',
-] as const;
-const DEFAULT_REDDIT_BASES = [...REMOTE_REDDIT_BASES, DEFAULT_REDDIT_BASE];
+// The browser should have one clear request boundary. Deployments can explicitly opt into
+// additional owned API origins with VITE_REDDIT_API_BASES, but public proxy hopping must not
+// be the default user journey.
+const DEFAULT_REDDIT_BASES = [DEFAULT_REDDIT_BASE];
 const REDDIT_BASES = resolveRedditBases(import.meta.env.VITE_REDDIT_API_BASES);
 const SESSION_REDDIT_BASE_KEY = 'redalt.redditApiBase';
 const UI_SETTINGS_KEY = 'redalt.uiSettings';
 
-type RedditApiSourcePreference = 'auto' | 'same-origin' | 'render' | 'cloudflare';
+type RedditApiSourcePreference = 'auto' | 'same-origin';
 
 const REDDIT_API_SOURCE_BASES: Record<Exclude<RedditApiSourcePreference, 'auto'>, string> = {
   'same-origin': DEFAULT_REDDIT_BASE,
-  render: REMOTE_REDDIT_BASES[0],
-  cloudflare: REMOTE_REDDIT_BASES[1],
 };
 
 const PAGE_SIZE = 8;
@@ -32,15 +29,20 @@ const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 const POST_CACHE_KEY = 'redalt.postCache';
 const POST_CACHE_LIMIT = 120;
 const POST_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 12_000;
-const LISTING_FETCH_TIMEOUT_MS = 25_000;
-const DETAIL_FETCH_TIMEOUT_MS = 40_000;
-const DETAIL_FETCH_STAGGER_MS = 1_500;
-const DETAIL_RECOVERY_TIMEOUT_MS = 25_000;
+const FETCH_TIMEOUT_MS = 4_500;
+const LISTING_FETCH_TIMEOUT_MS = 4_000;
+const LISTING_REQUEST_TIMEOUT_MS = 7_000;
+const DETAIL_FETCH_TIMEOUT_MS = 6_000;
+const DETAIL_REQUEST_TIMEOUT_MS = 9_000;
+const DETAIL_FETCH_STAGGER_MS = 400;
+const DETAIL_RECOVERY_TIMEOUT_MS = 3_500;
+const DETAIL_RECOVERY_REQUEST_TIMEOUT_MS = 6_000;
 const DETAIL_FALLBACK_PAGE_SIZE = 40;
+const MAX_CLIENT_BASE_CANDIDATES = 2;
+const MAX_DETAIL_RECOVERY_ATTEMPTS = 2;
 
 let sessionRedditBase = readSessionRedditBase();
-const redditBaseHealth = new Map<string, { failureCount: number; retryAfter: number }>();
+const redditBaseHealth = new Map<string, { failureCount: number; retryAfter: number; rateLimited: boolean }>();
 const postCache = readSessionPostCache();
 
 function normalizeBase(base: string): string {
@@ -51,14 +53,6 @@ function normalizeBase(base: string): string {
   }
 
   return trimmed.replace(/\/+$/g, '');
-}
-
-function isCloudflarePagesHost(): boolean {
-  return typeof window !== 'undefined' && window.location.hostname.endsWith('.pages.dev');
-}
-
-function isViteDevServer(): boolean {
-  return import.meta.env.DEV;
 }
 
 function resolveBaseKey(base: string): string {
@@ -84,14 +78,6 @@ function shouldAvoidPersistingRedditBase(): boolean {
 }
 
 function getDefaultRedditBases(): string[] {
-  if (isViteDevServer()) {
-    return [...REMOTE_REDDIT_BASES];
-  }
-
-  if (isCloudflarePagesHost()) {
-    return [DEFAULT_REDDIT_BASE, ...REMOTE_REDDIT_BASES];
-  }
-
   return [...DEFAULT_REDDIT_BASES];
 }
 
@@ -204,6 +190,7 @@ export type FetchListingOptions = {
   after?: string | null;
   sort?: ListingSort;
   topTimeRange?: TopTimeRange;
+  signal?: AbortSignal;
 };
 
 type CachedPostEntry = {
@@ -211,7 +198,22 @@ type CachedPostEntry = {
   post: RedditPostData;
 };
 
-function notifyApiStatus(level: 'ok' | 'warn' | 'error', message: string): void {
+type ApiStatusDetail = {
+  level: 'ok' | 'warn' | 'error';
+  message: string;
+  retryAt?: number;
+};
+
+function formatRetryAfter(seconds: number): string {
+  if (seconds >= 60) {
+    const minutes = Math.ceil(seconds / 60);
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
+function notifyApiStatus(level: ApiStatusDetail['level'], message: string, retryAfterSeconds?: number): void {
   if (typeof window === 'undefined') {
     return;
   }
@@ -221,6 +223,7 @@ function notifyApiStatus(level: 'ok' | 'warn' | 'error', message: string): void 
       detail: {
         level,
         message,
+        retryAt: retryAfterSeconds ? Date.now() + retryAfterSeconds * 1000 : undefined,
       },
     }),
   );
@@ -763,7 +766,11 @@ async function fetchListingFallback(
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/r/' + encodeURIComponent(subreddit) + '/' + sort + '.json?' + queryParts.join('&'),
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
+    {
+      timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS,
+      requestTimeoutMs: DETAIL_RECOVERY_REQUEST_TIMEOUT_MS,
+      signal,
+    },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -780,7 +787,11 @@ async function fetchUserFallback(author: string, postId: string, signal?: AbortS
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/user/' + encodeURIComponent(cleanedAuthor) + '/submitted.json?raw_json=1&limit=' + DETAIL_FALLBACK_PAGE_SIZE + '&sort=new',
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
+    {
+      timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS,
+      requestTimeoutMs: DETAIL_RECOVERY_REQUEST_TIMEOUT_MS,
+      signal,
+    },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -802,7 +813,11 @@ async function fetchSearchFallback(
 
   const listing = await fetchReddit<RedditListingResponse>(
     '/r/' + encodeURIComponent(subreddit) + '/search.json?raw_json=1&restrict_sr=1&sort=relevance&limit=10&q=' + encodeURIComponent(query),
-    { timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS, signal },
+    {
+      timeoutMs: DETAIL_RECOVERY_TIMEOUT_MS,
+      requestTimeoutMs: DETAIL_RECOVERY_REQUEST_TIMEOUT_MS,
+      signal,
+    },
   );
   const posts = listing.data.children.filter((item) => item.kind === 't3').map((item) => item.data);
   rememberPosts(posts);
@@ -824,22 +839,25 @@ async function recoverPostFromFallbackSources(
     () => fetchListingFallback(subreddit, 'top', postId, 'week', signal),
   ].filter((attempt): attempt is () => Promise<RedditPostData | null> => Boolean(attempt));
 
-  const results = await Promise.all(
-    attempts.map(async (attempt) => {
-      try {
-        return await attempt();
-      } catch {
-        return null;
-      }
-    }),
-  );
+  // Detail enrichment is a repair path, not a second feed loader. Run a small
+  // bounded sequence so opening a post never creates a five-request burst.
+  for (const attempt of attempts.slice(0, MAX_DETAIL_RECOVERY_ATTEMPTS)) {
+    signal?.throwIfAborted();
 
-  return results
-    .filter((post): post is RedditPostData => Boolean(post))
-    .reduce<RedditPostData | null>(
-      (best, candidate) => (best ? chooseBetterCachedPost(best, candidate) : candidate),
-      null,
-    );
+    try {
+      const post = await attempt();
+
+      if (post) {
+        return post;
+      }
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return null;
 }
 
 function isConfiguredRedditBase(base: string): boolean {
@@ -915,24 +933,43 @@ function markRedditBaseSuccess(base: string): void {
   redditBaseHealth.delete(resolveBaseKey(base));
 }
 
-function markRedditBaseFailure(base: string): void {
+function markRedditBaseFailure(base: string, retryAfterSeconds?: number, rateLimited = false): void {
   const key = resolveBaseKey(base);
   const previous = redditBaseHealth.get(key);
   const failureCount = Math.min((previous?.failureCount ?? 0) + 1, 5);
-  const cooldown = Math.min(
+  const exponentialCooldown = Math.min(
     REDDIT_BASE_FAILURE_BASE_COOLDOWN_MS * 2 ** (failureCount - 1),
     REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS,
   );
+  // When Reddit tells us exactly when the next request is allowed, honor that
+  // window rather than replacing it with our generic failure backoff.
+  const cooldown = retryAfterSeconds ? retryAfterSeconds * 1000 : exponentialCooldown;
 
   redditBaseHealth.set(key, {
     failureCount,
     retryAfter: Date.now() + cooldown,
+    rateLimited,
   });
 }
 
 function isRedditBaseCoolingDown(base: string): boolean {
   const health = redditBaseHealth.get(resolveBaseKey(base));
   return Boolean(health && health.retryAfter > Date.now());
+}
+
+function getSoonestRedditBaseRetryAfterSeconds(): number | undefined {
+  let soonestRetryAfter = Number.POSITIVE_INFINITY;
+  const now = Date.now();
+
+  for (const base of REDDIT_BASES) {
+    const retryAfter = redditBaseHealth.get(resolveBaseKey(base))?.retryAfter;
+
+    if (retryAfter && retryAfter > now) {
+      soonestRetryAfter = Math.min(soonestRetryAfter, retryAfter);
+    }
+  }
+
+  return Number.isFinite(soonestRetryAfter) ? Math.max(1, Math.ceil((soonestRetryAfter - now) / 1000)) : undefined;
 }
 
 function getRedditBaseCandidates(): string[] {
@@ -957,10 +994,18 @@ function getRedditBaseCandidates(): string[] {
     ];
   }
 
-  const activeCandidates = candidates.filter(
-    (base, index) => (Boolean(selectedBase) && index === 0) || !isRedditBaseCoolingDown(base),
-  );
-  return activeCandidates.length > 0 ? activeCandidates : candidates;
+  const activeCandidates = candidates.filter((base) => !isRedditBaseCoolingDown(base));
+
+  if (activeCandidates.length > 0) {
+    return activeCandidates.slice(0, MAX_CLIENT_BASE_CANDIDATES);
+  }
+
+  // Back off only when Reddit explicitly rate-limits us. A generic 5xx or
+  // network failure is still worth a reader-triggered retry, especially when
+  // there is only one same-origin gateway.
+  return candidates
+    .filter((base) => !redditBaseHealth.get(resolveBaseKey(base))?.rateLimited)
+    .slice(0, MAX_CLIENT_BASE_CANDIDATES);
 }
 
 function getRedditApiSourcePref(): RedditApiSourcePreference {
@@ -978,9 +1023,7 @@ function getRedditApiSourcePref(): RedditApiSourcePreference {
     const parsed = JSON.parse(raw) as { redditApiSource?: unknown };
 
     if (
-      parsed.redditApiSource === 'same-origin' ||
-      parsed.redditApiSource === 'render' ||
-      parsed.redditApiSource === 'cloudflare'
+      parsed.redditApiSource === 'same-origin'
     ) {
       return parsed.redditApiSource;
     }
@@ -1036,6 +1079,7 @@ type FetchRedditStrategy = 'sequential' | 'staggered';
 
 type FetchRedditOptions = {
   timeoutMs?: number;
+  requestTimeoutMs?: number;
   strategy?: FetchRedditStrategy;
   staggerMs?: number;
   signal?: AbortSignal;
@@ -1045,18 +1089,20 @@ type FetchFailureStatusMode = 'retrying' | 'failed' | 'silent';
 
 function notifyRetryableFetchFailure(error: RedditApiError, mode: Exclude<FetchFailureStatusMode, 'silent'>): void {
   if (error.status === 429) {
+    const wait = error.retryAfterSeconds ? ` Try again in ${formatRetryAfter(error.retryAfterSeconds)}.` : '';
     notifyApiStatus(
       'warn',
       mode === 'retrying'
-        ? 'Reddit rate limit hit. Retrying...'
-        : 'Reddit is rate-limiting requests right now. Please retry in a moment.',
+        ? `Reddit rate limit hit. Trying another configured source.${wait}`
+        : `Reddit is rate-limiting requests right now.${wait}`,
+      error.retryAfterSeconds,
     );
   } else if (error.status === 403 || error.status === 451) {
     notifyApiStatus(
       'warn',
       mode === 'retrying'
-        ? 'Reddit blocked one proxy. Trying another...'
-        : 'Reddit blocked the available proxies. Please retry in a moment.',
+        ? 'That Reddit source is unavailable. Trying the next configured source...'
+        : 'The selected Reddit source is unavailable. Please retry in a moment.',
     );
   } else if (error.status >= 500 || error.status === 0) {
     notifyApiStatus(
@@ -1073,7 +1119,7 @@ function handleFetchRedditFailure(
 ): RedditApiError | null {
   if (error instanceof RedditApiError) {
     if (isSourceSwitchableError(error)) {
-      markRedditBaseFailure(base);
+      markRedditBaseFailure(base, error.retryAfterSeconds, error.status === 429);
       clearSessionRedditBase(base);
     }
 
@@ -1121,7 +1167,7 @@ async function fetchRedditFromBase<T>(
     });
 
     if (!response.ok) {
-      throw new RedditApiError(await readApiErrorMessage(response), response.status);
+      throw await readApiError(response);
     }
 
     const contentType = response.headers.get('Content-Type') ?? '';
@@ -1153,44 +1199,52 @@ async function fetchRedditFromBase<T>(
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === 'AbortError';
+  return (
+    (error instanceof DOMException && error.name === 'AbortError') ||
+    (error instanceof Error && error.name === 'AbortError')
+  );
 }
 
 async function fetchRedditSequential<T>(requestPath: string, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   let lastError: unknown;
   let lastApiError: RedditApiError | null = null;
+  const bases = getRedditBaseCandidates();
 
-  for (let cycle = 0; cycle < 2; cycle += 1) {
-    for (const base of getRedditBaseCandidates()) {
-      signal?.throwIfAborted();
+  if (bases.length === 0) {
+    const retryAfterSeconds = getSoonestRedditBaseRetryAfterSeconds();
+    const error = new RedditApiError(
+      retryAfterSeconds
+        ? `Reddit asked this source to wait ${formatRetryAfter(retryAfterSeconds)} before another request.`
+        : 'Reddit is temporarily cooling down. Please try again shortly.',
+      429,
+      retryAfterSeconds,
+    );
+    notifyRetryableFetchFailure(error, 'failed');
+    throw error;
+  }
 
-      try {
-        return await fetchRedditFromBase<T>(base, requestPath, timeoutMs, signal);
-      } catch (error) {
-        if (signal?.aborted || isAbortError(error)) {
-          throw error;
-        }
+  for (const base of bases) {
+    signal?.throwIfAborted();
 
-        lastError = error;
+    try {
+      return await fetchRedditFromBase<T>(base, requestPath, timeoutMs, signal);
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) {
+        throw error;
+      }
 
-        const apiError = handleFetchRedditFailure(base, error);
+      lastError = error;
+      const apiError = handleFetchRedditFailure(base, error);
 
-        if (apiError) {
-          lastApiError = apiError;
+      if (apiError) {
+        lastApiError = apiError;
 
-          if (apiError.status !== 429 && apiError.status < 500) {
-            continue;
-          }
+        // A malformed route or a genuine 404 will not be repaired by making
+        // the user wait for another server. Only availability failures move on.
+        if (!isSourceSwitchableError(apiError)) {
+          break;
         }
       }
-    }
-
-    if (lastApiError && !shouldRetryApiError(lastApiError) && !isSourceSwitchableError(lastApiError)) {
-      break;
-    }
-
-    if (cycle === 0) {
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
     }
   }
 
@@ -1319,28 +1373,90 @@ async function fetchReddit<T>(path: string, options: FetchRedditOptions = {}): P
   const requestPath = appendMediaPref(path);
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
   const strategy = options.strategy ?? 'sequential';
+  const requestTimeoutMs = options.requestTimeoutMs ?? timeoutMs;
+  const deadlineController = new AbortController();
+  let requestTimedOut = false;
+  const onParentAbort = () => deadlineController.abort(options.signal?.reason);
 
-  if (strategy === 'staggered') {
-    return fetchRedditStaggered<T>(requestPath, timeoutMs, options.staggerMs ?? 0, options.signal);
+  if (options.signal?.aborted) {
+    deadlineController.abort(options.signal.reason);
+  } else {
+    options.signal?.addEventListener('abort', onParentAbort, { once: true });
   }
 
-  return fetchRedditSequential<T>(requestPath, timeoutMs, options.signal);
-}
-
-async function readApiErrorMessage(response: Response): Promise<string> {
-  const fallback = getApiErrorMessage(response.status);
-  const contentType = response.headers.get('Content-Type') ?? '';
-
-  if (!contentType.toLowerCase().includes('application/json')) {
-    return fallback;
-  }
+  const deadlineId = globalThis.setTimeout(() => {
+    requestTimedOut = true;
+    deadlineController.abort(new DOMException('Request timed out.', 'AbortError'));
+  }, requestTimeoutMs);
 
   try {
-    const payload = (await response.clone().json()) as { message?: unknown };
-    return typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
-  } catch {
-    return fallback;
+    if (strategy === 'staggered') {
+      return await fetchRedditStaggered<T>(
+        requestPath,
+        timeoutMs,
+        options.staggerMs ?? 0,
+        deadlineController.signal,
+      );
+    }
+
+    return await fetchRedditSequential<T>(requestPath, timeoutMs, deadlineController.signal);
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
+
+    if (requestTimedOut) {
+      throw new RedditApiError('This request took too long. Please try again.', 504);
+    }
+
+    throw error;
+  } finally {
+    globalThis.clearTimeout(deadlineId);
+    options.signal?.removeEventListener('abort', onParentAbort);
   }
+}
+
+function normalizeRetryAfterSeconds(value: unknown): number | undefined {
+  const numericValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+
+  return Number.isFinite(numericValue) && numericValue >= 0 ? Math.max(1, Math.ceil(numericValue)) : undefined;
+}
+
+function readRetryAfterSeconds(response: Response): number | undefined {
+  const rawValue = response.headers.get('Retry-After')?.trim();
+
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const numericRetryAfter = normalizeRetryAfterSeconds(rawValue);
+
+  if (numericRetryAfter) {
+    return numericRetryAfter;
+  }
+
+  const retryAt = Date.parse(rawValue);
+
+  return Number.isFinite(retryAt) ? Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) : undefined;
+}
+
+async function readApiError(response: Response): Promise<RedditApiError> {
+  const fallback = getApiErrorMessage(response.status);
+  const contentType = response.headers.get('Content-Type') ?? '';
+  let message = fallback;
+  let bodyRetryAfterSeconds: number | undefined;
+
+  if (contentType.toLowerCase().includes('application/json')) {
+    try {
+      const payload = (await response.clone().json()) as { message?: unknown; retryAfterSeconds?: unknown };
+      message = typeof payload.message === 'string' && payload.message.trim() ? payload.message : fallback;
+      bodyRetryAfterSeconds = normalizeRetryAfterSeconds(payload.retryAfterSeconds);
+    } catch {
+      // Preserve the status-derived error when a proxy returns invalid JSON.
+    }
+  }
+
+  return new RedditApiError(message, response.status, readRetryAfterSeconds(response) ?? bodyRetryAfterSeconds);
 }
 
 function getListingAfter(listing: RedditListingResponse): string | null {
@@ -1379,7 +1495,11 @@ export async function fetchSubredditListing(
 
   const data = await fetchReddit<RedditListingResponse>(
     `/r/${encodeURIComponent(subreddit)}/${sort}.json?${queryParts.join('&')}`,
-    { timeoutMs: LISTING_FETCH_TIMEOUT_MS },
+    {
+      timeoutMs: LISTING_FETCH_TIMEOUT_MS,
+      requestTimeoutMs: LISTING_REQUEST_TIMEOUT_MS,
+      signal: options.signal,
+    },
   );
   const posts = data.data.children.map((item) => item.data);
   rememberPosts(posts);
@@ -1411,7 +1531,11 @@ export async function fetchUserListing(
 
   const data = await fetchReddit<RedditListingResponse>(
     `/user/${encodeURIComponent(user)}/submitted.json?${queryParts.join('&')}&sort=${encodeURIComponent(sort)}`,
-    { timeoutMs: LISTING_FETCH_TIMEOUT_MS },
+    {
+      timeoutMs: LISTING_FETCH_TIMEOUT_MS,
+      requestTimeoutMs: LISTING_REQUEST_TIMEOUT_MS,
+      signal: options.signal,
+    },
   );
   const posts = data.data.children.map((item) => item.data);
   rememberPosts(posts);
@@ -1759,6 +1883,7 @@ export async function fetchPostDetail(
       `/r/${encodeURIComponent(subreddit)}/comments/${encodeURIComponent(postId)}.json?raw_json=1`,
       {
         timeoutMs: DETAIL_FETCH_TIMEOUT_MS,
+        requestTimeoutMs: DETAIL_REQUEST_TIMEOUT_MS,
         strategy: 'staggered',
         staggerMs: DETAIL_FETCH_STAGGER_MS,
         signal: options.signal,
