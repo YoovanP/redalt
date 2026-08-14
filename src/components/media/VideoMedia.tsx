@@ -56,10 +56,11 @@ export function VideoMedia({
       return;
     }
 
-    if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      return;
-    }
-
+    // Do not trust `canPlayType('application/vnd.apple.mpegurl')`: several
+    // Chromium builds report "maybe" without actually playing HLS natively,
+    // which silently leaves the video with no usable source. Attach hls.js
+    // whenever it is supported; the native <source> children remain as the
+    // Safari fallback when MediaSource is unavailable.
     let cancelled = false;
     let hls: import('hls.js').default | null = null;
 

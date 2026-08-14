@@ -29,14 +29,14 @@ const REDDIT_BASE_FAILURE_MAX_COOLDOWN_MS = 5 * 60 * 1000;
 const POST_CACHE_KEY = 'redalt.postCache';
 const POST_CACHE_LIMIT = 120;
 const POST_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
-const FETCH_TIMEOUT_MS = 4_500;
-const LISTING_FETCH_TIMEOUT_MS = 4_000;
-const LISTING_REQUEST_TIMEOUT_MS = 7_000;
-const DETAIL_FETCH_TIMEOUT_MS = 6_000;
-const DETAIL_REQUEST_TIMEOUT_MS = 9_000;
+const FETCH_TIMEOUT_MS = 8_000;
+const LISTING_FETCH_TIMEOUT_MS = 8_000;
+const LISTING_REQUEST_TIMEOUT_MS = 12_000;
+const DETAIL_FETCH_TIMEOUT_MS = 10_000;
+const DETAIL_REQUEST_TIMEOUT_MS = 15_000;
 const DETAIL_FETCH_STAGGER_MS = 400;
-const DETAIL_RECOVERY_TIMEOUT_MS = 3_500;
-const DETAIL_RECOVERY_REQUEST_TIMEOUT_MS = 6_000;
+const DETAIL_RECOVERY_TIMEOUT_MS = 6_000;
+const DETAIL_RECOVERY_REQUEST_TIMEOUT_MS = 9_000;
 const DETAIL_FALLBACK_PAGE_SIZE = 40;
 const MAX_CLIENT_BASE_CANDIDATES = 2;
 const MAX_DETAIL_RECOVERY_ATTEMPTS = 2;
@@ -44,6 +44,116 @@ const MAX_DETAIL_RECOVERY_ATTEMPTS = 2;
 let sessionRedditBase = readSessionRedditBase();
 const redditBaseHealth = new Map<string, { failureCount: number; retryAfter: number; rateLimited: boolean }>();
 const postCache = readSessionPostCache();
+
+// Search fans out into three upstream requests per call. Remember recent
+// results in session storage so toggling filters or revisiting a previous
+// query does not re-press the upstream source (and the per-IP request budget).
+const SEARCH_CACHE_KEY = 'redalt.searchCache';
+const SEARCH_CACHE_MAX_AGE_MS = 30 * 60 * 1000;
+const SEARCH_CACHE_LIMIT = 20;
+const searchCache = new Map<string, { savedAt: number; result: GlobalSearchResult }>();
+
+function readSessionSearchCache(): Map<string, { savedAt: number; result: GlobalSearchResult }> {
+  const cache = new Map<string, { savedAt: number; result: GlobalSearchResult }>();
+
+  if (!canUseSessionStorage()) {
+    return cache;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(SEARCH_CACHE_KEY);
+
+    if (!raw) {
+      return cache;
+    }
+
+    const parsed = JSON.parse(raw) as Array<{ key?: unknown; savedAt?: unknown; result?: GlobalSearchResult }>;
+    const now = Date.now();
+
+    for (const entry of Array.isArray(parsed) ? parsed : []) {
+      const key = typeof entry?.key === 'string' ? entry.key : '';
+      const savedAt = typeof entry?.savedAt === 'number' ? entry.savedAt : 0;
+
+      if (!key || !entry?.result || now - savedAt > SEARCH_CACHE_MAX_AGE_MS) {
+        continue;
+      }
+
+      cache.set(key, { savedAt, result: entry.result });
+    }
+  } catch {
+    return new Map<string, { savedAt: number; result: GlobalSearchResult }>();
+  }
+
+  return cache;
+}
+
+function writeSessionSearchCache(): void {
+  if (!canUseSessionStorage()) {
+    return;
+  }
+
+  try {
+    const entries = Array.from(searchCache.entries())
+      .sort((left, right) => right[1].savedAt - left[1].savedAt)
+      .slice(0, SEARCH_CACHE_LIMIT)
+      .map(([key, entry]) => ({ key, savedAt: entry.savedAt, result: entry.result }));
+
+    window.sessionStorage.setItem(SEARCH_CACHE_KEY, JSON.stringify(entries));
+  } catch {
+    // Keep using the in-memory cache when storage is unavailable.
+  }
+}
+
+function getCachedSearchResult(key: string): GlobalSearchResult | null {
+  ensureSearchCacheInitialized();
+
+  const entry = searchCache.get(key);
+
+  if (!entry) {
+    return null;
+  }
+
+  if (Date.now() - entry.savedAt > SEARCH_CACHE_MAX_AGE_MS) {
+    searchCache.delete(key);
+    writeSessionSearchCache();
+    return null;
+  }
+
+  return entry.result;
+}
+
+function rememberSearchResult(key: string, result: GlobalSearchResult): void {
+  ensureSearchCacheInitialized();
+
+  searchCache.set(key, { savedAt: Date.now(), result });
+
+  while (searchCache.size > SEARCH_CACHE_LIMIT) {
+    const oldestKey = searchCache.keys().next().value;
+
+    if (typeof oldestKey !== 'string') {
+      break;
+    }
+
+    searchCache.delete(oldestKey);
+  }
+
+  writeSessionSearchCache();
+}
+
+// Populated lazily on first use so SSR-less module init stays cheap.
+let searchCacheInitialized = false;
+
+function ensureSearchCacheInitialized(): void {
+  if (searchCacheInitialized) {
+    return;
+  }
+
+  searchCacheInitialized = true;
+
+  for (const [key, entry] of readSessionSearchCache()) {
+    searchCache.set(key, entry);
+  }
+}
 
 function normalizeBase(base: string): string {
   const trimmed = base.trim();
@@ -1739,6 +1849,24 @@ export async function fetchGlobalSearch(
   const subredditLimit = Math.min(Math.max(options.subredditLimit ?? 12, 1), 100);
   const userLimit = Math.min(Math.max(options.userLimit ?? 12, 1), 100);
 
+  if (cleaned.length < 2) {
+    return {
+      posts: [],
+      subreddits: [],
+      users: [],
+    };
+  }
+
+  // Searching fans out into three upstream requests. Remember recent results
+  // in the session so going back to a previous query/filter combination is
+  // instant and does not re-press the upstream source.
+  const searchCacheKey = `search:${cleaned.toLowerCase()}|${sort}|${topTimeRange}|${subredditScope.toLowerCase()}|${includeNsfw}|${postLimit}|${subredditLimit}|${userLimit}`;
+  const cachedSearch = getCachedSearchResult(searchCacheKey);
+
+  if (cachedSearch) {
+    return cachedSearch;
+  }
+
   const postSearchPath = subredditScope
     ? `/r/${encodeURIComponent(subredditScope)}/search.json?raw_json=1&restrict_sr=1`
     : '/search.json?raw_json=1';
@@ -1755,14 +1883,6 @@ export async function fetchGlobalSearch(
     `include_over_18=${includeNsfw ? 'on' : 'off'}`,
     `q=${encodeURIComponent(cleaned)}`,
   ];
-
-  if (cleaned.length < 2) {
-    return {
-      posts: [],
-      subreddits: [],
-      users: [],
-    };
-  }
 
   const [postListing, subredditListing, userListing] = await Promise.allSettled([
     fetchReddit<RedditListingResponse>(`${postSearchPath}&${postQueryParts.join('&')}`),
@@ -1824,11 +1944,14 @@ export async function fetchGlobalSearch(
     });
   }
 
-  return {
+  const result = {
     posts,
     subreddits,
     users,
   };
+  rememberSearchResult(searchCacheKey, result);
+
+  return result;
 }
 
 function extractComments(listing: RedditListingResponse, parentAuthor?: string): RedditComment[] {

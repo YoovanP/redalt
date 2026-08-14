@@ -10,6 +10,10 @@ type MediaShellProps = {
   onRetry?: () => void;
   outerRef?: RefObject<HTMLDivElement | null>;
   inline?: boolean;
+  // Content-sized shell: no aspect-ratio reservation. Used when media
+  // dimensions are unknown so the rendered element hugs the image instead of
+  // letterboxing it inside a guessed box.
+  natural?: boolean;
 };
 
 function getAspectRatio(width?: number, height?: number): number {
@@ -27,19 +31,23 @@ export function MediaShell({
   onRetry,
   outerRef,
   inline = false,
+  natural = false,
 }: MediaShellProps) {
   if (inline) return <>{children}</>;
 
   return (
     <div
       ref={outerRef}
-      className={`media-block media-shell ${className}`.trim()}
-      style={{ aspectRatio: String(getAspectRatio(width, height)) }}
+      className={`media-block media-shell${natural ? ' media-shell-natural' : ''} ${className}`.trim()}
+      style={natural ? undefined : { aspectRatio: String(getAspectRatio(width, height)) }}
       data-media-status={status}
     >
       {children}
       {(status === 'idle' || status === 'loading') && (
-        <div className="media-shell-status" role="status">Loading media...</div>
+        <div className="media-shell-status" role="status">
+          <span className="media-shell-shimmer" aria-hidden="true" />
+          <span className="media-shell-status-label">Loading media…</span>
+        </div>
       )}
       {status === 'error' && (
         <div className="media-shell-status media-shell-error" role="alert">

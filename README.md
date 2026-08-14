@@ -7,16 +7,21 @@ RedAlt is a React + TypeScript Reddit reader with a Reddit-style feed, media vie
 The browser talks to one same-origin gateway: `/api/reddit`. It does not rotate through public proxies during an ordinary feed load.
 
 ```text
-Browser → /api/reddit → official Reddit OAuth API
-                         ↓ only if explicitly enabled
-                   bounded degraded fallbacks
+Browser → /api/reddit → official Reddit OAuth API (when configured)
+                         ↓ otherwise (bounded, auto-enabled)
+                       old.reddit HTML → Reddit RSS
+                         ↓ optional, off by default
+                       public instances / mirror / anonymous JSON
 ```
 
-- Feed requests have a short overall deadline and are aborted when the user changes route or retries.
+- OAuth is always the preferred source when credentials are configured.
+- **Without credentials the gateway auto-enables the bounded old.reddit/RSS scrape path** — the one unauthenticated source that works in practice. Anonymous `www.reddit.com` JSON is WAF-blocked from servers and most public Redlib instances sit behind anti-bot walls, so both are optional last resorts.
+- All requests to Reddit-owned hosts flow through a single serialized queue with minimum spacing, and once Reddit blocks the IP the gateway opens a 90-second circuit breaker instead of piling more requests onto the block.
+- Feed requests have a short overall deadline and are aborted when the user changes route or retries. Already-loaded posts stay visible when a refresh fails (inline banner instead of a full-screen error).
 - Post detail loads comments and the primary post in one request. Media repair is explicit instead of silently fanning out into several extra feed requests.
 - The gateway prefers the official OAuth API, validates payload shape before returning it, caches successful JSON briefly, and shares one cold OAuth token exchange across concurrent requests.
-- Public Redlib/Teddit/mirror scraping is opt-in and bounded. It is a degraded compatibility mode, not the normal production path.
 - `Retry-After` is carried from Reddit through the gateway to a visible countdown. Failed pagination pauses until the reader deliberately retries it, rather than repeatedly requesting the same cursor.
+- Search fans out into three upstream calls but recent query/filter combinations are remembered for the session so toggling filters does not re-press the upstream source.
 
 Reddit access must use the developer-documented authorization flow and may be rate-limited. See the [Reddit Data API Terms](https://redditinc.com/policies/data-api-terms) and [API documentation](https://www.reddit.com/dev/api/).
 
@@ -40,9 +45,11 @@ REDDIT_REFRESH_TOKEN=...
 
 `REDDIT_OAUTH_ACCESS_TOKEN` is available as a short-lived development override, but client credentials or a refresh token is the normal deployment setup. The Vite development gateway loads these values only in Node; they are not bundled into the browser.
 
-### Degraded fallbacks
+### Fallbacks
 
-These are disabled by default because they have inconsistent availability and can return incomplete media. Enable them only if you intentionally operate and monitor them:
+When OAuth is not configured, the gateway automatically uses the bounded old.reddit/RSS scrape path so an out-of-the-box deployment works. OAuth is always preferred when credentials exist. You can force the scrape path on or off explicitly with `ENABLE_LEGACY_SCRAPE_FALLBACK=true|false`, or hard-disable it with `REDDIT_DISABLE_SCRAPE_FALLBACK=true`.
+
+The remaining degraded fallbacks are disabled by default because they have inconsistent availability and can return incomplete media:
 
 ```bash
 ENABLE_PUBLIC_INSTANCE_FALLBACK=true
@@ -52,7 +59,7 @@ ENABLE_MIRROR_FALLBACK=false
 ENABLE_LEGACY_SCRAPE_FALLBACK=false
 ```
 
-If the official gateway is not configured or unavailable, the UI shows a clear bounded failure state with Retry and an “Open on Reddit” escape hatch instead of an endless skeleton.
+If the official gateway is not configured or unavailable, the UI shows a clear bounded failure state with Retry and an “Open on Reddit” escape hatch instead of an endless skeleton. Already-loaded content stays on screen during a failed refresh. The header shows a small status pill (`Reader mode` vs `Official API`) so it is always clear which source is serving content.
 
 ### Gateway status
 

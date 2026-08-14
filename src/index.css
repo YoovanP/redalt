@@ -347,6 +347,56 @@ input:focus, select:focus {
   background: color-mix(in srgb, #cc4747 20%, var(--panel));
 }
 
+.gateway-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid var(--input-border);
+  border-radius: 999px;
+  padding: 0.22rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.gateway-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.gateway-status-official .gateway-status-dot {
+  background: #3fae62;
+  box-shadow: 0 0 6px color-mix(in srgb, #3fae62 60%, transparent);
+}
+
+.gateway-status-scrape .gateway-status-dot {
+  background: #d99b2a;
+  box-shadow: 0 0 6px color-mix(in srgb, #d99b2a 55%, transparent);
+}
+
+.gateway-status-degraded .gateway-status-dot {
+  background: #cc4747;
+  box-shadow: 0 0 6px color-mix(in srgb, #cc4747 55%, transparent);
+}
+
+.feed-refresh-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border: 1px solid color-mix(in srgb, #cc4747 45%, var(--input-border));
+  background: color-mix(in srgb, #cc4747 14%, var(--panel));
+  border-radius: 10px;
+  padding: 0.6rem 0.85rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.9rem;
+}
+
 .app-header {
   display: grid;
   gap: 0.7rem;
@@ -1987,8 +2037,62 @@ article[data-focused='true'] > .post-card {
   gap: 0.65rem;
   padding: 1rem;
   text-align: center;
-  background: color-mix(in srgb, var(--media-bg) 88%, transparent);
+  background: var(--media-bg);
   color: var(--text);
+  overflow: hidden;
+}
+
+.media-shell-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 34%,
+    color-mix(in srgb, var(--link) 14%, transparent) 50%,
+    transparent 66%
+  );
+  background-size: 220% 100%;
+  animation: media-shell-shimmer 1.5s ease-in-out infinite;
+}
+
+.media-shell-status-label {
+  position: relative;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+
+@keyframes media-shell-shimmer {
+  from {
+    background-position: 130% 0;
+  }
+
+  to {
+    background-position: -30% 0;
+  }
+}
+
+/* Content-sized media shells hug the loaded image instead of reserving a
+   guessed aspect-ratio box. Only while loading do they hold a minimum height
+   so the shimmer state is visible without layout jumping. */
+.media-shell-natural {
+  min-height: 0;
+}
+
+.media-shell-natural[data-media-status='loading'],
+.media-shell-natural[data-media-status='idle'] {
+  min-height: 260px;
+}
+
+.post-image.post-image-natural {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: min(80vh, 720px);
+  margin-inline: auto;
 }
 
 .media-shell[data-media-status='ready'] .media-shell-status {

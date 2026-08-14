@@ -106,18 +106,26 @@ export function usePostListingFeed({
   const [reloadVersion, setReloadVersion] = useState(0);
   const loadMoreInFlightRef = useRef(false);
   const loadMorePausedRef = useRef(false);
+  const lastSourceKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let ignore = false;
     const controller = new AbortController();
+    const sourceChanged = lastSourceKeyRef.current !== sourceKey;
+    lastSourceKeyRef.current = sourceKey;
 
     setLoading(true);
     setError(null);
     setLoadMoreError(null);
     setLoadMoreRetryAt(null);
-    setPosts([]);
     setAfter(null);
     loadMorePausedRef.current = false;
+
+    // Keep already-loaded posts visible when the same source is reloaded
+    // (retry, settings refresh). Only a source change starts from a clean slate.
+    if (sourceChanged) {
+      setPosts([]);
+    }
 
     fetchInitialListingPages(fetchPage, videoFeedMode, controller.signal)
       .then((result) => {

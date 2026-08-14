@@ -29,12 +29,14 @@ export function GalleryCarousel({ items, title, active: galleryActive }: Gallery
   const srcSet = active.type === 'image'
     ? active.sources?.map((source) => `${source.url} ${source.width}w`).join(', ')
     : undefined;
+  const imageHasDimensions = active.type === 'image' && Boolean(active.width && active.height);
 
   return (
     <div className="gallery-block">
       <MediaShell
         width={active.width}
         height={active.height}
+        natural={!imageHasDimensions && active.type === 'image'}
         className="gallery"
         status={active.type === 'video' ? 'ready' : status}
         sourceUrl={active.type === 'video' ? active.sourceUrl : active.url}
@@ -57,13 +59,13 @@ export function GalleryCarousel({ items, title, active: galleryActive }: Gallery
         ) : (
           <img
             key={active.id}
-            className="post-image"
+            className={`post-image${imageHasDimensions ? '' : ' post-image-natural'}`}
             src={active.url}
             srcSet={srcSet || undefined}
             sizes="(max-width: 900px) 100vw, 50vw"
             alt={`${title} (${boundedIndex + 1}/${items.length})`}
-            width={active.width}
-            height={active.height}
+            width={imageHasDimensions ? active.width : undefined}
+            height={imageHasDimensions ? active.height : undefined}
             loading="lazy"
             decoding="async"
             referrerPolicy="no-referrer"

@@ -1,6 +1,6 @@
 # RedAlt Project Memory
 
-Last reviewed: 2026-08-02.
+Last reviewed: 2026-08-14.
 
 ## Product and limits
 
@@ -18,27 +18,61 @@ commenting, moderation, messaging, subscription sync, or account-library sync.
 React browser
   └─ /api/reddit (one same-origin request boundary)
        └─ api/redditProxy.ts
-            ├─ official Reddit OAuth API (normal production path)
-            └─ explicitly enabled degraded fallbacks only
+            ├─ official Reddit OAuth API (when credentials are configured)
+            └─ auto-enabled bounded scrape path otherwise:
+                 old.reddit HTML → Reddit RSS → (opt-in) public instances/mirror
 ```
 
 - `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
   additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
   automatically hop through public Render/Pages deployments.
+- **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path**
+  (`legacyScrapeFallbackEnabled`: explicit `ENABLE_LEGACY_SCRAPE_FALLBACK`
+  true/false wins; `REDDIT_DISABLE_SCRAPE_FALLBACK=true` hard-disables; else
+  auto when `getOfficialOAuthMode(env) === 'none'`). Anonymous www.reddit.com
+  JSON is WAF-blocked and public Redlib instances are largely behind
+  Anubis/Cloudflare walls, so both are last resorts and the anonymous JSON
+  attempt is skipped entirely in scrape mode.
+- **Reddit's WAF blocks an IP for ~2 minutes after a burst of ~4 rapid
+  requests.** All requests to Reddit-owned hosts (reddit.com, redd.it,
+  redditstatic.com, redditmedia.com) flow through one serialized queue with a
+  300ms minimum spacing (`paceRedditOwnedRequest`), and a 90-second circuit
+  breaker (`markRedditOwnedBlock`) short-circuits scrape requests to a
+  structured 403 after any 403/429/451 from old.reddit or RSS. Do not bypass
+  the pacer when adding new scrape fetches.
+- Discovery endpoints (`/subreddits/search.json`, `/users/search.json`,
+  `/api/search_reddit_names.json`) map to old.reddit `/subreddits/search` and
+  `/users/search` in `buildPublicHtmlPath`.
+- `fetchViaOldRedditHtml` must NOT re-run `enrichCommentThreadMediaFromOldReddit`
+  (it re-fetches the same page and can overwrite a good parse with a degraded
+  one). Enrichment is only for payloads that came from other sources.
 - Feed calls have individual and whole-request deadlines. The client attempts
   at most two configured bases and does not repeat a full retry cycle.
-- `usePostListingFeed` supplies an `AbortSignal`; route changes and React
-  development re-mounts cancel stale work instead of allowing duplicate loads.
-- `PostDetailPage` uses one detail request. If media metadata is incomplete,
-  recovery is a user-triggered “Improve media” action with at most two bounded
-  repair attempts; opening a post never starts a five-request repair fanout.
+- `usePostListingFeed` keeps already-loaded posts visible when a reload fails
+  (posts are only cleared when the sourceKey changes); SubredditPage/HomePage
+  show an inline `.feed-refresh-error` banner instead of a full-screen error.
+- `PostDetailPage` uses one detail request. Media recovery is user-triggered
+  ("Improve media", bounded); opening a post never starts a repair fanout.
 - Error states are actionable: feed/detail failures show Retry and an Open on
   Reddit escape hatch. Skeletons include visible status text.
-- Reddit `Retry-After` data travels through the shared gateway and client. A
-  rate-limited source is held until its exact retry window ends; generic
-  connection failures remain manually retryable. Failed pagination pauses its
-  observer and shows an inline countdown/retry surface instead of reissuing the
-  same cursor automatically.
+- Reddit `Retry-After` travels through the shared gateway and client; failed
+  pagination pauses until deliberately retried.
+- Search fans out into three upstream calls; `fetchGlobalSearch` remembers
+  recent query/filter combinations in a 30-minute sessionStorage cache so
+  toggling filters does not re-press the upstream source.
+
+## Media rendering notes
+
+- Images with unknown dimensions render at natural size (`.post-image-natural`,
+  `MediaShell natural`) instead of a guessed 16:9 letterbox. Galleries get the
+  same treatment per item.
+- `VideoMedia` must NOT gate hls.js on
+  `video.canPlayType('application/vnd.apple.mpegurl')` — several Chromium
+  builds report "maybe" without playing HLS natively, which silently leaves
+  the video with NO_SOURCE. Attach hls.js whenever `Hls.isSupported()`;
+  `<source>` children remain as the Safari fallback.
+- The App header shows a gateway status pill (`Reader mode` / `Official API`)
+  from `GET /api/status`, refreshed every 5 minutes and on window focus.
 
 ## Shared server gateway
 
@@ -68,18 +102,21 @@ Vite development loads them only in `viteRedditProxy.ts`'s Node process.
 
 ### Explicit degraded fallback mode
 
-Public instances, dynamic instance discovery, AllOrigins, and old-Reddit/RSS
-scraping are disabled by default. They are compatibility paths with slower,
-less reliable media and HTML-dependent parsing.
+Public instances, dynamic instance discovery, and AllOrigins are disabled by
+default. They are compatibility paths with slower, less reliable media and
+HTML-dependent parsing.
 
 - `ENABLE_PUBLIC_INSTANCE_FALLBACK=true` enables bounded public-instance use.
 - `REDDIT_PUBLIC_INSTANCE_BASES` gives operator-provided instances priority.
 - `ENABLE_PUBLIC_INSTANCE_DISCOVERY=true` allows dynamic instance-list lookup.
 - `ENABLE_MIRROR_FALLBACK=true` enables AllOrigins.
-- `ENABLE_LEGACY_SCRAPE_FALLBACK=true` enables old-Reddit HTML and RSS parsing.
+- `ENABLE_LEGACY_SCRAPE_FALLBACK=true|false` forces old-Reddit HTML + RSS
+  scraping on/off; otherwise it auto-enables when OAuth is unconfigured
+  (`REDDIT_DISABLE_SCRAPE_FALLBACK=true` is the hard off-switch).
 
-Do not enable these just to hide an OAuth/deployment problem. First verify the
-official gateway's credentials, user agent, and deployment logs.
+When OAuth is configured, first verify its credentials, user agent, and
+deployment logs before relying on scrape fallbacks — the official API is
+strictly more reliable.
 
 ## Runtime adapters
 
@@ -139,19 +176,25 @@ Run after gateway or UI changes:
 - `node --check fly-proxy/server.mjs`
 - `git diff --check`
 
-Probe `GET /api/status` first, then an OAuth-configured deployment directly for
-a feed, search, and detail thread. Check status, JSON content type,
-`X-RedAlt-Source: official-oauth`, payload renderability, and response time.
+Probe `GET /api/status` first, then the gateway directly for a feed, search,
+and detail thread. Check status, JSON content type, source header
+(`X-RedAlt-Source: official-oauth` with OAuth, `X-RedAlt-Fallback:
+old-reddit-html` otherwise), payload renderability, and response time.
 Then browser-check initial feed, retry UI, rate-limit countdown, load more,
-detail/comments, explicit media repair, search, and shorts mode.
+detail/comments, explicit media repair, search, and shorts mode. A live
+end-to-end browser pass exists at `scripts/live-check.mjs` (needs the dev
+server running; budget for Reddit's per-IP burst limits — keep requests
+spaced and expect transient blocks during heavy repeated runs).
 
 ## Maintenance rules
 
 - Diagnose live request/payload behavior before styling around an error.
 - Keep `api/redditProxy.ts` as the behavior source of truth; adapters remain
   thin.
-- Treat scraper and public-instance changes as opt-in compatibility work, with
-  focused parser tests and hard request caps.
+- The old.reddit/RSS scrape path is the default unauthenticated source — treat
+  its parser changes as production work with focused parser tests and hard
+  request caps. Public-instance/mirror changes remain opt-in compatibility
+  work.
 - Keep credentials server-only and never log or return them.
 - On Windows/PowerShell, use `-LiteralPath` for
   `functions/api/reddit/[[path]].ts` because brackets are wildcard syntax.

@@ -25,6 +25,52 @@ function formatRetryCountdown(milliseconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+type GatewayStatusInfo = {
+  state: 'official' | 'scrape' | 'degraded';
+  label: string;
+  detail: string;
+};
+
+async function fetchGatewayStatusInfo(): Promise<GatewayStatusInfo | null> {
+  try {
+    const response = await fetch('/api/status', { headers: { Accept: 'application/json' } });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const status = (await response.json()) as {
+      status?: string;
+      oauth?: { configured?: boolean; mode?: string };
+      fallbacks?: { publicInstances?: boolean };
+    };
+
+    if (status.oauth?.configured) {
+      return {
+        state: 'official',
+        label: 'Official API',
+        detail: 'Connected to Reddit through the official OAuth API.',
+      };
+    }
+
+    if (status.fallbacks?.publicInstances) {
+      return {
+        state: 'scrape',
+        label: 'Mirror mode',
+        detail: 'No OAuth credentials configured. Posts come from community mirrors via the bounded scrape path.',
+      };
+    }
+
+    return {
+      state: 'scrape',
+      label: 'Reader mode',
+      detail: 'No OAuth credentials configured. Posts come from the bounded old.reddit scrape path.',
+    };
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
   return (
     <UiSettingsProvider>
@@ -38,6 +84,7 @@ function AppLayout() {
   const subreddit = currentSubreddit(location.pathname);
   const [apiStatus, setApiStatus] = useState<{ level: 'warn' | 'error'; message: string; retryAt?: number } | null>(null);
   const [statusNow, setStatusNow] = useState(() => Date.now());
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatusInfo | null>(null);
   const [headerExpanded, setHeaderExpanded] = useState(() => {
     const raw = readStorageItem('local', 'redalt.headerExpanded');
     return raw === null ? true : raw === 'true';
@@ -50,6 +97,28 @@ function AppLayout() {
   useEffect(() => {
     writeStorageItem('local', 'redalt.headerExpanded', String(headerExpanded));
   }, [headerExpanded]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    const load = () => {
+      void fetchGatewayStatusInfo().then((info) => {
+        if (!ignore && info) {
+          setGatewayStatus(info);
+        }
+      });
+    };
+
+    load();
+    const intervalId = window.setInterval(load, 5 * 60 * 1000);
+    window.addEventListener('focus', load);
+
+    return () => {
+      ignore = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', load);
+    };
+  }, []);
 
   useEffect(() => {
     const onApiStatus = (event: Event) => {
@@ -146,6 +215,16 @@ function AppLayout() {
                 </div>
                 <div className="header-controls">
                   <SubredditSwitcher initialSubreddit={subreddit} />
+                  {gatewayStatus && (
+                    <span
+                      className={`gateway-status-pill gateway-status-${gatewayStatus.state}`}
+                      title={gatewayStatus.detail}
+                      role="status"
+                    >
+                      <span className="gateway-status-dot" aria-hidden="true" />
+                      {gatewayStatus.label}
+                    </span>
+                  )}
                   <nav className="header-nav-links" aria-label="Quick links">
                     <Link to="/settings" className="menu-toggle settings-nav-link" aria-label="Settings" title="Settings">
                       <span className="menu-toggle-bars" aria-hidden="true">

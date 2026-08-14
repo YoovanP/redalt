@@ -102,7 +102,10 @@ test('uses the configured RedAlt agent for direct upstream requests', { concurre
     (url) => (url === `https://www.reddit.com${TEST_PATH}` ? Response.json(payload) : null),
     async (calls) => {
       const { handleRedditProxyRequest, REDDIT_MOBILE_USER_AGENT } = await importFreshProxy();
-      const response = await handleRedditProxyRequest(TEST_PATH, { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false' });
+      const response = await handleRedditProxyRequest(TEST_PATH, {
+        ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false',
+        ENABLE_LEGACY_SCRAPE_FALLBACK: 'false',
+      });
       const directRequest = calls.find(({ url }) => url === `https://www.reddit.com${TEST_PATH}`);
 
       assert.equal(response.status, 200);
@@ -423,6 +426,7 @@ test('rejects Teddit title stubs with empty media, preview, and gallery shells',
         TEST_PATH,
         {
           ENABLE_PUBLIC_INSTANCE_FALLBACK: 'true',
+          ENABLE_LEGACY_SCRAPE_FALLBACK: 'false',
           REDDIT_PUBLIC_INSTANCE_BASES: TEDDIT_BASE,
         },
         { enableMirrorFallback: false },
@@ -623,7 +627,7 @@ test('rejects a weak JSON response from another proxy before accepting a richer 
       const { handleRedditProxyRequest } = await importFreshProxy();
       const response = await handleRedditProxyRequest(
         path,
-        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false' },
+        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false', ENABLE_LEGACY_SCRAPE_FALLBACK: 'false' },
         { cloudflareProxyBase: cloudflareBase, enableMirrorFallback: false },
       );
       const payload = await response.json();
@@ -666,7 +670,7 @@ test('rejects an empty comment-thread JSON response before trying the canonical 
       const { handleRedditProxyRequest } = await importFreshProxy();
       const response = await handleRedditProxyRequest(
         path,
-        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false' },
+        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false', ENABLE_LEGACY_SCRAPE_FALLBACK: 'false' },
         { cloudflareProxyBase: cloudflareBase, enableMirrorFallback: false },
       );
       const payload = await response.json();
@@ -725,7 +729,7 @@ test('rejects a media-less comment-thread post even when comments contain text',
       const { handleRedditProxyRequest } = await importFreshProxy();
       const response = await handleRedditProxyRequest(
         path,
-        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false' },
+        { ENABLE_PUBLIC_INSTANCE_FALLBACK: 'false', ENABLE_LEGACY_SCRAPE_FALLBACK: 'false' },
         { cloudflareProxyBase: cloudflareBase, enableMirrorFallback: false },
       );
       const payload = await response.json();
@@ -734,6 +738,116 @@ test('rejects a media-less comment-thread post even when comments contain text',
       assert.equal(payload[0].data.children[0].data.selftext, 'Canonical detail body');
       assert.ok(calls.some(({ url }) => url === `${cloudflareBase}${path}`));
       assert.ok(calls.some(({ url }) => url === `https://www.reddit.com${path}`));
+    },
+  );
+});
+
+function htmlResponse(body) {
+  return new Response(body, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+const OLD_REDDIT_THING = `
+  <div class="thing link" data-fullname="t3_htmlpost1" data-permalink="/r/test/comments/htmlpost1/html_title/"
+    data-url="https://i.redd.it/html-image.jpg" data-domain="i.redd.it" data-subreddit="test"
+    data-author="htmluser" data-timestamp="1700000000000" data-score="42" data-comments-count="7">
+    <div class="entry">
+      <p class="title"><a class="title may-blank" href="https://i.redd.it/html-image.jpg">HTML fixture title</a></p>
+      <a class="thumbnail" href="https://i.redd.it/html-image.jpg"><img src="https://preview.redd.it/html-image.jpg" /></a>
+      <a class="comments" href="/r/test/comments/htmlpost1/html_title/">7 comments</a>
+    </div>
+  </div>`;
+
+test('auto-enables the old.reddit scrape path when OAuth is not configured', { concurrency: false }, async () => {
+  await withFixtureFetch(
+    (url) => (url === 'https://old.reddit.com/r/test?limit=50' ? htmlResponse(OLD_REDDIT_THING) : null),
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'old-reddit-html');
+      assert.equal(payload.data.children[0].data.id, 'htmlpost1');
+      assert.equal(payload.data.children[0].data.post_hint, 'image');
+      assert.equal(
+        calls.some(({ url }) => url === `https://www.reddit.com${TEST_PATH}`),
+        false,
+        'anonymous JSON endpoint should not be contacted in scrape mode',
+      );
+    },
+  );
+});
+
+test('falls through when the scraped page has no parseable posts', { concurrency: false }, async () => {
+  await withFixtureFetch(
+    (url) => (url === 'https://old.reddit.com/r/test?limit=50' ? htmlResponse('<html>no posts here</html>') : null),
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+
+      assert.equal(response.status, 502);
+      assert.ok(
+        calls.some(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50'),
+        'RSS should be tried after an unparseable scrape',
+      );
+    },
+  );
+});
+
+test('returns a structured block response when old.reddit rejects the request', { concurrency: false }, async () => {
+  await withFixtureFetch(
+    (url) =>
+      url.startsWith('https://old.reddit.com/')
+        ? new Response('<body class="theme-beta">blocked page</body>', { status: 403 })
+        : null,
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 403);
+      assert.equal(payload.error, 'blocked');
+      assert.equal(
+        calls.some(({ url }) => url === `https://www.reddit.com${TEST_PATH}`),
+        false,
+        'no further Reddit-owned requests should follow a WAF block',
+      );
+    },
+  );
+});
+
+test('maps subreddit discovery to the old.reddit search page', { concurrency: false }, async () => {
+  const html = '<html><body><a href="/r/cats">cats</a><a href="/r/CatPics">cat pics</a></body></html>';
+
+  await withFixtureFetch(
+    (url) => (url === 'https://old.reddit.com/subreddits/search?q=cat&limit=12' ? htmlResponse(html) : null),
+    async () => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest('/subreddits/search.json?raw_json=1&include_over_18=on&limit=12&q=cat', {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'old-reddit-html');
+      assert.deepEqual(
+        payload.data.children.map((child) => child.data.display_name),
+        ['cats', 'CatPics'],
+      );
+    },
+  );
+});
+
+test('maps user discovery to the old.reddit users search page', { concurrency: false }, async () => {
+  const html = '<html><body><a href="/user/cat_user">cat_user</a></body></html>';
+
+  await withFixtureFetch(
+    (url) => (url === 'https://old.reddit.com/users/search?q=cat&limit=12' ? htmlResponse(html) : null),
+    async () => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest('/users/search.json?raw_json=1&include_over_18=on&limit=12&q=cat', {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.children[0].data.name, 'cat_user');
     },
   );
 });

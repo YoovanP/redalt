@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { NormalizedPost } from '../../types/reddit';
 
 function getThumbnail(post: NormalizedPost): string | undefined {
@@ -15,7 +16,15 @@ function getThumbnail(post: NormalizedPost): string | undefined {
 
 export function PostThumbnail({ post }: { post: NormalizedPost }) {
   const url = getThumbnail(post);
-  if (!url) return <div className="post-thumbnail-placeholder" aria-hidden="true">TEXT</div>;
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [url]);
+
+  if (!url || failed) {
+    return <div className="post-thumbnail-placeholder" aria-hidden="true">TEXT</div>;
+  }
 
   return (
     <img
@@ -25,6 +34,7 @@ export function PostThumbnail({ post }: { post: NormalizedPost }) {
       loading="lazy"
       decoding="async"
       referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
     />
   );
 }

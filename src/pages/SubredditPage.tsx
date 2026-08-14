@@ -222,11 +222,11 @@ export function SubredditPage() {
     setSearchParams(nextParams);
   };
 
-  if (loading) {
+  if (loading && normalizedPosts.length === 0) {
     return <StateView kind="loading" />;
   }
 
-  if (error) {
+  if (error && normalizedPosts.length === 0) {
     return (
       <StateView
         kind="error"
@@ -239,6 +239,8 @@ export function SubredditPage() {
       />
     );
   }
+
+  const showRefreshError = Boolean(error) && normalizedPosts.length > 0;
 
   if (visiblePosts.length === 0) {
     return (
@@ -270,6 +272,14 @@ export function SubredditPage() {
 
   return (
     <section>
+      {showRefreshError && (
+        <div className="feed-refresh-error" role="alert">
+          <span>Could not refresh posts: {error}</span>
+          <button type="button" className="state-action state-action-primary" onClick={retry}>
+            Try again
+          </button>
+        </div>
+      )}
       {!videoFeedMode && (
         <>
           <h2>/r/{name}</h2>

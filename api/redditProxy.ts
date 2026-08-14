@@ -77,9 +77,14 @@ const OFFICIAL_REDDIT_API_BASE = 'https://oauth.reddit.com';
 const OFFICIAL_REDDIT_TOKEN_URL = 'https://www.reddit.com/api/v1/access_token';
 const OFFICIAL_TOKEN_TIMEOUT_MS = 2500;
 const OFFICIAL_REDDIT_REQUEST_TIMEOUT_MS = 4000;
-const DIRECT_REDDIT_REQUEST_TIMEOUT_MS = 1800;
-const PROXY_LISTING_DEADLINE_MS = 6000;
-const PROXY_DETAIL_DEADLINE_MS = 8000;
+const DIRECT_REDDIT_REQUEST_TIMEOUT_MS = 2500;
+const PROXY_LISTING_DEADLINE_MS = 10000;
+const PROXY_DETAIL_DEADLINE_MS = 12000;
+// Reddit's edge blocks bursts of requests from one IP, even with honest user
+// agents. Space out requests to Reddit-owned hosts so a normal browse flow
+// (listing -> detail -> pagination) stays below the burst threshold.
+const REDDIT_OWNED_HOST_SUFFIXES = ['reddit.com', 'redd.it', 'redditstatic.com', 'redditmedia.com'];
+const REDDIT_OWNED_REQUEST_SPACING_MS = 300;
 const MAX_PUBLIC_INSTANCE_CANDIDATES = 3;
 const PUBLIC_INSTANCE_LIST_URLS = [
   'https://raw.githubusercontent.com/redlib-org/redlib-instances/main/instances.json',
@@ -87,14 +92,14 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
-const SUCCESS_RESPONSE_CACHE_TTL_MS = 5 * 60 * 1000;
+const SUCCESS_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
 const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
 const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 1800;
 const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 8;
-const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 2200;
-const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 4000;
+const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 5000;
+const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 6000;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
 const CROSSPOST_MEDIA_MAX_DEPTH = 3;
 const CROSSPOST_MEDIA_MAX_ITEMS = 4;
@@ -508,6 +513,12 @@ function envValue(env: RedditProxyEnv | undefined, key: string): string {
   return env?.[key]?.trim() ?? '';
 }
 
+function proxyDebugLog(env: RedditProxyEnv | undefined, message: string): void {
+  if (envValue(env, 'REDDIT_PROXY_DEBUG') === 'true') {
+    console.error(`[redalt-proxy] ${message}`);
+  }
+}
+
 function hasOfficialRedditAccess(env: RedditProxyEnv | undefined): boolean {
   return getOfficialOAuthMode(env) !== 'none';
 }
@@ -684,6 +695,8 @@ async function fetchViaOfficialRedditApi(
   }
 
   try {
+    await paceRedditOwnedRequest(`${OFFICIAL_REDDIT_API_BASE}${upstreamPath}`, signal);
+
     const response = await fetchWithTimeout(
       `${OFFICIAL_REDDIT_API_BASE}${upstreamPath}`,
       {
@@ -788,79 +801,11 @@ export async function handleRedditProxyRequest(
       }
     }
 
-    const publicInstanceResponse = await fetchViaPublicInstances(cleanPath, env, options, mediaPref, signal);
-
-    if (publicInstanceResponse) {
-      return rememberSuccessfulResponse(cacheKey, publicInstanceResponse);
-    }
-
-    let fallbackResponse: Response | null = null;
-
-    for (const host of UPSTREAM_HOSTS) {
-      if (signal.aborted) {
-        break;
-      }
-
-      const upstreamResponse = await fetchWithTimeout(
-        `${host}${cleanPath}`,
-        {
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': getProxyUserAgent(env, options),
-          },
-        },
-        DIRECT_REDDIT_REQUEST_TIMEOUT_MS,
-        signal,
-      ).catch(() => null);
-
-      if (!upstreamResponse) {
-        continue;
-      }
-
-      if (upstreamResponse.status === 429) {
-        return rateLimitedResponse(upstreamResponse);
-      }
-
-      const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
-
-      if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
-        if (await hasUsableRedditJsonResponse(upstreamResponse, cleanPath)) {
-          return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
-        }
-
-        continue;
-      }
-
-      if (blockedHtml) {
-        fallbackResponse = new Response(
-          JSON.stringify({
-            error: 'blocked',
-            message: 'The available Reddit source rejected this request. Please try again.',
-          }),
-          {
-            status: 403,
-            headers: {
-              'Content-Type': 'application/json; charset=utf-8',
-              'Cache-Control': 'public, max-age=15, s-maxage=30',
-            },
-          },
-        );
-        continue;
-      }
-
-      if (!fallbackResponse) {
-        fallbackResponse = responseFromUpstream(upstreamResponse, 'public, max-age=15, s-maxage=30');
-      }
-    }
-
-    if (mirrorFallbackEnabled(env, options) && !signal.aborted) {
-      const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options, signal).catch(() => null);
-
-      if (mirrorResponse && await hasUsableRedditJsonResponse(mirrorResponse, cleanPath)) {
-        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120'));
-      }
-    }
-
+    // Working source order matters for real-world reliability. With OAuth
+    // configured the official API always leads. Without it, the anonymous
+    // JSON endpoint is blocked and public Redlib instances are largely behind
+    // anti-bot walls, so the bounded old.reddit/RSS scrape path runs first —
+    // it is the one unauthenticated source that works in practice.
     if (legacyScrapeFallbackEnabled(env) && !signal.aborted) {
       const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref, signal);
 
@@ -872,6 +817,87 @@ export async function handleRedditProxyRequest(
 
       if (redditRssResponse) {
         return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+      }
+    }
+
+    const publicInstanceResponse = await fetchViaPublicInstances(cleanPath, env, options, mediaPref, signal);
+
+    if (publicInstanceResponse) {
+      return rememberSuccessfulResponse(cacheKey, publicInstanceResponse);
+    }
+
+    if (mirrorFallbackEnabled(env, options) && !signal.aborted) {
+      const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options, signal).catch(() => null);
+
+      if (mirrorResponse && await hasUsableRedditJsonResponse(mirrorResponse, cleanPath)) {
+        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120'));
+      }
+    }
+
+    // Anonymous www.reddit.com JSON is a dead last resort: it is almost always
+    // WAF-blocked, and each attempt counts against the per-IP burst budget.
+    // When the bounded scrape path is active (no OAuth configured), it would
+    // only add another request to an already-strained IP, so skip it.
+    let fallbackResponse: Response | null = null;
+
+    if (!legacyScrapeFallbackEnabled(env)) {
+      for (const host of UPSTREAM_HOSTS) {
+        if (signal.aborted) {
+          break;
+        }
+
+        await paceRedditOwnedRequest(`${host}${cleanPath}`, signal);
+
+        const upstreamResponse = await fetchWithTimeout(
+          `${host}${cleanPath}`,
+          {
+            headers: {
+              Accept: 'application/json',
+              'User-Agent': getProxyUserAgent(env, options),
+            },
+          },
+          DIRECT_REDDIT_REQUEST_TIMEOUT_MS,
+          signal,
+        ).catch(() => null);
+
+        if (!upstreamResponse) {
+          continue;
+        }
+
+        if (upstreamResponse.status === 429) {
+          return rateLimitedResponse(upstreamResponse);
+        }
+
+        const blockedHtml = await isBlockedHtmlResponse(upstreamResponse);
+
+        if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
+          if (await hasUsableRedditJsonResponse(upstreamResponse, cleanPath)) {
+            return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
+          }
+
+          continue;
+        }
+
+        if (blockedHtml) {
+          fallbackResponse = new Response(
+            JSON.stringify({
+              error: 'blocked',
+              message: 'The available Reddit source rejected this request. Please try again.',
+            }),
+            {
+              status: 403,
+              headers: {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Cache-Control': 'public, max-age=15, s-maxage=30',
+              },
+            },
+          );
+          continue;
+        }
+
+        if (!fallbackResponse) {
+          fallbackResponse = responseFromUpstream(upstreamResponse, 'public, max-age=15, s-maxage=30');
+        }
       }
     }
 
@@ -1059,7 +1085,99 @@ function mirrorFallbackEnabled(env: RedditProxyEnv | undefined, options: RedditP
 }
 
 function legacyScrapeFallbackEnabled(env: RedditProxyEnv | undefined): boolean {
-  return env?.ENABLE_LEGACY_SCRAPE_FALLBACK?.toLowerCase() === 'true';
+  // An explicit operator choice wins in either direction.
+  const explicit = env?.ENABLE_LEGACY_SCRAPE_FALLBACK?.trim().toLowerCase();
+
+  if (explicit === 'true') {
+    return true;
+  }
+
+  if (explicit === 'false') {
+    return false;
+  }
+
+  if (env?.REDDIT_DISABLE_SCRAPE_FALLBACK?.toLowerCase() === 'true') {
+    return false;
+  }
+
+  // Without OAuth credentials the gateway has no working official source, so
+  // an out-of-the-box deployment would be a brick. Auto-enable the bounded
+  // old.reddit/RSS scrape path in that case; operators with OAuth keep the
+  // clean official-only path.
+  return getOfficialOAuthMode(env) === 'none';
+}
+
+let lastRedditOwnedRequestAt = 0;
+let redditOwnedRequestChain: Promise<void> = Promise.resolve();
+
+function isRedditOwnedUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return REDDIT_OWNED_HOST_SUFFIXES.some(
+      (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Reddit's edge escalates bursts of requests from one IP into a temporary
+// block. Serialize ALL requests to Reddit-owned hosts through one queue with
+// a minimum spacing so concurrent flows (search fans out into three calls,
+// staggered retries race two bases) cannot form a burst.
+async function paceRedditOwnedRequest(url: string, signal?: AbortSignal): Promise<void> {
+  if (!isRedditOwnedUrl(url) || signal?.aborted) {
+    return;
+  }
+
+  const run = async () => {
+    if (signal?.aborted) {
+      return;
+    }
+
+    const wait = REDDIT_OWNED_REQUEST_SPACING_MS - (Date.now() - lastRedditOwnedRequestAt);
+
+    if (wait > 0) {
+      await new Promise((resolve) => globalThis.setTimeout(resolve, wait));
+    }
+
+    if (!signal?.aborted) {
+      lastRedditOwnedRequestAt = Date.now();
+    }
+  };
+
+  redditOwnedRequestChain = redditOwnedRequestChain.then(run, run);
+  await redditOwnedRequestChain;
+}
+
+// Once Reddit's edge blocks this IP, every further scrape attempt extends the
+// block. Open the circuit for a cooldown window and answer scrape requests
+// with a structured block response without touching Reddit at all.
+const REDDIT_OWNED_BLOCK_COOLDOWN_MS = 90 * 1000;
+let redditOwnedBlockedUntil = 0;
+
+function markRedditOwnedBlock(): void {
+  redditOwnedBlockedUntil = Date.now() + REDDIT_OWNED_BLOCK_COOLDOWN_MS;
+}
+
+function isRedditOwnedCoolingDown(): boolean {
+  return redditOwnedBlockedUntil > Date.now();
+}
+
+function redditOwnedBlockedResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: 'blocked',
+      message: 'The available Reddit source rejected this request. Please try again in a moment.',
+    }),
+    {
+      status: 403,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=15, s-maxage=30',
+      },
+    },
+  );
 }
 
 function normalizeInstanceBase(base: string): string {
@@ -1328,6 +1446,14 @@ function buildPublicHtmlPath(upstreamPath: string): string | null {
   const subredditMatch = path.match(/^\/r\/([^/]+)(?:\/(hot|new|rising|top))?$/i);
   const userMatch = path.match(/^\/user\/([^/]+)\/submitted$/i);
   const isListingPath = Boolean(subredditSearchMatch || subredditMatch || userMatch || path === '/search');
+  // Discovery endpoints (subreddit/user search and name typeahead) map onto
+  // old.reddit's dedicated search pages, which still work unauthenticated.
+  const discoveryPath =
+    path === '/subreddits/search' || path === '/api/search_reddit_names'
+      ? '/subreddits/search'
+      : path === '/users/search'
+        ? '/users/search'
+        : null;
 
   if (isListingPath) {
     const requestedLimit = Number(params.get('limit') ?? 25);
@@ -1370,6 +1496,21 @@ function buildPublicHtmlPath(upstreamPath: string): string | null {
 
   if (path === '/search') {
     return withQuery('/search');
+  }
+
+  if (discoveryPath) {
+    // Strip Reddit-API-only params the HTML pages do not understand and keep
+    // the query that drives the search.
+    const discoveryParams = new URLSearchParams();
+    const searchQuery = params.get('q') ?? params.get('query') ?? '';
+    if (searchQuery) {
+      discoveryParams.set('q', searchQuery);
+    }
+    if (params.get('limit')) {
+      discoveryParams.set('limit', params.get('limit') ?? '');
+    }
+    const discoveryQuery = discoveryParams.toString();
+    return discoveryQuery ? `${discoveryPath}?${discoveryQuery}` : discoveryPath;
   }
 
   return null;
@@ -3121,6 +3262,7 @@ function isInstanceChallenge(body: string): boolean {
   return (
     isAnubisChallenge(body) ||
     /\bgo-away\b/i.test(body) ||
+    /\bwhoa there\b/i.test(body) ||
     /checking (?:you are|if you are|if the site connection is secure)/i.test(body) ||
     /just a moment\b/i.test(body) ||
     /cf-browser-verification|challenge-platform|__cf_chl/i.test(body)
@@ -5398,12 +5540,18 @@ async function fetchViaOldRedditHtml(
     return null;
   }
 
+  if (isRedditOwnedCoolingDown()) {
+    return redditOwnedBlockedResponse();
+  }
+
   const request: PublicInstanceRequest = {
     method: 'html',
     path: htmlPath,
   };
 
   try {
+    await paceRedditOwnedRequest(`https://old.reddit.com${htmlPath}`, signal);
+
     const response = await fetchWithTimeout(
       `https://old.reddit.com${htmlPath}`,
       {
@@ -5417,10 +5565,27 @@ async function fetchViaOldRedditHtml(
     );
 
     if (!response.ok) {
+      const debugBody = envValue(env, 'REDDIT_PROXY_DEBUG') === 'true' ? (await response.clone().text()).slice(0, 120).replace(/\s+/g, ' ') : '';
+      proxyDebugLog(env, `old.reddit ${htmlPath} -> status ${response.status} ${debugBody}`);
+
+      // A WAF block or rate limit applies to every Reddit-owned host. Fail
+      // fast with a structured response so the caller stops the chain instead
+      // of piling more requests onto the blocked IP and extending the block.
+      if (response.status === 429) {
+        markRedditOwnedBlock();
+        return rateLimitedResponse(response);
+      }
+
+      if (response.status === 403 || response.status === 451) {
+        markRedditOwnedBlock();
+        return redditOwnedBlockedResponse();
+      }
+
       return null;
     }
 
     const body = await response.text();
+    proxyDebugLog(env, `old.reddit ${htmlPath} -> ${response.status} ${body.length}b`);
     let normalizedPayload = parsePublicInstancePayload(
       body,
       response.headers.get('content-type'),
@@ -5429,10 +5594,13 @@ async function fetchViaOldRedditHtml(
       upstreamPath,
       mediaPref,
     );
+    proxyDebugLog(env, `old.reddit ${htmlPath} parsed -> ${normalizedPayload === null ? 'null' : JSON.stringify(normalizedPayload).length + 'b json'}`);
 
-    if (isCommentThreadPath(upstreamPath)) {
-      normalizedPayload = await enrichCommentThreadMediaFromOldReddit(normalizedPayload, upstreamPath, env, options, signal);
-    }
+    // Note: unlike public-instance payloads, this payload was already parsed
+    // from the old.reddit comments page, so the old.reddit "enrichment" step
+    // is deliberately skipped — it would re-fetch the same page and double
+    // upstream traffic while risking a degraded second parse overwriting a
+    // good first one.
 
     if (!isCompatibleRedditPayload(normalizedPayload, upstreamPath)) {
       return null;
@@ -5605,7 +5773,13 @@ async function fetchViaRedditRss(
     return null;
   }
 
+  if (isRedditOwnedCoolingDown()) {
+    return redditOwnedBlockedResponse();
+  }
+
   try {
+    await paceRedditOwnedRequest(`https://www.reddit.com${rssPath}`, signal);
+
     const response = await fetchWithTimeout(
       `https://www.reddit.com${rssPath}`,
       {
@@ -5614,11 +5788,21 @@ async function fetchViaRedditRss(
           'User-Agent': getProxyUserAgent(env, options),
         },
       },
-      2500,
+      4500,
       signal,
     );
 
     if (!response.ok) {
+      if (response.status === 429) {
+        markRedditOwnedBlock();
+        return rateLimitedResponse(response);
+      }
+
+      if (response.status === 403 || response.status === 451) {
+        markRedditOwnedBlock();
+        return redditOwnedBlockedResponse();
+      }
+
       return null;
     }
 

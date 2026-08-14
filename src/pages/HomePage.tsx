@@ -77,8 +77,8 @@ export function HomePage() {
         }
       } catch (error) {
         if (!ignore && !controller.signal.aborted) {
-          setTrendingPosts([]);
-          setAfter(null);
+          // Keep a previously loaded page visible instead of replacing it
+          // with a full-screen error when a refresh fails.
           setTrendingError(error instanceof Error ? error.message : 'Unable to load trending posts.');
         }
       } finally {
@@ -228,11 +228,11 @@ export function HomePage() {
 
       <article className="home-card home-trending">
         <h3>Trending on Reddit</h3>
-        {trendingLoading ? (
+        {trendingLoading && trendingPosts.length === 0 ? (
           <div className="home-trending-grid">
             <SkeletonLoader kind="post-card" count={3} />
           </div>
-        ) : trendingError ? (
+        ) : trendingError && trendingPosts.length === 0 ? (
           <StateView
             kind="error"
             message="Trending posts are temporarily unavailable."
@@ -244,6 +244,18 @@ export function HomePage() {
           />
         ) : trendingPosts.length > 0 ? (
           <>
+            {trendingError && (
+              <div className="feed-refresh-error" role="alert">
+                <span>Could not refresh trending posts: {trendingError}</span>
+                <button
+                  type="button"
+                  className="state-action state-action-primary"
+                  onClick={() => setTrendingRetryVersion((version) => version + 1)}
+                >
+                  Try again
+                </button>
+              </div>
+            )}
             <div className="home-trending-grid">
               {trendingPosts.slice(0, visibleCount).map((post, index) => (
                 <article
