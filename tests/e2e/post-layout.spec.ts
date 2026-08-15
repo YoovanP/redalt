@@ -144,7 +144,7 @@ test('exposes a safe gateway status document in local development', async ({ req
   expect(status.service).toBe('redalt-reddit-gateway');
   expect(['ready', 'degraded']).toContain(status.status);
   expect(typeof status.oauth.configured).toBe('boolean');
-  expect(['none', 'provided-token', 'refresh-token', 'app-only']).toContain(status.oauth.mode);
+  expect(['none', 'provided-token', 'refresh-token', 'app-only', 'anon-client']).toContain(status.oauth.mode);
   expect(typeof status.responseCacheEntries).toBe('number');
 });
 

@@ -26,7 +26,7 @@ function formatRetryCountdown(milliseconds: number): string {
 }
 
 type GatewayStatusInfo = {
-  state: 'official' | 'scrape' | 'degraded';
+  state: 'official' | 'anon' | 'scrape' | 'degraded';
   label: string;
   detail: string;
 };
@@ -44,6 +44,14 @@ async function fetchGatewayStatusInfo(): Promise<GatewayStatusInfo | null> {
       oauth?: { configured?: boolean; mode?: string };
       fallbacks?: { publicInstances?: boolean };
     };
+
+    if (status.oauth?.mode === 'anon-client') {
+      return {
+        state: 'anon',
+        label: 'Anonymous API',
+        detail: 'Using a shared client id via the anonymous installed-app grant. Not sanctioned by Reddit and may stop working if the credential is rotated.',
+      };
+    }
 
     if (status.oauth?.configured) {
       return {

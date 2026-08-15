@@ -184,6 +184,47 @@ test('shares one OAuth token exchange across concurrent cold requests', { concur
   );
 });
 
+test('supports the opt-in anonymous installed-app grant with a shared client id', { concurrency: false }, async () => {
+  const payload = listing(post('anon-grant', { selftext: 'Anonymous grant fixture' }));
+
+  await withFixtureFetch(
+    (url) => {
+      if (url === 'https://www.reddit.com/api/v1/access_token') {
+        return Response.json({ access_token: 'fixture-anon-token', expires_in: 3600 });
+      }
+
+      if (url === `https://oauth.reddit.com${TEST_PATH}`) {
+        return Response.json(payload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {
+        REDDIT_ANON_CLIENT_ID: 'anon-fixture-id',
+      });
+      const body = await response.json();
+      const tokenRequest = calls.find(({ url }) => url === 'https://www.reddit.com/api/v1/access_token');
+      const apiRequest = calls.find(({ url }) => url === `https://oauth.reddit.com${TEST_PATH}`);
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-source'), 'official-oauth');
+      assert.equal(body.data.children[0].data.id, 'anon-grant');
+      assert.ok(tokenRequest, 'token request was not made');
+      assert.ok(apiRequest, 'API request was not made');
+      assert.ok(
+        String(tokenRequest.init.body).includes('https%3A%2F%2Foauth.reddit.com%2Fgrants%2Finstalled_client'),
+        'installed-client grant_type missing',
+      );
+      assert.ok(String(tokenRequest.init.body).includes('device_id=DO_NOT_TRACK_THIS_DEVICE'));
+      // Basic auth uses the client id with an empty secret, base64-encoded.
+      assert.ok(String(tokenRequest.init.headers.Authorization).includes(btoa('anon-fixture-id:')));
+      assert.equal(String(apiRequest.init.headers.Authorization), `Bearer fixture-anon-token`);
+    },
+  );
+});
+
 test('returns an actionable rate limit response without falling through to a weaker source', { concurrency: false }, async () => {
   await withFixtureFetch(
     (url) => {

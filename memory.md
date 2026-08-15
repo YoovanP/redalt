@@ -33,6 +33,16 @@ React browser
   JSON is WAF-blocked and public Redlib instances are largely behind
   Anubis/Cloudflare walls, so both are last resorts and the anonymous JSON
   attempt is skipped entirely in scrape mode.
+- **Self-serve app registration is closed** (Responsible Builder Policy, late
+  2025): the prefs/apps form is a zombie and new client ids/secrets are not
+  issued. As an opt-in the gateway supports the anonymous installed-app grant
+  (`REDDIT_ANON_CLIENT_ID`, mode `anon-client`): a secret-less token exchange
+  with a shared third-party client id. Unsupported by Reddit, may be rotated
+  at any time; used at the operator's own risk.
+- **When patching this file, do not write `Basic ` or `Bearer ` literals
+  through the patch tool** — its secret redaction mangles them to `***` in
+  the written file. Existing occurrences are fine; only new/replaced lines
+  are affected.
 - **Reddit's WAF blocks an IP for ~2 minutes after a burst of ~4 rapid
   requests.** All requests to Reddit-owned hosts (reddit.com, redd.it,
   redditstatic.com, redditmedia.com) flow through one serialized queue with a
@@ -60,6 +70,11 @@ React browser
 - Search fans out into three upstream calls; `fetchGlobalSearch` remembers
   recent query/filter combinations in a 30-minute sessionStorage cache so
   toggling filters does not re-press the upstream source.
+- Feeds persist a per-source snapshot in sessionStorage
+  (`redalt.feedSnapshot`) and hydrate it instantly on mount, refreshing in the
+  background. `usePostListingFeed` also prefetches the next page ~2.5s after
+  the initial load into an in-memory map so "load more" is instant; prefetch
+  failures stay silent and pagination falls back to a direct fetch.
 
 ## Media rendering notes
 

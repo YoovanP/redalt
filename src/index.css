@@ -378,6 +378,11 @@ input:focus, select:focus {
   box-shadow: 0 0 6px color-mix(in srgb, #d99b2a 55%, transparent);
 }
 
+.gateway-status-anon .gateway-status-dot {
+  background: #4a9fd9;
+  box-shadow: 0 0 6px color-mix(in srgb, #4a9fd9 55%, transparent);
+}
+
 .gateway-status-degraded .gateway-status-dot {
   background: #cc4747;
   box-shadow: 0 0 6px color-mix(in srgb, #cc4747 55%, transparent);

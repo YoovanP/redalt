@@ -45,6 +45,16 @@ REDDIT_REFRESH_TOKEN=...
 
 `REDDIT_OAUTH_ACCESS_TOKEN` is available as a short-lived development override, but client credentials or a refresh token is the normal deployment setup. The Vite development gateway loads these values only in Node; they are not bundled into the browser.
 
+### Anonymous installed-app grant (at your own risk)
+
+Reddit closed self-serve app registration in late 2025, so new developers cannot create their own client id/secret. As an explicit opt-in, the gateway also supports the anonymous installed-app grant: set `REDDIT_ANON_CLIENT_ID` to a client id shipped by a third-party client (no secret required) and the gateway will request an anonymous token. This is NOT sanctioned by Reddit's API terms, the credential can be rotated at any time, and overuse can get the shared credential (or your IP) limited. Personal, read-only use only.
+
+```bash
+REDDIT_ANON_CLIENT_ID=...
+# optional
+REDDIT_ANON_DEVICE_ID=DO_NOT_TRACK_THIS_DEVICE
+```
+
 ### Fallbacks
 
 When OAuth is not configured, the gateway automatically uses the bounded old.reddit/RSS scrape path so an out-of-the-box deployment works. OAuth is always preferred when credentials exist. You can force the scrape path on or off explicitly with `ENABLE_LEGACY_SCRAPE_FALLBACK=true|false`, or hard-disable it with `REDDIT_DISABLE_SCRAPE_FALLBACK=true`.

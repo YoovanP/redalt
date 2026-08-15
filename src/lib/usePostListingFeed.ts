@@ -26,6 +26,61 @@ type UseNearEndLoadMoreOptions = {
 const MEDIA_PAGE_SCAN_LIMIT = 4;
 const normalizedPostCache = new WeakMap<RedditPostData, NormalizedPost>();
 
+// Feeds persist their last page in session storage so reopening the app (or
+// navigating back to a subreddit) renders instantly and refreshes in the
+// background instead of showing a skeleton.
+const FEED_SNAPSHOT_KEY = 'redalt.feedSnapshot';
+const FEED_SNAPSHOT_LIMIT = 12;
+const FEED_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+type FeedSnapshotEntry = {
+  sourceKey: string;
+  posts: RedditPostData[];
+  after: string | null;
+  savedAt: number;
+};
+
+function readFeedSnapshot(sourceKey: string): FeedSnapshotEntry | null {
+  try {
+    const raw = window.sessionStorage.getItem(FEED_SNAPSHOT_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as FeedSnapshotEntry[];
+    const entry = Array.isArray(parsed) ? parsed.find((item) => item?.sourceKey === sourceKey) : null;
+
+    if (!entry || !Array.isArray(entry.posts) || Date.now() - entry.savedAt > FEED_SNAPSHOT_MAX_AGE_MS) {
+      return null;
+    }
+
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+function writeFeedSnapshot(sourceKey: string, posts: RedditPostData[], after: string | null): void {
+  try {
+    const raw = window.sessionStorage.getItem(FEED_SNAPSHOT_KEY);
+    const parsed = JSON.parse(raw ?? '[]') as FeedSnapshotEntry[];
+    const rest = (Array.isArray(parsed) ? parsed : [])
+      .filter((entry) => entry?.sourceKey && entry.sourceKey !== sourceKey)
+      .slice(0, FEED_SNAPSHOT_LIMIT - 1);
+    const entry: FeedSnapshotEntry = { sourceKey, posts, after, savedAt: Date.now() };
+
+    window.sessionStorage.setItem(FEED_SNAPSHOT_KEY, JSON.stringify([entry, ...rest]));
+  } catch {
+    // Snapshotting is best-effort; the live fetch path is unaffected.
+  }
+}
+
+// One-page lookahead so "load more" feels instant. Keyed by source+cursor and
+// kept in memory only; failures (e.g. a WAF block) fall back to a normal
+// fetch when the reader actually asks for the page.
+const prefetchedPages = new Map<string, PostListingResult>();
+
 function normalizePostCached(post: RedditPostData): NormalizedPost {
   const cached = normalizedPostCache.get(post);
   if (cached) return cached;
@@ -121,10 +176,13 @@ export function usePostListingFeed({
     setAfter(null);
     loadMorePausedRef.current = false;
 
-    // Keep already-loaded posts visible when the same source is reloaded
-    // (retry, settings refresh). Only a source change starts from a clean slate.
+    // A source change starts from the persisted snapshot when one exists so
+    // the feed renders instantly; the live fetch below then refreshes it.
     if (sourceChanged) {
-      setPosts([]);
+      const snapshot = typeof window !== 'undefined' ? readFeedSnapshot(sourceKey) : null;
+
+      setPosts(snapshot?.posts ?? []);
+      setAfter(snapshot?.after ?? null);
     }
 
     fetchInitialListingPages(fetchPage, videoFeedMode, controller.signal)
@@ -135,6 +193,30 @@ export function usePostListingFeed({
 
         setPosts(result.posts);
         setAfter(result.after);
+        writeFeedSnapshot(sourceKey, result.posts, result.after);
+
+        // Look ahead one page so the next "load more" is instant. Deliberately
+        // fire-and-forget: failures stay silent and the reader-triggered
+        // pagination falls back to a direct fetch.
+        if (result.after && !videoFeedMode) {
+          const prefetchKey = `${sourceKey}|${result.after}`;
+
+          window.setTimeout(() => {
+            if (controller.signal.aborted) {
+              return;
+            }
+
+            void fetchPage({ after: result.after, signal: controller.signal })
+              .then((nextPage) => {
+                if (!controller.signal.aborted) {
+                  prefetchedPages.set(prefetchKey, nextPage);
+                }
+              })
+              .catch(() => {
+                // Prefetch is best-effort.
+              });
+          }, 2_500);
+        }
       })
       .catch((err: unknown) => {
         if (!ignore && !controller.signal.aborted) {
@@ -174,7 +256,16 @@ export function usePostListingFeed({
       const existingNames = new Set(posts.map((post) => post.name));
 
       while (cursor && attempts < maxAttempts) {
-        const result = await fetchPage({ after: cursor });
+        const prefetchKey = `${sourceKey}|${cursor}`;
+        const prefetched = prefetchedPages.get(prefetchKey);
+        let result: PostListingResult;
+
+        if (prefetched) {
+          prefetchedPages.delete(prefetchKey);
+          result = prefetched;
+        } else {
+          result = await fetchPage({ after: cursor });
+        }
 
         collected.push(...result.posts);
         nextAfter = result.after;
@@ -211,6 +302,7 @@ export function usePostListingFeed({
       }
 
       setAfter(nextAfter === after ? null : nextAfter);
+      writeFeedSnapshot(sourceKey, posts.concat(uniqueCollected), nextAfter === after ? null : nextAfter);
     } catch (err) {
       // An observer should not keep replaying a failed page while its trigger is
       // still visible. Only an explicit retry resumes pagination.

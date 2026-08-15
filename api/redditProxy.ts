@@ -1,6 +1,6 @@
 export type RedditProxyEnv = Record<string, string | undefined>;
 
-export type OfficialOAuthMode = 'none' | 'provided-token' | 'refresh-token' | 'app-only';
+export type OfficialOAuthMode = 'none' | 'provided-token' | 'refresh-token' | 'app-only' | 'anon-client';
 
 // This surface is intentionally configuration-focused, rather than an upstream
 // liveness probe. It tells an operator whether a deployed gateway has the
@@ -529,6 +529,15 @@ function getOfficialOAuthMode(env: RedditProxyEnv | undefined): OfficialOAuthMod
   }
 
   if (!envValue(env, 'REDDIT_CLIENT_ID') || !envValue(env, 'REDDIT_CLIENT_SECRET')) {
+    // The installed-app grant needs no secret: it lets an operator supply a
+    // single client id (e.g. one shipped by a third-party client) and receive
+    // an anonymous token. This is NOT sanctioned by Reddit's API terms — it
+    // is an explicit opt-in for personal, read-only use and can stop working
+    // or get the credential rotated without notice.
+    if (envValue(env, 'REDDIT_ANON_CLIENT_ID')) {
+      return 'anon-client';
+    }
+
     return 'none';
   }
 
@@ -565,7 +574,7 @@ export function getRedditProxyStatus(
 }
 
 function getOfficialTokenCacheKey(env: RedditProxyEnv | undefined): string {
-  const clientId = envValue(env, 'REDDIT_CLIENT_ID');
+  const clientId = envValue(env, 'REDDIT_CLIENT_ID') || envValue(env, 'REDDIT_ANON_CLIENT_ID');
   const refreshToken = envValue(env, 'REDDIT_REFRESH_TOKEN');
   return `${clientId}:${refreshToken ? 'refresh' : 'client'}`;
 }
@@ -575,21 +584,31 @@ async function requestOfficialRedditAccessToken(
   options: RedditProxyOptions,
   cacheKey: string,
 ): Promise<string | null> {
-  const clientId = envValue(env, 'REDDIT_CLIENT_ID');
+  const clientId = envValue(env, 'REDDIT_CLIENT_ID') || envValue(env, 'REDDIT_ANON_CLIENT_ID');
   const clientSecret = envValue(env, 'REDDIT_CLIENT_SECRET');
 
-  if (!clientId || !clientSecret) {
+  if (!clientId) {
     return null;
   }
 
   try {
     const refreshToken = envValue(env, 'REDDIT_REFRESH_TOKEN');
-    const form = new URLSearchParams(
-      refreshToken
-        ? { grant_type: 'refresh_token', refresh_token: refreshToken }
-        : { grant_type: 'client_credentials' },
-    );
-    const authorization = btoa(`${clientId}:${clientSecret}`);
+    let form: URLSearchParams;
+
+    if (!clientSecret) {
+      // Anonymous installed-app grant: no secret, an anonymous device token.
+      // Used only when the operator explicitly opts into REDDIT_ANON_CLIENT_ID.
+      form = new URLSearchParams({
+        grant_type: 'https://oauth.reddit.com/grants/installed_client',
+        device_id: envValue(env, 'REDDIT_ANON_DEVICE_ID') || 'DO_NOT_TRACK_THIS_DEVICE',
+      });
+    } else if (refreshToken) {
+      form = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken });
+    } else {
+      form = new URLSearchParams({ grant_type: 'client_credentials' });
+    }
+
+    const authorization = btoa(`${clientId}:${clientSecret ?? ''}`);
     const response = await fetchWithTimeout(
       OFFICIAL_REDDIT_TOKEN_URL,
       {
@@ -645,10 +664,12 @@ async function getOfficialRedditAccessToken(
     return signal?.aborted ? null : suppliedToken;
   }
 
-  const clientId = envValue(env, 'REDDIT_CLIENT_ID');
+  const clientId = envValue(env, 'REDDIT_CLIENT_ID') || envValue(env, 'REDDIT_ANON_CLIENT_ID');
   const clientSecret = envValue(env, 'REDDIT_CLIENT_SECRET');
 
-  if (!clientId || !clientSecret || signal?.aborted) {
+  // The anonymous installed-app grant is secret-less and deliberately
+  // opt-in; it must not be silently treated as a broken app-only setup.
+  if (!clientId || (!clientSecret && !envValue(env, 'REDDIT_ANON_CLIENT_ID')) || signal?.aborted) {
     return null;
   }
 
