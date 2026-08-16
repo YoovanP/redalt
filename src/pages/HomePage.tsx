@@ -14,14 +14,14 @@ import { useNearEndLoadMore } from '../lib/usePostListingFeed';
 import type { NormalizedPost } from '../types/reddit';
 
 const QUICK_SUBREDDITS = [
-  'mildlyinfuriating',
-  'pics',
-  'videos',
-  'todayilearned',
-  'technology',
-  'worldnews',
-  'funny',
-  'AskReddit',
+  { name: 'mildlyinfuriating', icon: '⚡' },
+  { name: 'pics', icon: '📸' },
+  { name: 'videos', icon: '🎬' },
+  { name: 'todayilearned', icon: '💡' },
+  { name: 'technology', icon: '💻' },
+  { name: 'worldnews', icon: '🌐' },
+  { name: 'funny', icon: '🎭' },
+  { name: 'AskReddit', icon: '💬' },
 ];
 
 function getRecentSubreddits(): string[] {
@@ -190,9 +190,10 @@ export function HomePage() {
         <article className="home-card">
           <h3>Popular Communities</h3>
           <div className="home-chip-list">
-            {QUICK_SUBREDDITS.map((name) => (
-              <Link key={name} to={`/r/${name}`} className="home-chip">
-                r/{name}
+            {QUICK_SUBREDDITS.map((item) => (
+              <Link key={item.name} to={`/r/${item.name}`} className="home-chip">
+                <span className="home-chip-icon">{item.icon}</span>
+                <span>r/{item.name}</span>
               </Link>
             ))}
           </div>

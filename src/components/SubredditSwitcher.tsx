@@ -231,6 +231,10 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
   return (
     <form className={`subreddit-form${wide ? ' subreddit-form-wide' : ''}`} onSubmit={onSubmit}>
       <div className="subreddit-input-wrap">
+        <svg className="search-input-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
         <input
           value={value}
           onChange={(event) => {
@@ -239,7 +243,6 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
             setSuggestions([]);
             setActiveSuggestionIndex(-1);
             setShowSuggestions(false);
-
           }}
           onFocus={() => {
             setIsFocused(true);
@@ -264,6 +267,20 @@ export function SubredditSwitcher({ initialSubreddit, wide = false }: SubredditS
           }
           autoComplete="off"
         />
+        {value.length > 0 && (
+          <button
+            type="button"
+            className="search-input-clear"
+            aria-label="Clear search query"
+            onClick={() => {
+              setValue('');
+              setSuggestions([]);
+              setShowSuggestions(false);
+            }}
+          >
+            ×
+          </button>
+        )}
 
         {showSuggestions && (
           <ul id={suggestionsId} className="subreddit-suggestions" role="listbox" aria-label="Search suggestions">

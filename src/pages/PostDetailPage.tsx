@@ -21,11 +21,13 @@ type PostDetailRouteState = {
 type CommentItemProps = {
   comment: RedditComment;
   depth?: number;
+  postAuthor?: string;
 };
 
-const CommentItem = memo(function CommentItem({ comment, depth = 0 }: CommentItemProps) {
+const CommentItem = memo(function CommentItem({ comment, depth = 0, postAuthor }: CommentItemProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [showReplies, setShowReplies] = useState(depth === 0);
+  const isOp = Boolean(postAuthor && comment.author.toLowerCase() === postAuthor.toLowerCase());
   const itemClassName = depth === 0
     ? `comment-item comment-item-root${collapsed ? ' comment-root-collapsed' : ''}`
     : 'comment-item comment-item-child';
@@ -51,11 +53,14 @@ const CommentItem = memo(function CommentItem({ comment, depth = 0 }: CommentIte
             {collapsed ? '+' : '−'}
           </button>
         )}
-        <strong>
-          <Link to={`/u/${comment.author}`}>u/{comment.author}</Link>
+        <strong className="comment-author-wrap">
+          <Link to={`/u/${comment.author}`} className="comment-author-link">
+            u/{comment.author}
+          </Link>
+          {isOp && <span className="comment-op-badge" title="Original Poster">OP</span>}
         </strong>
         {comment.parentAuthor && (
-          <span>
+          <span className="comment-replying-to">
             replying to <Link to={`/u/${comment.parentAuthor}`}>u/{comment.parentAuthor}</Link>
           </span>
         )}
@@ -78,7 +83,7 @@ const CommentItem = memo(function CommentItem({ comment, depth = 0 }: CommentIte
               {showReplies && (
                 <ul className="comments-children">
                   {comment.replies.map((reply) => (
-                    <CommentItem key={reply.id} comment={reply} depth={depth + 1} />
+                    <CommentItem key={reply.id} comment={reply} depth={depth + 1} postAuthor={postAuthor} />
                   ))}
                 </ul>
               )}
@@ -262,8 +267,11 @@ export function PostDetailPage() {
 
   return (
     <section className="detail-page">
-      <p>
-        <Link to={`/r/${name}`}>{"<"} Back to /r/{name}</Link>
+      <p className="detail-back-row">
+        <Link to={`/r/${name}`} className="detail-back-link">
+          <span className="back-arrow" aria-hidden="true">←</span>
+          <span>Back to /r/{name}</span>
+        </Link>
       </p>
       <PostHeader post={normalized} linked={false} showSubreddit />
 
@@ -315,7 +323,7 @@ export function PostDetailPage() {
           <h3>Top comments</h3>
           <ul className="comments-root">
             {visibleComments.map((comment) => (
-              <CommentItem key={comment.id} comment={comment} />
+              <CommentItem key={comment.id} comment={comment} postAuthor={normalized.author} />
             ))}
           </ul>
 

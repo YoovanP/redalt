@@ -106,6 +106,28 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <section className="settings-section" aria-labelledby="settings-theme-heading">
+        <h3 id="settings-theme-heading">Theme</h3>
+        <div className="theme-grid" role="radiogroup" aria-label="Choose color theme">
+          {THEMES.map((theme) => (
+            <button
+              key={theme.value}
+              type="button"
+              className={`theme-card${draftSettings.theme === theme.value ? ' theme-card-active' : ''}`}
+              role="radio"
+              aria-checked={draftSettings.theme === theme.value}
+              onClick={() => updateDraftSettings({ theme: theme.value as ThemeName })}
+            >
+              <span className={`theme-swatch theme-swatch-${theme.value}`} aria-hidden="true" />
+              <span className="theme-card-name">{theme.label}</span>
+              {draftSettings.theme === theme.value && (
+                <span className="theme-card-check" aria-hidden="true">✓</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section className="settings-section" aria-labelledby="settings-layout-heading">
         <h3 id="settings-layout-heading">Layout</h3>
         <div className="settings-field-list">
