@@ -18,7 +18,7 @@ Browser → /api/reddit → official Reddit OAuth API (when configured)
 - **Without credentials the gateway auto-enables the bounded old.reddit/RSS scrape path** — the one unauthenticated source that works in practice. If direct RSS is blocked or rate-limited, two bounded RSS-to-JSON mirrors (`feed2json.org`, then `rss2json.com`) run through reduced query variants and one retry round before the public-instance fallback. Anonymous `www.reddit.com` JSON is WAF-blocked from servers and remains a last resort.
 - All requests to Reddit-owned hosts flow through a single serialized queue with minimum spacing, and once Reddit blocks the IP the gateway opens a 90-second circuit breaker instead of piling more requests onto the block.
 - Feed requests have a short overall deadline and are aborted when the user changes route or retries. Already-loaded posts stay visible when a refresh fails (inline banner instead of a full-screen error).
-- Post detail loads comments and the primary post in one request. Media repair is explicit instead of silently fanning out into several extra feed requests.
+- Post detail loads comments and the primary post in one request. Media repair is explicit instead of silently fanning out into several extra feed requests. Hovering or focusing a post title / comments link starts the detail request early (a bounded two-request-deep LRU that respects `Save-Data`), so opening a post usually renders from an already-settled request.
 - The gateway prefers the official OAuth API, validates payload shape before returning it, caches successful JSON briefly, and shares one cold OAuth token exchange across concurrent requests.
 - `Retry-After` is carried from Reddit through the gateway to a visible countdown. Failed pagination pauses until the reader deliberately retries it, rather than repeatedly requesting the same cursor.
 - Search fans out into three upstream calls but recent query/filter combinations are remembered for the session so toggling filters does not re-press the upstream source.
@@ -70,7 +70,9 @@ ENABLE_MIRROR_FALLBACK=false
 
 If the official gateway is not configured or unavailable, the UI shows a clear bounded failure state with Retry and an “Open on Reddit” escape hatch instead of an endless skeleton. Already-loaded content stays on screen during a failed refresh. The header shows a small status pill (`Reader mode` vs `Official API`) so it is always clear which source is serving content.
 
-The RSS-to-JSON mirrors are compatibility paths, not peers of the official API. They are anonymous third-party services, so responses can be partial (the `rss2json` free tier returns at most ten items) and a search served by a mirror is relevance-ordered because Reddit's RSS search endpoints ignore the reader's sort filter.
+The RSS-to-JSON mirrors are compatibility paths, not peers of the official API. They are anonymous third-party services, so responses can be partial (the `rss2json` free tier returns at most ten items unless an operator key is configured via `REDDIT_RSS2JSON_API_KEY`, which unlocks `count=50`) and a search served by a mirror is relevance-ordered because Reddit's RSS search endpoints ignore the reader's sort filter. Both mirrors rate-limit shared anonymous traffic, so the gateway backs off the moment either one reports throttling instead of retrying into the block.
+
+When every live source fails anyway, the gateway serves the last good response for that exact path from its instance cache, marked `X-RedAlt-Cache: stale`, instead of a hard error (bounded to one hour). An explicit upstream 429 still surfaces as a rate-limit response so the client's retry countdown stays truthful.
 
 ### Gateway status
 

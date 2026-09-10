@@ -67,6 +67,31 @@ React browser
   `s-maxage` holds longer, so a probe can keep returning 200 from cache after
   the mirrors have started throttling. Confirm a deployment change with a
   cache-busting `cb=` query parameter as well as the headers.
+- **Serve-stale is the outage backstop**: expired successes stay in the
+  instance cache for `SUCCESS_RESPONSE_STALE_MAX_AGE_MS` (1h) and are served
+  with `X-RedAlt-Cache: stale` (short `Cache-Control`) when every live source
+  fails — except for explicit upstream 429s, whose Retry-After must reach the
+  client for the retry countdown. Both the normal failure end and the
+  Reddit-circuit-cooling-down early return go through this stale lookup, and
+  both need testing (the early return is easy to reach with different cache
+  keys by accident).
+- **Stage timeouts are budgeted against the 10s/12s request deadlines**: HTML
+  3s + RSS 3s + mirror calls 3.5s. When Reddit hangs instead of answering a
+  fast 403, the mirrors must still get runway before the deadline aborts the
+  remaining stages. Do not raise a stage timeout without re-adding up the budget.
+- **Client detail prefetch** (`prefetchPostDetail` in `src/lib/redditApi.ts`):
+  hover/focus on post titles, comments links, and j/k keyboard focus starts
+  the detail request early; the detail page consumes it via
+  `fetchPostDetailWithPrefetch`. Bounded LRU of 6, deduped in flight, skipped
+  when `document.hidden` or `navigator.connection.saveData`, failures resolve
+  to null and fall through to a live fetch. Tests live in
+  `tests/detail-prefetch.test.ts` (vitest; cannot run under `node --test`
+  because `src/lib/redditApi.ts` reads `import.meta.env`).
+- **Optional operator key**: `REDDIT_RSS2JSON_API_KEY` sends
+  `api_key&count=50` to rss2json, lifting the anonymous ten-item cap so
+  mirror-served feeds paginate (synthetic `after` requires more items than the
+  page size). Unverified against a real key — the docs state `count` requires
+  one; measure actual behavior before relying on it.
 
 - **Self-serve app registration is closed** (Responsible Builder Policy, late
   2025): the prefs/apps form is a zombie and new client ids/secrets are not

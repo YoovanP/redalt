@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { prefetchPostDetail } from '../../lib/redditApi';
 import type { NormalizedPost } from '../../types/reddit';
 import { PostMeta } from './PostMeta';
 
@@ -21,6 +22,10 @@ export function PostHeader({
 }: PostHeaderProps) {
   const Heading = `h${headingLevel}` as const;
   const path = `/r/${post.subreddit}/comments/${post.id}`;
+  // Start the detail request while the pointer/keyboard is on the way to the
+  // click. Skipped for the detail page's own header (linked=false) and for
+  // new-tab links, whose request is served by the gateway cache instead.
+  const prefetch = linked && !openInNewTab ? () => prefetchPostDetail(post.subreddit, post.id) : undefined;
 
   return (
     <header className="post-header">
@@ -30,6 +35,8 @@ export function PostHeader({
             to={path}
             state={{ fromSubreddit: post.subreddit, fallbackPost: post }}
             onClick={onNavigate}
+            onPointerEnter={prefetch}
+            onFocus={prefetch}
             target={openInNewTab ? '_blank' : undefined}
             rel={openInNewTab ? 'noopener noreferrer' : undefined}
           >

@@ -10,6 +10,10 @@ vi.mock('../src/lib/redditApi', async (importOriginal) => {
   return {
     ...original,
     fetchPostDetail: mocks.fetchPostDetail,
+    // The detail page consumes the intent prefetch; route it through the same
+    // mock so tests observe exactly one data path.
+    fetchPostDetailWithPrefetch: (subreddit: string, postId: string, options = {}) =>
+      mocks.fetchPostDetail(subreddit, postId, options),
     fetchPostMediaEnrichment: vi.fn(),
     getRememberedPost: vi.fn(() => null),
   };

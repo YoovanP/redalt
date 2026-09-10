@@ -1169,6 +1169,129 @@ test('honors the rss2json throttle message and skips both mirrors while cooling 
   );
 });
 
+test('serves the last good response stale when every live source fails', { concurrency: false }, async () => {
+  const rssXml = `
+    <rss><channel><item>
+      <title>Stale cache source post</title>
+      <author>grace</author>
+      <link>https://www.reddit.com/r/test/comments/stalecache1/stale_cache_source_post/</link>
+      <description><![CDATA[<p>Fresh from RSS.</p>]]></description>
+      <is_self_link>true</is_self_link>
+    </item></channel></rss>`;
+  let rssBlocked = false;
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return rssBlocked
+          ? new Response('blocked now too', { status: 403 })
+          : new Response(rssXml, { status: 200, headers: { 'Content-Type': 'application/atom+xml; charset=UTF-8' } });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json({ version: 'https://jsonfeed.org/version/1', err: 'Error processing feed' });
+      }
+
+      if (url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')) {
+        return Response.json({ status: 'error', message: 'You are converting new feeds in a very short period of time' });
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+
+      // Populate the instance cache through a real success first.
+      const first = await handleRedditProxyRequest(TEST_PATH, {});
+      assert.equal(first.status, 200);
+      assert.equal(first.headers.get('x-redalt-cache'), null);
+      const redditCallsAfterFirst = calls.filter(({ url }) => url.startsWith('https://www.reddit.com/r/test.rss')).length;
+
+      // Jump past the fresh TTL (10 min) but stay inside the stale window, so
+      // a fresh cache hit is impossible while the stale copy remains.
+      const realNow = Date.now;
+      globalThis.Date.now = () => realNow() + 11 * 60 * 1000;
+
+      try {
+        rssBlocked = true;
+        const second = await handleRedditProxyRequest(TEST_PATH, {});
+        const payload = await second.json();
+
+        assert.equal(second.status, 200, 'stale content should be served over a hard failure');
+        assert.equal(second.headers.get('x-redalt-cache'), 'stale');
+        assert.equal(payload.data.children[0].data.id, 'stalecache1');
+        assert.equal(second.headers.get('cache-control'), 'public, max-age=15, s-maxage=30');
+      } finally {
+        globalThis.Date.now = realNow;
+      }
+
+      assert.ok(
+        calls.filter(({ url }) => url.startsWith('https://www.reddit.com/r/test.rss')).length > redditCallsAfterFirst,
+        'the second request took a live path before falling back to stale',
+      );
+    },
+  );
+});
+
+test('passes the operator rss2json key through and requests the full item count', { concurrency: false }, async () => {
+  const rss2JsonPayload = {
+    status: 'ok',
+    items: [
+      {
+        title: 'keyed mirror post',
+        pubDate: '2026-09-10 00:00:00',
+        link: 'https://www.reddit.com/r/test/comments/keyed1/keyed_mirror_post/',
+        guid: 't3_keyed1',
+        author: '/u/frank',
+        description: '<p>Keyed body.</p>',
+        content: '<p>Keyed body.</p>',
+        enclosure: { link: '', type: '' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json({ version: 'https://jsonfeed.org/version/1', err: 'Error processing feed' });
+      }
+
+      if (url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')) {
+        return Response.json(rss2JsonPayload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, { REDDIT_RSS2JSON_API_KEY: 'test-key-123' });
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.children[0].data.id, 'keyed1');
+      const rss2JsonCalls = calls.filter(({ url }) => url.startsWith('https://api.rss2json.com/v1/api.json'));
+
+      assert.ok(rss2JsonCalls.length > 0, 'rss2json was not called');
+      assert.ok(
+        rss2JsonCalls.every(({ url }) => url.includes('api_key=test-key') && url.includes('count=50')),
+        'the rss2json key or count parameter was not sent',
+      );
+    },
+  );
+});
+
 test('skips Reddit-owned requests and serves the mirror while the block circuit is cooling down', { concurrency: false }, async () => {
   const jsonFeed = {
     version: 'https://jsonfeed.org/version/1',

@@ -2072,3 +2072,78 @@ export async function fetchPostMediaEnrichment(
   rememberPosts([merged]);
   return merged;
 }
+
+// ---- Intent prefetch for post details ----
+// Hovering or focusing a post title / comments link starts the detail request
+// early so opening the post usually renders from an already-settled request.
+// The map is a small LRU: repeat hovers dedupe, failures resolve to null and
+// fall through to a live fetch, and the detail page consumes the result via
+// fetchPostDetailWithPrefetch. Bounded so skimming a feed cannot fan out.
+const DETAIL_PREFETCH_LIMIT = 6;
+const detailPrefetchInFlight = new Map<string, Promise<PostDetailResult | null>>();
+
+function detailPrefetchKey(subreddit: string, postId: string): string {
+  return `${subreddit.toLowerCase()}/${postId}`;
+}
+
+function canPrefetchDetails(): boolean {
+  if (typeof window === 'undefined' || document.visibilityState === 'hidden') {
+    return false;
+  }
+
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+
+  return !connection?.saveData;
+}
+
+export function prefetchPostDetail(subredditInput: string, postId: string): void {
+  const subreddit = normalizeSubredditName(subredditInput);
+
+  if (!subreddit || !postId || !canPrefetchDetails()) {
+    return;
+  }
+
+  const key = detailPrefetchKey(subreddit, postId);
+  const existing = detailPrefetchInFlight.get(key);
+
+  if (existing) {
+    // Refresh the LRU position so the entries the user is actually hovering
+    // survive eviction while they skim.
+    detailPrefetchInFlight.delete(key);
+    detailPrefetchInFlight.set(key, existing);
+    return;
+  }
+
+  while (detailPrefetchInFlight.size >= DETAIL_PREFETCH_LIMIT) {
+    const oldestKey = detailPrefetchInFlight.keys().next().value;
+
+    if (typeof oldestKey !== 'string') {
+      break;
+    }
+
+    detailPrefetchInFlight.delete(oldestKey);
+  }
+
+  detailPrefetchInFlight.set(key, fetchPostDetail(subreddit, postId).catch(() => null));
+}
+
+export async function fetchPostDetailWithPrefetch(
+  subredditInput: string,
+  postId: string,
+  options: FetchPostDetailOptions = {},
+): Promise<PostDetailResult> {
+  const subreddit = normalizeSubredditName(subredditInput);
+  const key = detailPrefetchKey(subreddit, postId);
+  const prefetched = detailPrefetchInFlight.get(key);
+
+  if (prefetched) {
+    detailPrefetchInFlight.delete(key);
+    const result = await prefetched;
+
+    if (result) {
+      return result;
+    }
+  }
+
+  return fetchPostDetail(subredditInput, postId, options);
+}

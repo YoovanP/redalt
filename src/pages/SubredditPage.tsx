@@ -11,6 +11,7 @@ import {
   fetchSubredditListing,
   type FetchListingOptions,
   type ListingSort,
+  prefetchPostDetail,
   type TopTimeRange,
 } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
@@ -179,6 +180,20 @@ export function SubredditPage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [videoFeedMode, visiblePosts, focusedPostIndex, navigate]);
+
+  // Keyboard users get the same instant-open path as pointer users: focusing a
+  // card with j/k starts the detail request so Enter renders without waiting.
+  useEffect(() => {
+    if (videoFeedMode || focusedPostIndex < 0) {
+      return;
+    }
+
+    const post = visiblePosts[focusedPostIndex];
+
+    if (post) {
+      prefetchPostDetail(post.subreddit, post.id);
+    }
+  }, [videoFeedMode, focusedPostIndex, visiblePosts]);
 
   useEffect(() => {
     if (loading || hasRestoredScrollRef.current) {

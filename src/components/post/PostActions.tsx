@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { invalidateSavedPostsCache, isPostSaved, LIBRARY_UPDATE_EVENT, toggleSavedPost, type LibraryUpdateDetail } from '../../lib/localLibrary';
+import { prefetchPostDetail } from '../../lib/redditApi';
 import type { NormalizedPost } from '../../types/reddit';
 
 type PostActionsProps = {
@@ -14,6 +15,7 @@ export function PostActions({ post, showComments = true, openInNewTab = false, o
   const [shareState, setShareState] = useState<'idle' | 'done' | 'error'>('idle');
   const [saved, setSaved] = useState(() => isPostSaved(post.id));
   const path = `/r/${post.subreddit}/comments/${post.id}`;
+  const prefetch = openInNewTab ? undefined : () => prefetchPostDetail(post.subreddit, post.id);
 
   useEffect(() => {
     const refresh = () => setSaved(isPostSaved(post.id));
@@ -52,6 +54,8 @@ export function PostActions({ post, showComments = true, openInNewTab = false, o
           to={path}
           state={{ fromSubreddit: post.subreddit, fallbackPost: post }}
           onClick={onNavigate}
+          onPointerEnter={prefetch}
+          onFocus={prefetch}
           target={openInNewTab ? '_blank' : undefined}
           rel={openInNewTab ? 'noopener noreferrer' : undefined}
         >

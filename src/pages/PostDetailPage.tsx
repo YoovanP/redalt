@@ -8,7 +8,7 @@ import { SkeletonLoader } from '../components/SkeletonLoader';
 import { StateView } from '../components/StateView';
 import { addWatchHistory } from '../lib/localLibrary';
 import { normalizePost } from '../lib/normalizePost';
-import { fetchPostDetail, fetchPostMediaEnrichment, getRememberedPost, mergePostCandidates } from '../lib/redditApi';
+import { fetchPostDetail, fetchPostDetailWithPrefetch, fetchPostMediaEnrichment, getRememberedPost, mergePostCandidates } from '../lib/redditApi';
 import { useUiSettings } from '../lib/uiSettings';
 import type { NormalizedPost, PostDetailResult, RedditComment, RedditPostData } from '../types/reddit';
 
@@ -137,7 +137,9 @@ export function PostDetailPage() {
     setMediaStatus('idle');
     setVisibleTopLevelComments(TOP_LEVEL_COMMENTS_STEP);
 
-    fetchPostDetail(name, id, { signal: controller.signal })
+    // Uses the intent prefetch when the user hovered the link before clicking;
+    // otherwise a normal live request runs.
+    fetchPostDetailWithPrefetch(name, id, { signal: controller.signal })
       .then((result) => {
         setPostData(result.post);
         setComments(result.comments);

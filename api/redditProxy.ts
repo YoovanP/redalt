@@ -92,16 +92,25 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
-const MIRROR_REQUEST_TIMEOUT_MS = 5000;
+const MIRROR_REQUEST_TIMEOUT_MS = 3500;
 const MIRROR_ATTEMPT_ROUNDS = 2;
 const MIRROR_RETRY_DELAY_MS = 350;
 const SUCCESS_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
+// How long an expired success stays servable as a stale last resort when
+// every live source fails. Keeps the LRU bound meaningful while letting a
+// Reddit block window ride out on slightly old content.
+const SUCCESS_RESPONSE_STALE_MAX_AGE_MS = 60 * 60 * 1000;
 const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
 const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
 const REDLIB_DETAIL_ENRICH_CONCURRENCY = 4;
 const REDLIB_DETAIL_ENRICH_TIMEOUT_MS = 1800;
 const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 8;
-const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 5000;
+// The listing deadline is 10s and the detail deadline 12s. Reddit answers
+// blocks fast (a 403 arrives in well under a second); a full-stage timeout
+// only burns the budget when upstream hangs, and every second spent there is
+// a second the mirrors and public instances never get. Keep the stages tight:
+// HTML 3s + RSS 3s leaves roughly 3.5s of mirror runway inside the deadline.
+const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 3000;
 const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 6000;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
 const CROSSPOST_MEDIA_MAX_DEPTH = 3;
@@ -145,6 +154,13 @@ const successfulResponseCache = new Map<string, CachedSuccessResponse>();
 let cachedOfficialAccessToken: CachedOfficialAccessToken | null = null;
 let officialAccessTokenRequest: InFlightOfficialAccessToken | null = null;
 
+function getSuccessCacheSavedAt(cached: CachedSuccessResponse): number {
+  return cached.expiresAt - SUCCESS_RESPONSE_CACHE_TTL_MS;
+}
+
+// Fresh entries answer lookup. Expired entries stay for a bounded stale window
+// so that a full upstream outage (Reddit block plus throttled mirrors) can
+// still serve the last good response instead of a hard error.
 function getCachedSuccessResponse(cacheKey: string): Response | null {
   const cached = successfulResponseCache.get(cacheKey);
 
@@ -153,7 +169,6 @@ function getCachedSuccessResponse(cacheKey: string): Response | null {
   }
 
   if (cached.expiresAt <= Date.now()) {
-    successfulResponseCache.delete(cacheKey);
     return null;
   }
 
@@ -162,6 +177,27 @@ function getCachedSuccessResponse(cacheKey: string): Response | null {
 
   const headers = new Headers(cached.headers);
   headers.set('X-RedAlt-Cache', 'hit');
+  return new Response(cached.body, { status: cached.status, headers });
+}
+
+function getStaleSuccessResponse(cacheKey: string): Response | null {
+  const cached = successfulResponseCache.get(cacheKey);
+
+  if (!cached) {
+    return null;
+  }
+
+  if (Date.now() - getSuccessCacheSavedAt(cached) > SUCCESS_RESPONSE_STALE_MAX_AGE_MS) {
+    successfulResponseCache.delete(cacheKey);
+    return null;
+  }
+
+  successfulResponseCache.delete(cacheKey);
+  successfulResponseCache.set(cacheKey, cached);
+
+  const headers = new Headers(cached.headers);
+  headers.set('X-RedAlt-Cache', 'stale');
+  headers.set('Cache-Control', 'public, max-age=15, s-maxage=30');
   return new Response(cached.body, { status: cached.status, headers });
 }
 
@@ -175,7 +211,7 @@ async function rememberSuccessfulResponse(cacheKey: string, response: Response):
   const now = Date.now();
 
   for (const [key, cached] of successfulResponseCache) {
-    if (cached.expiresAt <= now) {
+    if (now - getSuccessCacheSavedAt(cached) > SUCCESS_RESPONSE_STALE_MAX_AGE_MS) {
       successfulResponseCache.delete(key);
     }
   }
@@ -901,10 +937,17 @@ export async function handleRedditProxyRequest(
       }
     }
 
-    // The Reddit-owned path is cooling down and no mirror could answer. Return
-    // the structured retryable block signal now instead of spending the public
+    // The Reddit-owned path is cooling down and no mirror could answer. Serve
+    // the stale last-good response for this path if we still have one, else
+    // return the structured retryable block signal — never spend the public
     // instance budget on a request that upstream has already refused.
     if (legacyScrapeFallbackEnabled(env) && !redditOwnedFailureResponse && isRedditOwnedCoolingDown()) {
+      const staleResponse = getStaleSuccessResponse(cacheKey);
+
+      if (staleResponse) {
+        return staleResponse;
+      }
+
       return redditOwnedBlockedResponse();
     }
 
@@ -986,6 +1029,20 @@ export async function handleRedditProxyRequest(
         if (!fallbackResponse) {
           fallbackResponse = responseFromUpstream(upstreamResponse, 'public, max-age=15, s-maxage=30');
         }
+      }
+    }
+
+    // Every live source failed. Serve the last good response for this exact
+    // path from the instance cache, marked stale, rather than a hard error —
+    // except for an explicit 429, where the Retry-After signal must reach the
+    // client so pagination pauses and the countdown stays truthful.
+    const failureResponse = redditOwnedFailureResponse ?? fallbackResponse;
+
+    if (!failureResponse || failureResponse.status !== 429) {
+      const staleResponse = getStaleSuccessResponse(cacheKey);
+
+      if (staleResponse) {
+        return staleResponse;
       }
     }
 
@@ -6025,8 +6082,13 @@ async function fetchViaRss2JsonMirror(
 
   const probe = async (redditRssPath: string): Promise<MirrorProbeOutcome> => {
     try {
+      // With an operator-provided key the anonymous ten-item cap and `count`
+      // restriction lift (rss2json docs: `count` requires an api key), so the
+      // mirror can serve full pages and usable synthetic pagination.
+      const apiKey = env?.REDDIT_RSS2JSON_API_KEY ?? '';
+      const keyParams = apiKey ? `&api_key=${encodeURIComponent(apiKey)}&count=50` : '';
       const response = await fetchWithTimeout(
-        `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://www.reddit.com${redditRssPath}`)}`,
+        `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://www.reddit.com${redditRssPath}`)}${keyParams}`,
         {
           headers: {
             Accept: 'application/json',
@@ -6314,7 +6376,9 @@ async function fetchViaRedditRss(
           'User-Agent': getProxyUserAgent(env, options),
         },
       },
-      4500,
+      // Tight on purpose: a healthy RSS answer arrives in ~1s, and the listing
+      // deadline must leave room for the mirror tier after this fails.
+      3000,
       signal,
     );
 
