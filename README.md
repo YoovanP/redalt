@@ -35,6 +35,8 @@ Copy `.env.example` to `.env.local` for local development. Keep the browser on i
 VITE_REDDIT_API_BASES=/api/reddit
 ```
 
+`/api/reddit` is always the first candidate the browser tries, and any other owned origin listed here is appended after it. The variable is additive on purpose: a deployment that points it at a retired Render/Pages host keeps working because the same-origin gateway is still attempted first. The browser never hops through third-party proxies.
+
 Create a Reddit OAuth application at <https://www.reddit.com/prefs/apps>, then set these **server-only** variables. Do not prefix them with `VITE_`.
 
 ```bash

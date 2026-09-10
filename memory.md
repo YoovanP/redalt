@@ -24,9 +24,20 @@ React browser
                  → RSS-to-JSON mirrors → (auto) public instances → (opt-in) mirror
 ```
 
-- `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
-  additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
-  automatically hop through public Render/Pages deployments.
+- `src/lib/redditApi.ts` defaults to `/api/reddit` and ALWAYS keeps it as the
+  first candidate; `VITE_REDDIT_API_BASES` appends additional owned bases after
+  it and can never replace the same-origin boundary. The browser does not hop
+  through public Render/Pages deployments. **Incident (2026-09-10)**: the Vercel
+  project env had `VITE_REDDIT_API_BASES` set to `redalt-vercel.onrender.com`
+  and `redalt.pages.dev`, and the old resolver treated that as a replacement.
+  Both hosts were dead, so every browser served zero posts ("Posts are
+  temporarily unavailable. This request took too long") while
+  `https://redalt.vercel.app/api/reddit` answered 200 to any direct probe —
+  which is why months of gateway-level probing missed it. Symptom worth
+  remembering: `/api/status` still returns 200 (it is fetched same-origin
+  directly) while no `/api/reddit` request ever targets the app's own origin.
+  Verify frontend routing with a real browser, not curl. Tests:
+  `tests/reddit-base-candidates.test.ts`.
 - **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path,
   two RSS-to-JSON mirrors (`feed2json.org`, then `rss2json.com`) when direct RSS
   fails, and the public-instance fallback** (`legacyScrapeFallbackEnabled`:

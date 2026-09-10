@@ -196,7 +196,13 @@ function resolveRedditBases(rawBases: string | undefined): string[] {
     .split(',')
     .map((base) => normalizeBase(base))
     .filter((base) => base.length > 0);
-  const bases = configuredBases.length === 0 ? getDefaultRedditBases() : configuredBases;
+  // VITE_REDDIT_API_BASES is additive, never a replacement: the same-origin
+  // gateway must stay the first candidate. A production build shipped with that
+  // variable pointing at two dead Render/Pages deployments, which dropped
+  // /api/reddit from the candidate list entirely — every visitor then saw
+  // "posts are temporarily unavailable" while the same-origin gateway next to
+  // the app was perfectly healthy. Keep the boundary first and append extras.
+  const bases = [...getDefaultRedditBases(), ...configuredBases];
   const seen = new Set<string>();
   const deduped: string[] = [];
 
