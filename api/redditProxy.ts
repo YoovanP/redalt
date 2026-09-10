@@ -95,6 +95,19 @@ const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
 const MIRROR_REQUEST_TIMEOUT_MS = 3500;
 const MIRROR_ATTEMPT_ROUNDS = 2;
 const MIRROR_RETRY_DELAY_MS = 350;
+// One shared Cache-Control for every success response so each path advertises
+// identical CDN behaviour: brief browser freshness, a short shared-cache TTL,
+// and stale-while-revalidate / stale-if-error windows that let an edge cache
+// keep serving (and quietly refresh, or ride out an upstream outage) instead
+// of stampeding into a Reddit block window. Failure and 429 paths keep their
+// own shorter or no-store directives because a transient block must not be
+// pinned at the edge.
+const SUCCESS_CACHE_CONTROL = 'public, max-age=30, s-maxage=120, stale-while-revalidate=300, stale-if-error=3600';
+// The OAuth path keeps `private`: deployments using a user-authorized refresh
+// token could in principle surface user-scoped payloads through an allowed
+// path, so gateway-served OAuth responses must never be pinned by a shared
+// cache. The freshness directives are otherwise identical.
+const OAUTH_SUCCESS_CACHE_CONTROL = 'private, max-age=30, s-maxage=120, stale-while-revalidate=300, stale-if-error=3600';
 const SUCCESS_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
 // How long an expired success stays servable as a stale last resort when
 // every live source fails. Keeps the LRU bound meaningful while letting a
@@ -112,6 +125,9 @@ const REDLIB_LISTING_DETAIL_ENRICH_MAX_ITEMS = 8;
 // HTML 3s + RSS 3s leaves roughly 3.5s of mirror runway inside the deadline.
 const OLD_REDDIT_HTML_FALLBACK_TIMEOUT_MS = 3000;
 const OLD_REDDIT_DETAIL_ENRICH_TIMEOUT_MS = 6000;
+// Upgrading a flat RSS/mirror comment thread costs one old.reddit HTML read;
+// keep that read tight so the detail journey deadline still has room to spare.
+const OLD_REDDIT_FLAT_DETAIL_ENRICH_TIMEOUT_MS = 3500;
 const COMMENT_THREAD_GOOD_PAYLOAD_SCORE = 70;
 const CROSSPOST_MEDIA_MAX_DEPTH = 3;
 const CROSSPOST_MEDIA_MAX_ITEMS = 4;
@@ -151,6 +167,10 @@ const STATIC_PUBLIC_INSTANCES = [
 let publicInstanceCache: PublicInstanceCache | null = null;
 const publicInstanceHealth = new Map<string, PublicInstanceHealth>();
 const successfulResponseCache = new Map<string, CachedSuccessResponse>();
+// In-flight upstream journeys, keyed by the exact cacheKey the success cache
+// uses, so a fresh-cache hit, a single-flight join, and a recorded success all
+// agree on identity.
+const inFlightUpstreamRequests = new Map<string, Promise<Response>>();
 let cachedOfficialAccessToken: CachedOfficialAccessToken | null = null;
 let officialAccessTokenRequest: InFlightOfficialAccessToken | null = null;
 
@@ -785,7 +805,7 @@ async function fetchViaOfficialRedditApi(
       return null;
     }
 
-    const normalizedResponse = responseFromUpstream(response, 'private, max-age=30, s-maxage=120');
+    const normalizedResponse = responseFromUpstream(response, OAUTH_SUCCESS_CACHE_CONTROL);
     normalizedResponse.headers.set('X-RedAlt-Source', 'official-oauth');
     return normalizedResponse;
   } catch {
@@ -833,7 +853,20 @@ export async function handleRedditProxyRequest(
     return cachedResponse;
   }
 
-  return runWithinProxyDeadline(cleanPath, async (signal) => {
+  // Single-flight dedupe: while one request is walking the fallback chain for
+  // this cacheKey, identical concurrent requests join that journey instead of
+  // racing it end-to-end and doubling the load on rate-limited sources.
+  const inFlightUpstream = inFlightUpstreamRequests.get(cacheKey);
+
+  if (inFlightUpstream) {
+    const sharedResponse = await inFlightUpstream;
+
+    // Response bodies are single-use, so every consumer of the shared
+    // journey — the joining waiter included — must receive its own clone.
+    return sharedResponse.clone();
+  }
+
+  const journeyPromise = runWithinProxyDeadline(cleanPath, async (signal) => {
     const officialResponse = await fetchViaOfficialRedditApi(cleanPath, env, options, signal);
 
     if (officialResponse) {
@@ -856,7 +889,7 @@ export async function handleRedditProxyRequest(
       ).catch(() => null);
 
       if (cloudflareResponse && await hasUsableRedditJsonResponse(cloudflareResponse, cleanPath)) {
-        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(cloudflareResponse, 'public, max-age=30, s-maxage=120'));
+        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(cloudflareResponse, SUCCESS_CACHE_CONTROL));
       }
 
       if (cloudflareResponse?.status === 429) {
@@ -899,6 +932,34 @@ export async function handleRedditProxyRequest(
       return rss2JsonResponse ? rememberSuccessfulResponse(cacheKey, rss2JsonResponse) : null;
     };
 
+    // The degraded detail sources (direct Reddit RSS and the RSS-to-JSON
+    // mirrors) flatten the comment tree: every comment arrives as a top-level
+    // t1 with no replies and no scores. Before handing such a response back,
+    // spend one quiet opportunistic read on old.reddit HTML, which still
+    // serves the real nested thread. The attempt must never mark the
+    // Reddit-owned circuit breaker — the main journey above already made all
+    // breaker decisions for this request, and this read is not worth freezing
+    // out every other scrape on a shared IP.
+    const finalizeLowFidelitySuccess = async (response: Response): Promise<Response> => {
+      const cameFromFlatSource =
+        response.headers.get('X-RedAlt-Fallback') === 'reddit-rss' ||
+        response.headers.get('X-RedAlt-Fallback') === 'reddit-rss-json-proxy';
+
+      if (
+        !cameFromFlatSource ||
+        !isCommentThreadPath(cleanPath) ||
+        !response.ok ||
+        signal.aborted ||
+        isRedditOwnedCoolingDown()
+      ) {
+        return rememberSuccessfulResponse(cacheKey, response);
+      }
+
+      const enrichedResponse = await enrichFlatDetailFromOldRedditHtml(response, cleanPath, env, options, mediaPref, signal);
+
+      return rememberSuccessfulResponse(cacheKey, enrichedResponse ?? response);
+    };
+
     if (legacyScrapeFallbackEnabled(env) && !signal.aborted) {
       if (!isRedditOwnedCoolingDown()) {
         const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref, signal);
@@ -918,7 +979,7 @@ export async function handleRedditProxyRequest(
 
           if (redditRssResponse) {
             if (redditRssResponse.ok) {
-              return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+              return finalizeLowFidelitySuccess(redditRssResponse);
             }
 
             // Prefer a rate-limit response over a generic block, but otherwise
@@ -933,7 +994,7 @@ export async function handleRedditProxyRequest(
       const mirrorsResponse = await mirrorsFallback();
 
       if (mirrorsResponse) {
-        return mirrorsResponse;
+        return finalizeLowFidelitySuccess(mirrorsResponse);
       }
     }
 
@@ -961,7 +1022,7 @@ export async function handleRedditProxyRequest(
       const mirrorResponse = await fetchViaAllOrigins(cleanPath, env, options, signal).catch(() => null);
 
       if (mirrorResponse && await hasUsableRedditJsonResponse(mirrorResponse, cleanPath)) {
-        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, 'public, max-age=30, s-maxage=120'));
+        return rememberSuccessfulResponse(cacheKey, responseFromUpstream(mirrorResponse, SUCCESS_CACHE_CONTROL));
       }
     }
 
@@ -1003,7 +1064,7 @@ export async function handleRedditProxyRequest(
 
         if (upstreamResponse.ok && isJsonContentType(upstreamResponse.headers.get('content-type'))) {
           if (await hasUsableRedditJsonResponse(upstreamResponse, cleanPath)) {
-            return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, 'public, max-age=30, s-maxage=120'));
+            return rememberSuccessfulResponse(cacheKey, responseFromUpstream(upstreamResponse, SUCCESS_CACHE_CONTROL));
           }
 
           continue;
@@ -1046,25 +1107,26 @@ export async function handleRedditProxyRequest(
       }
     }
 
-    return (
-      redditOwnedFailureResponse ??
-      fallbackResponse ??
-      new Response(
-        JSON.stringify({
-          error: 'upstream_unavailable',
-          message: 'No Reddit source responded in time. Please try again.',
-          retryable: true,
-        }),
-        {
-          status: 502,
-          headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'Cache-Control': 'no-store',
-          },
-        },
-      )
-    );
+    return redditOwnedFailureResponse ?? fallbackResponse ?? upstreamUnavailableResponse();
   });
+
+  // The stored promise must never reject: joining waiters await it directly,
+  // and a rejection would surface as an unhandled rejection (or a host-level
+  // 500) for each of them instead of the structured 502 that the journey's
+  // own failure path already produces.
+  const upstreamPromise = journeyPromise.catch(() => upstreamUnavailableResponse());
+  inFlightUpstreamRequests.set(cacheKey, upstreamPromise);
+
+  // Clear the slot once the journey settles so the next cold request gets its
+  // own run; the identity check mirrors the token in-flight cleanup and keeps
+  // a stale settle from removing an entry that re-registered for this key.
+  void upstreamPromise.finally(() => {
+    if (inFlightUpstreamRequests.get(cacheKey) === upstreamPromise) {
+      inFlightUpstreamRequests.delete(cacheKey);
+    }
+  });
+
+  return upstreamPromise.then((response) => response.clone());
 }
 
 function responseFromUpstream(response: Response, cacheControl: string): Response {
@@ -1138,6 +1200,26 @@ function rateLimitedResponse(response: Response): Response {
     {
       status: 429,
       headers,
+    },
+  );
+}
+
+// The structured 502 for an upstream that never answered — and also the
+// single-flight safety net: an unexpected throw inside the stored journey
+// resolves to this Response instead of rejecting into every joined waiter.
+function upstreamUnavailableResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: 'upstream_unavailable',
+      message: 'No Reddit source responded in time. Please try again.',
+      retryable: true,
+    }),
+    {
+      status: 502,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
     },
   );
 }
@@ -5691,7 +5773,7 @@ async function fetchFromPublicInstance(
         status: 200,
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
-          'Cache-Control': 'public, max-age=30, s-maxage=120',
+          'Cache-Control': SUCCESS_CACHE_CONTROL,
           'X-RedAlt-Fallback': 'public-instance',
           'X-RedAlt-Instance': base,
           'X-RedAlt-Instance-Method': request.method,
@@ -5793,7 +5875,7 @@ async function fetchViaOldRedditHtml(
       status: 200,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'Cache-Control': SUCCESS_CACHE_CONTROL,
         'X-RedAlt-Fallback': 'old-reddit-html',
         'X-RedAlt-Instance': 'https://old.reddit.com',
         'X-RedAlt-Instance-Method': 'html',
@@ -5979,7 +6061,7 @@ function mirrorSuccessResponse(payload: unknown, instance: string, method: strin
     status: 200,
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'public, max-age=30, s-maxage=120',
+      'Cache-Control': SUCCESS_CACHE_CONTROL,
       'X-RedAlt-Fallback': 'reddit-rss-json-proxy',
       'X-RedAlt-Instance': instance,
       'X-RedAlt-Instance-Method': method,
@@ -6349,6 +6431,116 @@ async function fetchViaPublicInstances(
   return null;
 }
 
+// One bounded opportunistic read against old.reddit HTML to replace a flat
+// RSS/mirror comment payload with the real nested thread. Called only after a
+// degraded source has already succeeded for a comment-thread detail, so the
+// only question left is "is the candidate genuinely better?" — any failure
+// (timeout, non-OK status, unparseable HTML, worse quality) silently keeps the
+// flat payload. This must never call markRedditOwnedBlock(): the main journey
+// owned the circuit-breaker decisions and this read is quiet opportunism.
+async function enrichFlatDetailFromOldRedditHtml(
+  flatResponse: Response,
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  mediaPref: MediaPref,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  // The flat body is read through a clone so the untouched response can still
+  // reach the client when the enrichment attempt fails.
+  let flatPayload: unknown = null;
+
+  try {
+    flatPayload = await flatResponse.clone().json();
+  } catch {
+    flatPayload = null;
+  }
+
+  const headerQuality = Number(flatResponse.headers.get('X-RedAlt-Payload-Quality') ?? '');
+  const flatQuality =
+    Number.isFinite(headerQuality) && headerQuality > 0
+      ? headerQuality
+      : flatPayload
+        ? getPayloadQualityScore(flatPayload, upstreamPath)
+        : 0;
+  const flatCommentCount = Array.isArray(flatPayload)
+    ? listingChildren((flatPayload as unknown[])[1]).length
+    : 0;
+
+  const htmlPath = buildPublicHtmlPath(upstreamPath);
+
+  if (!htmlPath || signal?.aborted) {
+    return null;
+  }
+
+  try {
+    await paceRedditOwnedRequest(`https://old.reddit.com${htmlPath}`, signal);
+
+    const htmlResponse = await fetchWithTimeout(
+      `https://old.reddit.com${htmlPath}`,
+      {
+        headers: {
+          Accept: 'text/html',
+          'User-Agent': PUBLIC_INSTANCE_BROWSER_USER_AGENT,
+        },
+      },
+      OLD_REDDIT_FLAT_DETAIL_ENRICH_TIMEOUT_MS,
+      signal,
+    );
+
+    if (!htmlResponse.ok || signal?.aborted) {
+      return null;
+    }
+
+    const html = await htmlResponse.text();
+    const parsedPayload = parseOldRedditCommentsResponse(html, upstreamPath, 'https://old.reddit.com');
+
+    if (!Array.isArray(parsedPayload) || !isCompatibleRedditPayload(parsedPayload, upstreamPath)) {
+      return null;
+    }
+
+    const enrichedPayload = applyMediaSourcePreference(parsedPayload, 'https://old.reddit.com', mediaPref);
+    const enrichedQuality = getPayloadQualityScore(enrichedPayload, upstreamPath);
+    const enrichedCommentCount = listingChildren((enrichedPayload as unknown[])[1]).length;
+
+    // Never downgrade: prefer strictly better quality; at equal quality only a
+    // strictly larger comment set wins, mirroring the flat payload the user
+    // would otherwise receive.
+    const accept =
+      enrichedQuality > flatQuality ||
+      (enrichedQuality === flatQuality && enrichedCommentCount > flatCommentCount);
+
+    if (!accept || signal?.aborted) {
+      return null;
+    }
+
+    // Keep the flat response's source headers for provenance, but re-branch
+    // the method so the merged old.reddit step stays auditable, and mark the
+    // enrichment explicitly.
+    const headers = new Headers({
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': SUCCESS_CACHE_CONTROL,
+      'X-RedAlt-Fallback': flatResponse.headers.get('X-RedAlt-Fallback') ?? 'reddit-rss',
+      'X-RedAlt-Instance-Method': 'rss+old-reddit-html',
+      'X-RedAlt-Payload-Quality': String(enrichedQuality),
+      'X-RedAlt-Enriched': 'old-reddit-html',
+    });
+
+    const instanceHeader = flatResponse.headers.get('X-RedAlt-Instance');
+
+    if (instanceHeader) {
+      headers.set('X-RedAlt-Instance', instanceHeader);
+    }
+
+    return new Response(JSON.stringify(enrichedPayload), {
+      status: 200,
+      headers,
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function fetchViaRedditRss(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
@@ -6409,7 +6601,7 @@ async function fetchViaRedditRss(
       status: 200,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'Cache-Control': SUCCESS_CACHE_CONTROL,
         'X-RedAlt-Fallback': 'reddit-rss',
       },
     });

@@ -908,6 +908,101 @@ test('falls back to Reddit RSS when old.reddit HTML is blocked', { concurrency: 
   );
 });
 
+test('coalesces concurrent identical requests into one upstream journey', { concurrency: false }, async () => {
+  const rssXml = `
+    <rss><channel><item>
+      <title>Coalesced RSS post</title>
+      <author>alice</author>
+      <link>https://www.reddit.com/r/test/comments/coalesce1/coalesced_rss_post/</link>
+      <description><![CDATA[<p>Shared journey body.</p>]]></description>
+      <is_self_link>true</is_self_link>
+    </item></channel></rss>`;
+
+  await withFixtureFetch(
+    async (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url === 'https://www.reddit.com/r/test.rss?limit=50') {
+        // A deliberately slow RSS answer keeps the first request in flight
+        // long enough that the second one is certain to overlap it; without
+        // the delay the coalescing assertion could pass vacuously.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'Content-Type': 'application/atom+xml; charset=UTF-8' },
+        });
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const [first, second] = await Promise.all([
+        handleRedditProxyRequest(TEST_PATH, {}),
+        handleRedditProxyRequest(TEST_PATH, {}),
+      ]);
+      const firstPayload = await first.json();
+      const secondPayload = await second.json();
+
+      assert.equal(first.status, 200);
+      assert.equal(second.status, 200);
+      assert.equal(firstPayload.data.children[0].data.id, 'coalesce1');
+      assert.equal(secondPayload.data.children[0].data.id, 'coalesce1');
+      assert.equal(
+        calls.filter(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50').length,
+        1,
+        'concurrent identical requests should share one upstream journey',
+      );
+    },
+  );
+});
+
+test('advertises stale-while-revalidate and stale-if-error on success responses', { concurrency: false }, async () => {
+  const rssXml = `
+    <rss><channel><item>
+      <title>Cacheable RSS post</title>
+      <author>carol</author>
+      <link>https://www.reddit.com/r/test/comments/cachettl1/cacheable_rss_post/</link>
+      <description><![CDATA[<p>Served with CDN stale directives.</p>]]></description>
+      <is_self_link>true</is_self_link>
+    </item></channel></rss>`;
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url === 'https://www.reddit.com/r/test.rss?limit=50') {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'Content-Type': 'application/atom+xml; charset=UTF-8' },
+        });
+      }
+
+      return null;
+    },
+    async () => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const cacheControl = response.headers.get('cache-control') ?? '';
+
+      assert.equal(response.status, 200);
+      assert.ok(
+        cacheControl.includes('stale-while-revalidate=300'),
+        'the success response is missing the stale-while-revalidate window',
+      );
+      assert.ok(
+        cacheControl.includes('stale-if-error=3600'),
+        'the success response is missing the stale-if-error window',
+      );
+    },
+  );
+});
+
 test('falls back to the RSS-to-JSON mirror when direct Reddit RSS is rate-limited', { concurrency: false }, async () => {
   const jsonFeed = {
     version: 'https://jsonfeed.org/version/1',
@@ -1392,6 +1487,190 @@ test('parses comment threads from the RSS-to-JSON mirror', { concurrency: false 
       assert.equal(payload[1].data.children[0].data.id, 'comment1');
       assert.equal(payload[1].data.children[0].data.body.includes('Nice comment'), true);
       assert.ok(calls.some(({ url }) => url.startsWith('https://feed2json.org/convert?url=')));
+    },
+  );
+});
+
+test('enriches flat mirror detail responses from old.reddit HTML', { concurrency: false }, async () => {
+  const detailPath = '/r/test/comments/enriched1/fixture.json?limit=10';
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_enriched1',
+        url: 'https://www.reddit.com/r/test/comments/enriched1/enrichment_detail/',
+        title: 'Enriched detail post',
+        content_html: '<p>Detail post body.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/alice' },
+      },
+      {
+        guid: 't1_comment1',
+        url: 'https://www.reddit.com/r/test/comments/enriched1/enrichment_detail/comment1/',
+        title: 'comment title',
+        content_html: '<p>Nice comment from the mirror.</p>',
+        date_published: '2026-09-10T00:01:00.000Z',
+        author: { name: '/u/bob' },
+      },
+    ],
+  };
+  const enrichedHtml = `
+    <div class="thing link self" data-fullname="t3_enriched1" data-permalink="/r/test/comments/enriched1/enrichment_detail/"
+      data-domain="self.test" data-subreddit="test" data-author="post-author" data-score="17" data-comments-count="3">
+      <div class="entry">
+        <p class="title"><a class="title" href="/r/test/comments/enriched1/enrichment_detail/">Old reddit detail title</a></p>
+        <div class="usertext-body"><div class="md"><p>Detail post body from old reddit.</p></div></div>
+        <a class="comments" href="/r/test/comments/enriched1/enrichment_detail/">3 comments</a>
+      </div>
+    </div>
+    <div id="comment_count">3 comments</div>
+    <div class="thing comment" data-fullname="t1_comment1" data-author="bob">
+      <div class="entry">
+        <div class="usertext-body"><div class="md"><p>Nice comment from old reddit.</p></div></div>
+      </div>
+    </div>
+    <div class="thing comment" data-fullname="t1_comment3" data-author="dora">
+      <div class="entry">
+        <div class="usertext-body"><div class="md"><p>Second top-level comment.</p></div></div>
+        <div class="child">
+          <div class="thing comment" data-fullname="t1_comment2" data-author="carol">
+            <div class="entry">
+              <div class="usertext-body"><div class="md"><p>Nested reply text.</p></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+
+  let oldRedditCalls = 0;
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        oldRedditCalls += 1;
+
+        // First old.reddit call is the main journey's HTML attempt; the
+        // second one is the enrichment read after the mirror succeeded.
+        return oldRedditCalls === 1
+          ? new Response('<body class="theme-beta">blocked page</body>', { status: 403 })
+          : htmlResponse(enrichedHtml);
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test/comments/enriched1.rss')) {
+        return new Response('gone', { status: 404 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(detailPath, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-enriched'), 'old-reddit-html');
+      assert.equal(response.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(response.headers.get('x-redalt-instance'), 'https://feed2json.org');
+      assert.equal(response.headers.get('x-redalt-instance-method'), 'rss+old-reddit-html');
+      assert.ok(
+        Number(response.headers.get('x-redalt-payload-quality')) >= 5,
+        'payload quality should not be lower than the flat payload',
+      );
+
+      // Enrichment replaced the flat shape: two top-level comments, one of
+      // them carrying a genuinely nested replies Listing.
+      assert.equal(payload[0].data.children[0].data.id, 'enriched1');
+      assert.equal(payload[1].data.children.length, 2);
+      assert.equal(payload[1].data.children[0].data.replies, '');
+      const nested = payload[1].data.children[1].data.replies;
+
+      assert.equal(nested.kind, 'Listing');
+      assert.equal(nested.data.children[0].data.id, 'comment2');
+      assert.equal(nested.data.children[0].data.body.includes('Nested reply'), true);
+
+      assert.equal(
+        calls.filter(({ url }) => url.startsWith('https://old.reddit.com/')).length,
+        2,
+        'exactly one main-journey and one enrichment old.reddit read are expected',
+      );
+    },
+  );
+});
+
+test('keeps the flat mirror detail when old.reddit enrichment fails', { concurrency: false }, async () => {
+  const detailPath = '/r/test/comments/enrichfail1/fixture.json?limit=10';
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_enrichfail1',
+        url: 'https://www.reddit.com/r/test/comments/enrichfail1/enrichment_detail/',
+        title: 'Flat detail post',
+        content_html: '<p>Detail post body.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/alice' },
+      },
+      {
+        guid: 't1_comment1',
+        url: 'https://www.reddit.com/r/test/comments/enrichfail1/enrichment_detail/comment1/',
+        title: 'comment title',
+        content_html: '<p>Nice comment from the mirror.</p>',
+        date_published: '2026-09-10T00:01:00.000Z',
+        author: { name: '/u/bob' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test/comments/enrichfail1.rss')) {
+        return new Response('gone', { status: 404 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const first = await handleRedditProxyRequest(detailPath, {});
+      const firstPayload = await first.json();
+
+      assert.equal(first.status, 200);
+      assert.equal(first.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(first.headers.get('x-redalt-enriched'), null);
+      assert.equal(firstPayload[0].data.children[0].data.id, 'enrichfail1');
+      assert.equal(firstPayload[1].data.children.length, 1);
+      assert.equal(firstPayload[1].data.children[0].data.replies, '');
+
+      // A second request in the same module keeps walking the same chain:
+      // the failed enrichment attempt must not have tripped the shared
+      // Reddit-owned circuit breaker or poisoned the mirrors.
+      const second = await handleRedditProxyRequest(`${detailPath}&cb=2`, {});
+
+      assert.equal(second.status, 200);
+      assert.equal(second.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(second.headers.get('x-redalt-enriched'), null);
+
+      const feed2JsonCalls = calls.filter(({ url }) => url.startsWith('https://feed2json.org/convert?url='));
+
+      assert.equal(feed2JsonCalls.length, 2, 'the second request should reach the mirror again');
+
+      // If the enrichment 403 had opened the Reddit-owned breaker, the second
+      // journey would skip the Reddit RSS step entirely.
+      const rssDirectCalls = calls.filter(({ url }) => url.startsWith('https://www.reddit.com/r/test/comments/enrichfail1.rss'));
+
+      assert.equal(rssDirectCalls.length, 2, 'direct Reddit RSS must stay reachable after a failed enrichment attempt');
     },
   );
 });

@@ -129,7 +129,12 @@ React browser
   pagination pauses until deliberately retried.
 - Search fans out into three upstream calls; `fetchGlobalSearch` remembers
   recent query/filter combinations in a 30-minute sessionStorage cache so
-  toggling filters does not re-press the upstream source.
+  toggling filters does not re-press the upstream source. Matched search posts
+  are re-sorted client-side for `new` (created_utc desc) and `top` (score
+  desc) because Reddit's RSS search endpoints ignore the sort param when a
+  mirror serves the response; `hot`/`comments`/`relevance` keep upstream
+  order. Tests: `tests/search-resort.test.ts` (vitest only — the module reads
+  `import.meta.env`).
 - Feeds persist a per-source snapshot in sessionStorage
   (`redalt.feedSnapshot`) and hydrate it instantly on mount, refreshing in the
   background. `usePostListingFeed` also prefetches the next page ~2.5s after
@@ -209,6 +214,41 @@ strictly more reliable.
 
 All adapters should return structured JSON failures rather than allowing a
 runtime exception to become an opaque host-level 500.
+
+### Reliability layers (2026-09-10)
+
+Order of defense, all keyed by the success-cache `cacheKey`
+(`${mediaPref}:${cleanPath}`):
+
+1. Fresh in-instance cache (10 min) → `X-RedAlt-Cache: hit`.
+2. Single-flight coalescing: `inFlightUpstreamRequests` joins concurrent
+   identical requests onto one upstream journey (stored promise never
+   rejects — `.catch(() => upstreamUnavailableResponse())`) so N concurrent
+   users cost one source journey.
+3. Live source chain (official OAuth → scrape → mirrors → instances).
+4. Instance-cache serve-stale (1h window, `X-RedAlt-Cache: stale`) on any
+   failure except an explicit upstream 429.
+5. CDN directives: successes advertise `max-age=30, s-maxage=120,
+   stale-while-revalidate=300, stale-if-error=3600` via `SUCCESS_CACHE_CONTROL`;
+   the OAuth path keeps `private` (`OAUTH_SUCCESS_CACHE_CONTROL`) because a
+   user-authorized refresh token could surface user-scoped payloads through an
+   allowed path — edge caches must not pin those.
+
+Vercel's edge honors `stale-while-revalidate`/`stale-if-error`, so a Reddit
+block window now rides out even on cold lambda instances. When editing the
+OAuth cache-control line, keep `private` — the `public` unification elsewhere
+does NOT apply to it (a subagent once changed it and the deviation was caught
+in review, not in tests).
+
+`enrichFlatDetailFromOldRedditHtml` upgrades flat detail payloads (served from
+`reddit-rss` or `reddit-rss-json-proxy`) with one bounded old.reddit HTML read
+(3.5s, pacer-serialized, browser UA matching the main HTML journey) when the
+circuit breaker is closed: parsed comments replace the flat ones ONLY on
+strictly better payload quality, or equal quality with strictly more
+top-level comments (`X-RedAlt-Enriched: old-reddit-html`). It must never call
+`markRedditOwnedBlock`/`markRedditHtmlBlock` — the attempt is opportunistic
+and must not open the breaker for the reader; a broken second journey is what
+proves the breaker stayed closed in tests. Do not revert this gate.
 
 ## Main code surfaces
 

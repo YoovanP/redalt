@@ -1902,9 +1902,47 @@ export async function fetchGlobalSearch(
     throw new RedditApiError('Unable to search right now.', 0);
   }
 
-  const posts = (postsSource?.data.children ?? [])
+  let posts = (postsSource?.data.children ?? [])
     .filter((item) => item.kind === 't3')
     .map((item) => item.data);
+
+  // Reddit's RSS search endpoints ignore the sort param, so when a mirror
+  // serves the response the posts arrive in relevance order even though the
+  // user picked "Newest" or "Top". Re-sorting by the same key the request
+  // asked for is a faithful no-op when the official API already honored the
+  // sort, and fixes the order when a mirror served it. 'hot', 'comments',
+  // and 'relevance' are left untouched because their upstream ordering
+  // cannot be reconstructed from post fields alone. Applied to both cases
+  // uniformly so behavior does not depend on which source answered.
+  const orderableSorts = ['new', 'top'];
+  if (orderableSorts.includes(sort)) {
+    // Defensive numeric coercion keeps missing/garbage fields sorting as 0
+    // instead of producing NaN comparisons or crashing.
+    const pinned = (value: number | undefined | null): number =>
+      Number(value) || 0;
+
+    const sorted = [...posts].sort((a, b) => {
+      if (sort === 'new') {
+        const byCreated = pinned(b.created_utc) - pinned(a.created_utc);
+        if (byCreated !== 0) {
+          return byCreated;
+        }
+        // Same-second posts tie-break on score.
+        return pinned(b.score) - pinned(a.score);
+      }
+
+      const byScore = pinned(b.score) - pinned(a.score);
+      if (byScore !== 0) {
+        return byScore;
+      }
+      const byComments = pinned(b.num_comments) - pinned(a.num_comments);
+      if (byComments !== 0) {
+        return byComments;
+      }
+      return pinned(b.created_utc) - pinned(a.created_utc);
+    });
+    posts = sorted;
+  }
   rememberPosts(posts);
 
   const subreddits: SearchSubredditResult[] = [];
