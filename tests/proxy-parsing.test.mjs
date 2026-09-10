@@ -848,10 +848,57 @@ test('returns a structured block response when old.reddit rejects the request', 
 
       assert.equal(response.status, 403);
       assert.equal(payload.error, 'blocked');
+      assert.ok(
+        calls.some(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50'),
+        'RSS should be tried after old.reddit HTML is blocked',
+      );
       assert.equal(
-        calls.some(({ url }) => url === `https://www.reddit.com${TEST_PATH}`),
-        false,
-        'no further Reddit-owned requests should follow a WAF block',
+        calls.filter(({ url }) => url.startsWith('https://old.reddit.com/')).length,
+        1,
+        'old.reddit HTML should not be retried after its block',
+      );
+    },
+  );
+});
+
+test('falls back to Reddit RSS when old.reddit HTML is blocked', { concurrency: false }, async () => {
+  const rssXml = `
+    <rss><channel><item>
+      <title>RSS fallback post</title>
+      <author>alice</author>
+      <link>https://www.reddit.com/r/test/comments/rssfallback1/rss_fallback_post/</link>
+      <description><![CDATA[<p>Fallback body from RSS.</p>]]></description>
+      <is_self_link>true</is_self_link>
+    </item></channel></rss>`;
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url === 'https://www.reddit.com/r/test.rss?limit=50') {
+        return new Response(rssXml, {
+          status: 200,
+          headers: { 'Content-Type': 'application/atom+xml; charset=UTF-8' },
+        });
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'reddit-rss');
+      assert.equal(payload.data.children[0].data.id, 'rssfallback1');
+      assert.equal(payload.data.children[0].data.title, 'RSS fallback post');
+      assert.equal(payload.data.children[0].data.is_self, true);
+      assert.ok(
+        calls.some(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50'),
+        'RSS fallback was not requested',
       );
     },
   );
@@ -884,10 +931,9 @@ test('uses public-instance fallback after old.reddit blocks the request', { conc
       assert.equal(response.headers.get('x-redalt-instance'), TEDDIT_BASE);
       assert.equal(payload.data.children[0].data.id, 'public-after-block');
       assert.ok(calls.some(({ url }) => isTedditJsonRequest(url)), 'public instance fallback was not attempted');
-      assert.equal(
+      assert.ok(
         calls.some(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50'),
-        false,
-        'RSS should not be requested after old.reddit blocks the IP',
+        'RSS should be tried before the public-instance fallback',
       );
     },
   );

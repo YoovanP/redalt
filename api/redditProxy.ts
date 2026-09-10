@@ -840,10 +840,9 @@ export async function handleRedditProxyRequest(
         redditOwnedFailureResponse = oldRedditHtmlResponse;
       }
 
-      // A hard old.reddit block or rate limit applies to every Reddit-owned
-      // host. Do not try the RSS endpoint in that case; fall through to
-      // non-Reddit fallbacks before surfacing the block.
-      if (!redditOwnedFailureResponse && !signal.aborted) {
+      // old.reddit HTML can reject datacenter IPs while RSS still works.
+      // Always give RSS one chance before moving on to public instances.
+      if (!signal.aborted) {
         const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options, signal);
 
         if (redditRssResponse) {
@@ -851,7 +850,11 @@ export async function handleRedditProxyRequest(
             return rememberSuccessfulResponse(cacheKey, redditRssResponse);
           }
 
-          redditOwnedFailureResponse = redditRssResponse;
+          // Prefer a rate-limit response over a generic block, but otherwise
+          // keep the first hard failure for the final structured response.
+          if (!redditOwnedFailureResponse || redditRssResponse.status === 429) {
+            redditOwnedFailureResponse = redditRssResponse;
+          }
         }
       }
     }
@@ -1199,6 +1202,20 @@ function markRedditOwnedBlock(): void {
 
 function isRedditOwnedCoolingDown(): boolean {
   return redditOwnedBlockedUntil > Date.now();
+}
+
+// old.reddit HTML has a separate WAF/anti-bot gate. It can reject datacenter
+// IPs while the RSS endpoint still responds, so remember the HTML block
+// without poisoning RSS or the non-Reddit fallbacks.
+const REDDIT_HTML_BLOCK_COOLDOWN_MS = 90 * 1000;
+let redditHtmlBlockedUntil = 0;
+
+function markRedditHtmlBlock(): void {
+  redditHtmlBlockedUntil = Date.now() + REDDIT_HTML_BLOCK_COOLDOWN_MS;
+}
+
+function isRedditHtmlCoolingDown(): boolean {
+  return redditHtmlBlockedUntil > Date.now();
 }
 
 function redditOwnedBlockedResponse(): Response {
@@ -5577,8 +5594,8 @@ async function fetchViaOldRedditHtml(
     return null;
   }
 
-  if (isRedditOwnedCoolingDown()) {
-    return redditOwnedBlockedResponse();
+  if (isRedditHtmlCoolingDown()) {
+    return null;
   }
 
   const request: PublicInstanceRequest = {
@@ -5605,16 +5622,16 @@ async function fetchViaOldRedditHtml(
       const debugBody = envValue(env, 'REDDIT_PROXY_DEBUG') === 'true' ? (await response.clone().text()).slice(0, 120).replace(/\s+/g, ' ') : '';
       proxyDebugLog(env, `old.reddit ${htmlPath} -> status ${response.status} ${debugBody}`);
 
-      // A WAF block or rate limit applies to every Reddit-owned host. Fail
-      // fast with a structured response so the caller stops the chain instead
-      // of piling more requests onto the blocked IP and extending the block.
+      // old.reddit HTML has its own WAF/anti-bot gate; it can reject this
+      // request while the RSS endpoint still works. Remember the HTML block
+      // separately and let the caller try RSS before giving up.
       if (response.status === 429) {
-        markRedditOwnedBlock();
+        markRedditHtmlBlock();
         return rateLimitedResponse(response);
       }
 
       if (response.status === 403 || response.status === 451) {
-        markRedditOwnedBlock();
+        markRedditHtmlBlock();
         return redditOwnedBlockedResponse();
       }
 
