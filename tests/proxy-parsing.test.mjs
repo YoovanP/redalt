@@ -954,8 +954,164 @@ test('falls back to the RSS-to-JSON mirror when direct Reddit RSS is rate-limite
   );
 });
 
-test('parses comment threads from the RSS-to-JSON mirror', { concurrency: false }, async () => {
-  const detailPath = '/r/test/comments/jsonfeed2/fixture.json?limit=10';
+test('retries the RSS-to-JSON mirror without its query when the mirror rejects the full query', { concurrency: false }, async () => {
+  const mirrorPath = (url) => decodeURIComponent(url.replace('https://feed2json.org/convert?url=', ''));
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_reduced1',
+        url: 'https://www.reddit.com/r/test/comments/reduced1/reduced_query_post/',
+        title: 'Reduced query post',
+        content_html: '<p>Mirror body after a query reduction.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/alice' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return mirrorPath(url).includes('limit=')
+          ? Response.json({ version: 'https://jsonfeed.org/version/1', err: 'Error processing feed' })
+          : Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.data.children[0].data.id, 'reduced1');
+      const mirrorCalls = calls.filter(({ url }) => url.startsWith('https://feed2json.org/convert?url='));
+
+      assert.ok(
+        mirrorCalls.some(({ url }) => !mirrorPath(url).includes('limit=')),
+        'the mirror was never retried without the limit query',
+      );
+      assert.ok(
+        mirrorCalls.some(({ url }) => mirrorPath(url).includes('limit=')),
+        'the mirror did not try the original RSS path first',
+      );
+    },
+  );
+});
+
+test('falls back to the rss2json mirror when feed2json cannot process a feed', { concurrency: false }, async () => {
+  const rss2JsonPayload = {
+    status: 'ok',
+    items: [
+      {
+        title: 'rss2json fallback post',
+        pubDate: '2026-09-10 00:00:00',
+        link: 'https://www.reddit.com/r/test/comments/rss2json1/rss2json_fallback_post/',
+        guid: 't3_rss2json1',
+        author: '/u/carol',
+        description: '<p>Body from the rss2json mirror.</p>',
+        content: '<p>Body from the rss2json mirror.</p>',
+        enclosure: { link: '', type: '' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json({ version: 'https://jsonfeed.org/version/1', err: 'Error processing feed' });
+      }
+
+      if (url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')) {
+        return Response.json(rss2JsonPayload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(response.headers.get('x-redalt-instance'), 'https://api.rss2json.com');
+      assert.equal(payload.data.children[0].data.id, 'rss2json1');
+      assert.equal(payload.data.children[0].data.author, 'carol');
+      assert.ok(calls.some(({ url }) => url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')));
+    },
+  );
+});
+
+test('skips Reddit-owned requests and serves the mirror while the block circuit is cooling down', { concurrency: false }, async () => {
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_cooling1',
+        url: 'https://www.reddit.com/r/test/comments/cooling1/circuit_open_post/',
+        title: 'Circuit open post',
+        content_html: '<p>Served while the Reddit circuit is open.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/dave' },
+      },
+    ],
+  };
+  const isRedditOwned = (url) => /^https:\/\/(?:old\.)?reddit\.com\//.test(url);
+
+  await withFixtureFetch(
+    (url) => {
+      if (isRedditOwned(url)) {
+        return new Response('blocked', { status: 403 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const first = await handleRedditProxyRequest(TEST_PATH, {});
+      const redditCallsAfterFirst = calls.filter(({ url }) => isRedditOwned(url)).length;
+
+      assert.equal(first.status, 200);
+      assert.ok(redditCallsAfterFirst > 0, 'the first request did not attempt Reddit');
+
+      const second = await handleRedditProxyRequest(`${TEST_PATH}?cb=cooling-down`, {});
+      const payload = await second.json();
+
+      assert.equal(second.status, 200);
+      assert.equal(payload.data.children[0].data.id, 'cooling1');
+      assert.equal(
+        calls.filter(({ url }) => isRedditOwned(url)).length,
+        redditCallsAfterFirst,
+        'a cooling-down request still touched a Reddit-owned host',
+      );
+    },
+  );
+});
+
+test('parses comment threads from the RSS-to-JSON mirror', { concurrency: false }, async () => {  const detailPath = '/r/test/comments/jsonfeed2/fixture.json?limit=10';
   const jsonFeed = {
     version: 'https://jsonfeed.org/version/1',
     items: [

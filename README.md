@@ -9,13 +9,13 @@ The browser talks to one same-origin gateway: `/api/reddit`. It does not rotate 
 ```text
 Browser → /api/reddit → official Reddit OAuth API (when configured)
                          ↓ otherwise (bounded, auto-enabled)
-                       old.reddit HTML → Reddit RSS
+                       old.reddit HTML → Reddit RSS → RSS-to-JSON mirrors
                          ↓ optional, off by default
                        public instances / mirror / anonymous JSON
 ```
 
 - OAuth is always the preferred source when credentials are configured.
-- **Without credentials the gateway auto-enables the bounded old.reddit/RSS scrape path** — the one unauthenticated source that works in practice. If direct RSS is blocked or rate-limited, a bounded RSS-to-JSON mirror is tried before the public-instance fallback. Anonymous `www.reddit.com` JSON is WAF-blocked from servers and remains a last resort.
+- **Without credentials the gateway auto-enables the bounded old.reddit/RSS scrape path** — the one unauthenticated source that works in practice. If direct RSS is blocked or rate-limited, two bounded RSS-to-JSON mirrors (`feed2json.org`, then `rss2json.com`) run through reduced query variants and one retry round before the public-instance fallback. Anonymous `www.reddit.com` JSON is WAF-blocked from servers and remains a last resort.
 - All requests to Reddit-owned hosts flow through a single serialized queue with minimum spacing, and once Reddit blocks the IP the gateway opens a 90-second circuit breaker instead of piling more requests onto the block.
 - Feed requests have a short overall deadline and are aborted when the user changes route or retries. Already-loaded posts stay visible when a refresh fails (inline banner instead of a full-screen error).
 - Post detail loads comments and the primary post in one request. Media repair is explicit instead of silently fanning out into several extra feed requests.
@@ -59,7 +59,7 @@ REDDIT_ANON_DEVICE_ID=DO_NOT_TRACK_THIS_DEVICE
 
 When OAuth is not configured, the gateway automatically uses the bounded old.reddit/RSS scrape path so an out-of-the-box deployment works. OAuth is always preferred when credentials exist. You can force the scrape path on or off explicitly with `ENABLE_LEGACY_SCRAPE_FALLBACK=true|false`, or hard-disable it with `REDDIT_DISABLE_SCRAPE_FALLBACK=true`.
 
-Public instances are auto-enabled when OAuth is not configured and are attempted only after old.reddit/RSS and the RSS-to-JSON mirror fail. They are still a degraded path because public Redlib instances may be blocked, challenging, or missing media. Set `ENABLE_PUBLIC_INSTANCE_FALLBACK=false` to opt out, or provide an operator-vetted instance:
+Public instances are auto-enabled when OAuth is not configured and are attempted only after old.reddit/RSS and the RSS-to-JSON mirrors fail. They are still a degraded path because public Redlib instances may be blocked, challenging, or missing media. Set `ENABLE_PUBLIC_INSTANCE_FALLBACK=false` to opt out, or provide an operator-vetted instance:
 
 ```bash
 # ENABLE_PUBLIC_INSTANCE_FALLBACK=false
@@ -69,6 +69,8 @@ ENABLE_MIRROR_FALLBACK=false
 ```
 
 If the official gateway is not configured or unavailable, the UI shows a clear bounded failure state with Retry and an “Open on Reddit” escape hatch instead of an endless skeleton. Already-loaded content stays on screen during a failed refresh. The header shows a small status pill (`Reader mode` vs `Official API`) so it is always clear which source is serving content.
+
+The RSS-to-JSON mirrors are compatibility paths, not peers of the official API. They are anonymous third-party services, so responses can be partial (the `rss2json` free tier returns at most ten items) and a search served by a mirror is relevance-ordered because Reddit's RSS search endpoints ignore the reader's sort filter.
 
 ### Gateway status
 

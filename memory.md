@@ -1,6 +1,6 @@
 # RedAlt Project Memory
 
-Last reviewed: 2026-08-14.
+Last reviewed: 2026-09-10.
 
 ## Product and limits
 
@@ -20,17 +20,17 @@ React browser
        └─ api/redditProxy.ts
             ├─ official Reddit OAuth API (when credentials are configured)
             └─ auto-enabled bounded scrape path otherwise:
-                 old.reddit HTML → Reddit RSS → RSS-to-JSON mirror
-                 → (auto) public instances → (opt-in) mirror
+                 old.reddit HTML → Reddit RSS
+                 → RSS-to-JSON mirrors → (auto) public instances → (opt-in) mirror
 ```
 
 - `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
   additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
   automatically hop through public Render/Pages deployments.
 - **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path,
-  an RSS-to-JSON mirror (`feed2json.org`) when direct RSS fails, and the
-  public-instance fallback** (`legacyScrapeFallbackEnabled`: explicit
-  `ENABLE_LEGACY_SCRAPE_FALLBACK` true/false wins;
+  two RSS-to-JSON mirrors (`feed2json.org`, then `rss2json.com`) when direct RSS
+  fails, and the public-instance fallback** (`legacyScrapeFallbackEnabled`:
+  explicit `ENABLE_LEGACY_SCRAPE_FALLBACK` true/false wins;
   `REDDIT_DISABLE_SCRAPE_FALLBACK=true` hard-disables; else auto when
   `getOfficialOAuthMode(env) === 'none'`). Public instances are attempted only
   after RSS fails and can be disabled with `ENABLE_PUBLIC_INSTANCE_FALLBACK=false`.
@@ -39,6 +39,19 @@ React browser
   JSON is WAF-blocked and public Redlib instances are largely behind
   Anubis/Cloudflare walls, so both are last resorts and the anonymous JSON
   attempt is skipped entirely in scrape mode.
+- **Both mirrors are anonymous third-party services and are per-feed flaky**
+  (`feed2json` answered 200 with `{"err":"Error processing feed"}` for 6 of 8
+  subreddits in one measured run; `rss2json` served 4 of those 6 but caps
+  anonymous conversions at ten items). Mitigations in `buildMirrorRssCandidates`
+  and `fetchMirrorWithRetry` (mirror work only — never the Reddit-owned path):
+  each mirror walks reduced query variants (drop `limit`; for `/search.rss`
+  keep only `q` and `t`, since `sort`/`type` are rejected and a query-free
+  search feed is never usable), and the whole candidate list runs a second
+  round after `MIRROR_RETRY_DELAY_MS`. Per-mirror calls use
+  `MIRROR_REQUEST_TIMEOUT_MS` (5s) and stay inside the listing/detail deadline.
+  A mirror-served search is relevance-ordered because Reddit's RSS search
+  ignores the reader's sort filter; mirror listings drop pagination cursors.
+
 - **Self-serve app registration is closed** (Responsible Builder Policy, late
   2025): the prefs/apps form is a zombie and new client ids/secrets are not
   issued. As an opt-in the gateway supports the anonymous installed-app grant
@@ -131,6 +144,9 @@ parsing. Dynamic instance discovery and AllOrigins remain disabled by default.
 - `REDDIT_PUBLIC_INSTANCE_BASES` gives operator-provided instances priority.
 - `ENABLE_PUBLIC_INSTANCE_DISCOVERY=true` allows dynamic instance-list lookup.
 - `ENABLE_MIRROR_FALLBACK=true` enables AllOrigins.
+- The two RSS-to-JSON mirrors need no configuration: they run inside the
+  auto-enabled scrape path, and `REDDIT_DISABLE_SCRAPE_FALLBACK=true` removes
+  them along with the rest of that path.
 - `ENABLE_LEGACY_SCRAPE_FALLBACK=true|false` forces old-Reddit HTML + RSS
   scraping on/off; otherwise it auto-enables when OAuth is unconfigured
   (`REDDIT_DISABLE_SCRAPE_FALLBACK=true` is the hard off-switch).
@@ -189,7 +205,8 @@ with `/api/reddit/not-allowed` (expected 400) before treating it as healthy.
 
 Run after gateway or UI changes:
 
-- `npm test`
+- `npm test` (in a sandboxed shell where `npm test` cannot spawn per-file
+  workers, use `node --test --test-isolation=none tests/*.test.mjs`)
 - `npm run test:components`
 - `npx tsc -b --pretty false`
 - `npm run build`

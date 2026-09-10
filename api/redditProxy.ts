@@ -92,6 +92,9 @@ const PUBLIC_INSTANCE_LIST_URLS = [
 ];
 const PUBLIC_INSTANCE_FAILURE_BASE_COOLDOWN_MS = 60 * 1000;
 const PUBLIC_INSTANCE_FAILURE_MAX_COOLDOWN_MS = 15 * 60 * 1000;
+const MIRROR_REQUEST_TIMEOUT_MS = 5000;
+const MIRROR_ATTEMPT_ROUNDS = 2;
+const MIRROR_RETRY_DELAY_MS = 350;
 const SUCCESS_RESPONSE_CACHE_TTL_MS = 10 * 60 * 1000;
 const SUCCESS_RESPONSE_CACHE_MAX_ENTRIES = 64;
 const SUCCESS_RESPONSE_CACHE_MAX_BODY_BYTES = 1024 * 1024;
@@ -832,42 +835,67 @@ export async function handleRedditProxyRequest(
     // it is the one unauthenticated source that works in practice.
     let redditOwnedFailureResponse: Response | null = null;
 
-    if (legacyScrapeFallbackEnabled(env) && !signal.aborted) {
-      const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref, signal);
-
-      if (oldRedditHtmlResponse) {
-        if (oldRedditHtmlResponse.ok) {
-          return rememberSuccessfulResponse(cacheKey, oldRedditHtmlResponse);
-        }
-
-        redditOwnedFailureResponse = oldRedditHtmlResponse;
+    // Old Reddit / RSS can be blocked or rate-limited from the gateway IP while
+    // independent RSS-to-JSON mirrors can still fetch Reddit from their own
+    // addresses, so the mirrors are never gated on a fresh Reddit attempt:
+    // after a block, or while the Reddit-owned circuit breaker is cooling down
+    // (when the direct path is skipped entirely and immediately), they are the
+    // first source that can answer.
+    const mirrorsFallback = async (): Promise<Response | null> => {
+      if (signal.aborted) {
+        return null;
       }
 
-      // old.reddit HTML can reject datacenter IPs while RSS still works.
-      // Always give RSS one chance before moving on to public instances.
-      if (!signal.aborted) {
-        const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options, signal);
+      const jsonFeedProxyResponse = await fetchViaJsonFeedRssProxy(cleanPath, env, options, signal);
 
-        if (redditRssResponse) {
-          if (redditRssResponse.ok) {
-            return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+      if (jsonFeedProxyResponse) {
+        return rememberSuccessfulResponse(cacheKey, jsonFeedProxyResponse);
+      }
+
+      if (signal.aborted) {
+        return null;
+      }
+
+      const rss2JsonResponse = await fetchViaRss2JsonMirror(cleanPath, env, options, signal);
+
+      return rss2JsonResponse ? rememberSuccessfulResponse(cacheKey, rss2JsonResponse) : null;
+    };
+
+    if (legacyScrapeFallbackEnabled(env) && !signal.aborted) {
+      if (!isRedditOwnedCoolingDown()) {
+        const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref, signal);
+
+        if (oldRedditHtmlResponse) {
+          if (oldRedditHtmlResponse.ok) {
+            return rememberSuccessfulResponse(cacheKey, oldRedditHtmlResponse);
           }
 
-          // Prefer a rate-limit response over a generic block, but otherwise
-          // keep the first hard failure for the final structured response.
-          if (!redditOwnedFailureResponse || redditRssResponse.status === 429) {
-            redditOwnedFailureResponse = redditRssResponse;
+          redditOwnedFailureResponse = oldRedditHtmlResponse;
+        }
+
+        // old.reddit HTML can reject datacenter IPs while RSS still works.
+        // Always give RSS one chance before moving on to the mirrors.
+        if (!signal.aborted) {
+          const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options, signal);
+
+          if (redditRssResponse) {
+            if (redditRssResponse.ok) {
+              return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+            }
+
+            // Prefer a rate-limit response over a generic block, but otherwise
+            // keep the first hard failure for the final structured response.
+            if (!redditOwnedFailureResponse || redditRssResponse.status === 429) {
+              redditOwnedFailureResponse = redditRssResponse;
+            }
           }
         }
+      }
 
-        // Reddit RSS can be blocked or rate-limited from the gateway IP while
-        // an independent RSS-to-JSON mirror can still fetch it. This is a
-        // bounded third-party fallback used only after direct RSS fails.
-        const jsonFeedProxyResponse = await fetchViaJsonFeedRssProxy(cleanPath, env, options, signal);
+      const mirrorsResponse = await mirrorsFallback();
 
-        if (jsonFeedProxyResponse) {
-          return rememberSuccessfulResponse(cacheKey, jsonFeedProxyResponse);
-        }
+      if (mirrorsResponse) {
+        return mirrorsResponse;
       }
     }
 
@@ -5724,6 +5752,70 @@ function escapeCdata(value: unknown): string {
   return String(value ?? '').replace(/\]\]>/g, ']]]]><![CDATA[>');
 }
 
+// feed2json.org answers 200 with `{"err":"Error processing feed"}` for a share
+// of feeds depending on how Reddit throttles it at that moment, and it rejects
+// several of the query strings we build for Reddit's own RSS endpoints:
+// `limit` on listings and the `sort`/`type` params on `/search.rss` are the
+// usual offenders. Degraded mirrors therefore run through reduced query
+// variants — the widest request first, then the same path without the query at
+// all, which is the form that survives most often.
+function buildMirrorRssCandidates(rssPath: string, upstreamPath: string): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const add = (value: string | null | undefined) => {
+    if (!value || seen.has(value)) {
+      return;
+    }
+
+    seen.add(value);
+    candidates.push(value);
+  };
+
+  add(rssPath);
+
+  const [basePath, rawQuery = ''] = rssPath.split('?');
+  const params = new URLSearchParams(rawQuery);
+  const requested = new URLSearchParams(upstreamPath.split('?')[1] ?? '');
+  const isSearch =
+    (upstreamPath.split('?')[0] ?? '').replace(/\.json$/i, '') === '/search';
+  const isCommentThread = isCommentThreadPath(upstreamPath);
+
+  if (!isCommentThread) {
+    params.delete('limit');
+    const withoutLimit = params.toString();
+    add(withoutLimit ? `${basePath}?${withoutLimit}` : basePath);
+  }
+
+  if (isSearch) {
+    // Reddit's RSS search endpoints are relevance-ordered, so keep only the
+    // query (and time window) when the mirror refuses the full parameter set.
+    // A query-free `/search.rss` returns an unrelated default feed and is
+    // never usable here, so it is deliberately not a candidate.
+    const reduced = new URLSearchParams();
+    const query = requested.get('q') ?? requested.get('query') ?? params.get('q') ?? '';
+
+    if (query) {
+      reduced.set('q', query);
+    }
+
+    const timeWindow = requested.get('t') ?? params.get('t');
+
+    if (timeWindow) {
+      reduced.set('t', timeWindow);
+    }
+
+    if (query) {
+      add(`${basePath}?${reduced.toString()}`);
+    }
+  }
+
+  if (!isSearch) {
+    add(basePath);
+  }
+
+  return candidates;
+}
+
 function jsonFeedToRssXml(payload: unknown): string | null {
   if (!isNonEmptyRecord(payload) || !Array.isArray(payload.items)) {
     return null;
@@ -5766,6 +5858,153 @@ function jsonFeedToRssXml(payload: unknown): string | null {
   return `<feed>${entries.join('')}</feed>`;
 }
 
+// rss2json.com is a second, independent RSS-to-JSON mirror. It is slower to
+// fail over (it does not return JSON Feed) and caps anonymous conversions at
+// ten items, but it serves a good share of the feeds feed2json rejects, so it
+// runs last among the mirrors.
+function rss2JsonToRssXml(payload: unknown): string | null {
+  if (!isNonEmptyRecord(payload) || payload.status !== 'ok' || !Array.isArray(payload.items)) {
+    return null;
+  }
+
+  const items = payload.items.filter((item): item is Record<string, unknown> => isNonEmptyRecord(item));
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const entries = items.map((item) => {
+    const guid = getStringField(item, 'guid') || getStringField(item, 'link');
+    const url = getStringField(item, 'link') || guid;
+    const title = getStringField(item, 'title') || 'Untitled post';
+    const content = getStringField(item, 'content') || getStringField(item, 'description');
+    const date = getStringField(item, 'pubDate');
+    const author = getStringField(item, 'author');
+    const enclosureValue = item.enclosure;
+    const enclosureUrl = isNonEmptyRecord(enclosureValue) ? getStringField(enclosureValue, 'link') : '';
+    const enclosureType = isNonEmptyRecord(enclosureValue) ? getStringField(enclosureValue, 'type') : '';
+
+    return (
+      '<entry>' +
+      `<title>${escapeXml(title)}</title>` +
+      `<link href="${escapeXml(url)}" />` +
+      `<id>${escapeXml(guid)}</id>` +
+      `<updated>${escapeXml(date)}</updated>` +
+      `<author><name>${escapeXml(author)}</name></author>` +
+      (enclosureUrl ? `<enclosure url="${escapeXml(enclosureUrl)}" type="${escapeXml(enclosureType)}" />` : '') +
+      `<content type="html"><![CDATA[${escapeCdata(content)}]]></content>` +
+      '</entry>'
+    );
+  });
+
+  return `<feed>${entries.join('')}</feed>`;
+}
+
+function normalizeMirrorPayload(xml: string, upstreamPath: string): unknown | null {
+  const payload = isCommentThreadPath(upstreamPath)
+    ? parseRssCommentsResponse(xml, upstreamPath)
+    : parseRssListing(xml, upstreamPath);
+
+  return isUsableRedditPayload(payload, upstreamPath) ? payload : null;
+}
+
+function mirrorSuccessResponse(payload: unknown, instance: string, method: string, upstreamPath: string): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'public, max-age=30, s-maxage=120',
+      'X-RedAlt-Fallback': 'reddit-rss-json-proxy',
+      'X-RedAlt-Instance': instance,
+      'X-RedAlt-Instance-Method': method,
+      'X-RedAlt-Payload-Quality': String(getPayloadQualityScore(payload, upstreamPath)),
+    },
+  });
+}
+
+// Mirrors fail transiently per feed, so one round of reduced-query candidates
+// is not always enough. A short second round runs only after every mirror and
+// every candidate has failed, and stays inside the listing/detail deadline.
+async function fetchMirrorWithRetry(
+  candidates: string[],
+  probe: (redditRssPath: string) => Promise<Response | null>,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  for (let round = 0; round < MIRROR_ATTEMPT_ROUNDS; round += 1) {
+    for (const candidate of candidates) {
+      if (signal?.aborted) {
+        return null;
+      }
+
+      const response = await probe(candidate);
+
+      if (response) {
+        return response;
+      }
+    }
+
+    if (round < MIRROR_ATTEMPT_ROUNDS - 1 && !signal?.aborted) {
+      await new Promise((resolve) => {
+        globalThis.setTimeout(resolve, MIRROR_RETRY_DELAY_MS);
+      });
+    }
+  }
+
+  return null;
+}
+
+async function fetchViaRss2JsonMirror(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  const rssPath = buildRssPath(upstreamPath);
+  const candidates = rssPath ? buildMirrorRssCandidates(rssPath, upstreamPath) : [];
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const probe = async (redditRssPath: string): Promise<Response | null> => {
+    try {
+      const response = await fetchWithTimeout(
+        `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://www.reddit.com${redditRssPath}`)}`,
+        {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': getProxyUserAgent(env, options),
+          },
+        },
+        MIRROR_REQUEST_TIMEOUT_MS,
+        signal,
+      );
+
+      if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+        return null;
+      }
+
+      const xml = rss2JsonToRssXml(await response.json());
+
+      if (!xml) {
+        return null;
+      }
+
+      const payload = normalizeMirrorPayload(xml, upstreamPath);
+
+      if (!payload) {
+        return null;
+      }
+
+      return mirrorSuccessResponse(payload, 'https://api.rss2json.com', 'rss2json', upstreamPath);
+    } catch {
+      return null;
+    }
+  };
+
+  return fetchMirrorWithRetry(candidates, probe, signal);
+}
+
 async function fetchViaJsonFeedRssProxy(
   upstreamPath: string,
   env: RedditProxyEnv | undefined,
@@ -5773,69 +6012,58 @@ async function fetchViaJsonFeedRssProxy(
   signal?: AbortSignal,
 ): Promise<Response | null> {
   const rssPath = buildRssPath(upstreamPath);
+  const candidates = rssPath ? buildMirrorRssCandidates(rssPath, upstreamPath) : [];
 
-  if (!rssPath) {
+  if (candidates.length === 0) {
     return null;
   }
 
-  // feed2json currently rejects comment RSS feeds with a limit query, while
-  // listing feeds accept it. Drop the query for comment threads and keep it
-  // for searches/listings where it carries the actual request parameters.
-  const redditRssPath = isCommentThreadPath(upstreamPath) ? rssPath.split('?')[0] : rssPath;
-  const redditRssUrl = `https://www.reddit.com${redditRssPath}`;
-  const proxyUrl = `https://feed2json.org/convert?url=${encodeURIComponent(redditRssUrl)}`;
+  const probe = async (redditRssPath: string): Promise<Response | null> => {
+    const redditRssUrl = `https://www.reddit.com${redditRssPath}`;
+    const proxyUrl = `https://feed2json.org/convert?url=${encodeURIComponent(redditRssUrl)}`;
 
-  try {
-    const response = await fetchWithTimeout(
-      proxyUrl,
-      {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': getProxyUserAgent(env, options),
+    try {
+      const response = await fetchWithTimeout(
+        proxyUrl,
+        {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': getProxyUserAgent(env, options),
+          },
         },
-      },
-      7000,
-      signal,
-    );
+        MIRROR_REQUEST_TIMEOUT_MS,
+        signal,
+      );
 
-    if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+      if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+        return null;
+      }
+
+      const payload = await response.json();
+
+      if (isNonEmptyRecord(payload) && typeof payload.err === 'string') {
+        return null;
+      }
+
+      const xml = jsonFeedToRssXml(payload);
+
+      if (!xml) {
+        return null;
+      }
+
+      const normalizedPayload = normalizeMirrorPayload(xml, upstreamPath);
+
+      if (!normalizedPayload) {
+        return null;
+      }
+
+      return mirrorSuccessResponse(normalizedPayload, 'https://feed2json.org', 'json-feed', upstreamPath);
+    } catch {
       return null;
     }
+  };
 
-    const payload = await response.json();
-
-    if (isNonEmptyRecord(payload) && typeof payload.err === 'string') {
-      return null;
-    }
-
-    const xml = jsonFeedToRssXml(payload);
-
-    if (!xml) {
-      return null;
-    }
-
-    const normalizedPayload = isCommentThreadPath(upstreamPath)
-      ? parseRssCommentsResponse(xml, upstreamPath)
-      : parseRssListing(xml, upstreamPath);
-
-    if (!isUsableRedditPayload(normalizedPayload, upstreamPath)) {
-      return null;
-    }
-
-    return new Response(JSON.stringify(normalizedPayload), {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'public, max-age=30, s-maxage=120',
-        'X-RedAlt-Fallback': 'reddit-rss-json-proxy',
-        'X-RedAlt-Instance': 'https://feed2json.org',
-        'X-RedAlt-Instance-Method': 'json-feed',
-        'X-RedAlt-Payload-Quality': String(getPayloadQualityScore(normalizedPayload, upstreamPath)),
-      },
-    });
-  } catch {
-    return null;
-  }
+  return fetchMirrorWithRetry(candidates, probe, signal);
 }
 
 function raceUsablePublicInstance(
