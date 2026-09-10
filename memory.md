@@ -218,8 +218,12 @@ Probe `GET /api/status` first, then the gateway directly for a feed, search,
 and detail thread. Check status, JSON content type, source header
 (`X-RedAlt-Source: official-oauth` with OAuth, `X-RedAlt-Fallback:
 old-reddit-html` otherwise), payload renderability, and response time.
-Then browser-check initial feed, retry UI, rate-limit countdown, load more,
-detail/comments, explicit media repair, search, and shorts mode. A live
+When the live gateway answers from `reddit-rss` (Reddit is currently
+rate-limiting the deployment IP), run `node scripts/probe-mirror-fallbacks.mjs`
+locally to verify the mirror fallback still works — it forces the Reddit-owned
+path to fail and reports which mirror served each path. Then browser-check
+initial feed, retry UI, rate-limit countdown, load more, detail/comments,
+explicit media repair, search, and shorts mode. A live
 end-to-end browser pass exists at `scripts/live-check.mjs` (needs the dev
 server running; budget for Reddit's per-IP burst limits — keep requests
 spaced and expect transient blocks during heavy repeated runs).
