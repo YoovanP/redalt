@@ -859,6 +859,15 @@ export async function handleRedditProxyRequest(
             redditOwnedFailureResponse = redditRssResponse;
           }
         }
+
+        // Reddit RSS can be blocked or rate-limited from the gateway IP while
+        // an independent RSS-to-JSON mirror can still fetch it. This is a
+        // bounded third-party fallback used only after direct RSS fails.
+        const jsonFeedProxyResponse = await fetchViaJsonFeedRssProxy(cleanPath, env, options, signal);
+
+        if (jsonFeedProxyResponse) {
+          return rememberSuccessfulResponse(cacheKey, jsonFeedProxyResponse);
+        }
       }
     }
 
@@ -5695,6 +5704,133 @@ async function fetchViaOldRedditHtml(
         'X-RedAlt-Instance': 'https://old.reddit.com',
         'X-RedAlt-Instance-Method': 'html',
         'X-RedAlt-Payload-Quality': String(quality),
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function escapeXml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function escapeCdata(value: unknown): string {
+  return String(value ?? '').replace(/\]\]>/g, ']]]]><![CDATA[>');
+}
+
+function jsonFeedToRssXml(payload: unknown): string | null {
+  if (!isNonEmptyRecord(payload) || !Array.isArray(payload.items)) {
+    return null;
+  }
+
+  const items = payload.items.filter((item): item is Record<string, unknown> => isNonEmptyRecord(item));
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  const entries = items.map((item) => {
+    const guid = getStringField(item, 'guid') || getStringField(item, 'id') || getStringField(item, 'url');
+    const url = getStringField(item, 'url') || getStringField(item, 'external_url') || guid;
+    const title = getStringField(item, 'title') || 'Untitled post';
+    const content =
+      getStringField(item, 'content_html') ||
+      getStringField(item, 'content_text') ||
+      getStringField(item, 'summary');
+    const date = getStringField(item, 'date_published') || getStringField(item, 'date_modified');
+    const authorValue = item.author;
+    const author = isNonEmptyRecord(authorValue)
+      ? getStringField(authorValue, 'name')
+      : typeof authorValue === 'string'
+        ? authorValue
+        : '';
+
+    return (
+      '<entry>' +
+      `<title>${escapeXml(title)}</title>` +
+      `<link href="${escapeXml(url)}" />` +
+      `<id>${escapeXml(guid)}</id>` +
+      `<updated>${escapeXml(date)}</updated>` +
+      `<author><name>${escapeXml(author)}</name></author>` +
+      `<content type="html"><![CDATA[${escapeCdata(content)}]]></content>` +
+      '</entry>'
+    );
+  });
+
+  return `<feed>${entries.join('')}</feed>`;
+}
+
+async function fetchViaJsonFeedRssProxy(
+  upstreamPath: string,
+  env: RedditProxyEnv | undefined,
+  options: RedditProxyOptions,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  const rssPath = buildRssPath(upstreamPath);
+
+  if (!rssPath) {
+    return null;
+  }
+
+  // feed2json currently rejects comment RSS feeds with a limit query, while
+  // listing feeds accept it. Drop the query for comment threads and keep it
+  // for searches/listings where it carries the actual request parameters.
+  const redditRssPath = isCommentThreadPath(upstreamPath) ? rssPath.split('?')[0] : rssPath;
+  const redditRssUrl = `https://www.reddit.com${redditRssPath}`;
+  const proxyUrl = `https://feed2json.org/convert?url=${encodeURIComponent(redditRssUrl)}`;
+
+  try {
+    const response = await fetchWithTimeout(
+      proxyUrl,
+      {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': getProxyUserAgent(env, options),
+        },
+      },
+      7000,
+      signal,
+    );
+
+    if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
+      return null;
+    }
+
+    const payload = await response.json();
+
+    if (isNonEmptyRecord(payload) && typeof payload.err === 'string') {
+      return null;
+    }
+
+    const xml = jsonFeedToRssXml(payload);
+
+    if (!xml) {
+      return null;
+    }
+
+    const normalizedPayload = isCommentThreadPath(upstreamPath)
+      ? parseRssCommentsResponse(xml, upstreamPath)
+      : parseRssListing(xml, upstreamPath);
+
+    if (!isUsableRedditPayload(normalizedPayload, upstreamPath)) {
+      return null;
+    }
+
+    return new Response(JSON.stringify(normalizedPayload), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'public, max-age=30, s-maxage=120',
+        'X-RedAlt-Fallback': 'reddit-rss-json-proxy',
+        'X-RedAlt-Instance': 'https://feed2json.org',
+        'X-RedAlt-Instance-Method': 'json-feed',
+        'X-RedAlt-Payload-Quality': String(getPayloadQualityScore(normalizedPayload, upstreamPath)),
       },
     });
   } catch {

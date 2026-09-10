@@ -20,14 +20,16 @@ React browser
        └─ api/redditProxy.ts
             ├─ official Reddit OAuth API (when credentials are configured)
             └─ auto-enabled bounded scrape path otherwise:
-                 old.reddit HTML → Reddit RSS → (auto) public instances → (opt-in) mirror
+                 old.reddit HTML → Reddit RSS → RSS-to-JSON mirror
+                 → (auto) public instances → (opt-in) mirror
 ```
 
 - `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
   additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
   automatically hop through public Render/Pages deployments.
-- **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path and
-  the public-instance fallback** (`legacyScrapeFallbackEnabled`: explicit
+- **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path,
+  an RSS-to-JSON mirror (`feed2json.org`) when direct RSS fails, and the
+  public-instance fallback** (`legacyScrapeFallbackEnabled`: explicit
   `ENABLE_LEGACY_SCRAPE_FALLBACK` true/false wins;
   `REDDIT_DISABLE_SCRAPE_FALLBACK=true` hard-disables; else auto when
   `getOfficialOAuthMode(env) === 'none'`). Public instances are attempted only

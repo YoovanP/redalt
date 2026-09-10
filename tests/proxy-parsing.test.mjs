@@ -908,6 +908,106 @@ test('falls back to Reddit RSS when old.reddit HTML is blocked', { concurrency: 
   );
 });
 
+test('falls back to the RSS-to-JSON mirror when direct Reddit RSS is rate-limited', { concurrency: false }, async () => {
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_jsonfeed1',
+        url: 'https://www.reddit.com/r/test/comments/jsonfeed1/json_feed_fallback/',
+        title: 'JSON feed fallback post',
+        content_html: '<p>Body from the JSON feed mirror.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/alice' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url === 'https://www.reddit.com/r/test.rss?limit=50') {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(response.headers.get('x-redalt-instance'), 'https://feed2json.org');
+      assert.equal(payload.data.children[0].data.id, 'jsonfeed1');
+      assert.equal(payload.data.children[0].data.title, 'JSON feed fallback post');
+      assert.ok(calls.some(({ url }) => url.startsWith('https://feed2json.org/convert?url=')));
+    },
+  );
+});
+
+test('parses comment threads from the RSS-to-JSON mirror', { concurrency: false }, async () => {
+  const detailPath = '/r/test/comments/jsonfeed2/fixture.json?limit=10';
+  const jsonFeed = {
+    version: 'https://jsonfeed.org/version/1',
+    items: [
+      {
+        guid: 't3_jsonfeed2',
+        url: 'https://www.reddit.com/r/test/comments/jsonfeed2/json_feed_detail/',
+        title: 'JSON feed detail post',
+        content_html: '<p>Detail post body.</p>',
+        date_published: '2026-09-10T00:00:00.000Z',
+        author: { name: '/u/alice' },
+      },
+      {
+        guid: 't1_comment1',
+        url: 'https://www.reddit.com/r/test/comments/jsonfeed2/json_feed_detail/comment1/',
+        title: 'comment title',
+        content_html: '<p>Nice comment from the mirror.</p>',
+        date_published: '2026-09-10T00:01:00.000Z',
+        author: { name: '/u/bob' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test/comments/jsonfeed2.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json(jsonFeed);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(detailPath, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-fallback'), 'reddit-rss-json-proxy');
+      assert.equal(payload[0].data.children[0].data.id, 'jsonfeed2');
+      assert.equal(payload[1].data.children[0].data.id, 'comment1');
+      assert.equal(payload[1].data.children[0].data.body.includes('Nice comment'), true);
+      assert.ok(calls.some(({ url }) => url.startsWith('https://feed2json.org/convert?url=')));
+    },
+  );
+});
 test('auto-enables public-instance fallback after old.reddit blocks the request', { concurrency: false }, async () => {
   const publicPayload = listing(post('public-after-block', { selftext: 'Public fallback body' }));
 
