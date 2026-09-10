@@ -1,4 +1,4 @@
-import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from './redditProxy';
+import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from './redditProxy.js';
 
 type VercelRequestLike = {
   method?: string;

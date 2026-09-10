@@ -857,6 +857,42 @@ test('returns a structured block response when old.reddit rejects the request', 
   );
 });
 
+test('uses public-instance fallback after old.reddit blocks the request', { concurrency: false }, async () => {
+  const publicPayload = listing(post('public-after-block', { selftext: 'Public fallback body' }));
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (isTedditJsonRequest(url)) {
+        return Response.json(publicPayload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {
+        ENABLE_PUBLIC_INSTANCE_FALLBACK: 'true',
+        REDDIT_PUBLIC_INSTANCE_BASES: TEDDIT_BASE,
+      });
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-instance'), TEDDIT_BASE);
+      assert.equal(payload.data.children[0].data.id, 'public-after-block');
+      assert.ok(calls.some(({ url }) => isTedditJsonRequest(url)), 'public instance fallback was not attempted');
+      assert.equal(
+        calls.some(({ url }) => url === 'https://www.reddit.com/r/test.rss?limit=50'),
+        false,
+        'RSS should not be requested after old.reddit blocks the IP',
+      );
+    },
+  );
+});
+
 test('maps subreddit discovery to the old.reddit search page', { concurrency: false }, async () => {
   const html = '<html><body><a href="/r/cats">cats</a><a href="/r/CatPics">cat pics</a></body></html>';
 

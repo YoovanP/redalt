@@ -1,4 +1,4 @@
-import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from '../../../api/redditProxy';
+import { handleRedditProxyRequest, REDDIT_PROXY_USER_AGENT, type RedditProxyEnv } from '../../../api/redditProxy.js';
 
 type PagesFunctionContext = {
   request: Request;

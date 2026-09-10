@@ -1,4 +1,4 @@
-import { getRedditProxyStatus, type RedditProxyEnv } from '../../api/redditProxy';
+import { getRedditProxyStatus, type RedditProxyEnv } from '../../api/redditProxy.js';
 
 type PagesFunctionContext = {
   request: Request;

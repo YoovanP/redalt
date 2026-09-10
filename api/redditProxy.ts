@@ -827,17 +827,32 @@ export async function handleRedditProxyRequest(
     // JSON endpoint is blocked and public Redlib instances are largely behind
     // anti-bot walls, so the bounded old.reddit/RSS scrape path runs first —
     // it is the one unauthenticated source that works in practice.
+    let redditOwnedFailureResponse: Response | null = null;
+
     if (legacyScrapeFallbackEnabled(env) && !signal.aborted) {
       const oldRedditHtmlResponse = await fetchViaOldRedditHtml(cleanPath, env, options, mediaPref, signal);
 
       if (oldRedditHtmlResponse) {
-        return rememberSuccessfulResponse(cacheKey, oldRedditHtmlResponse);
+        if (oldRedditHtmlResponse.ok) {
+          return rememberSuccessfulResponse(cacheKey, oldRedditHtmlResponse);
+        }
+
+        redditOwnedFailureResponse = oldRedditHtmlResponse;
       }
 
-      const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options, signal);
+      // A hard old.reddit block or rate limit applies to every Reddit-owned
+      // host. Do not try the RSS endpoint in that case; fall through to
+      // non-Reddit fallbacks before surfacing the block.
+      if (!redditOwnedFailureResponse && !signal.aborted) {
+        const redditRssResponse = await fetchViaRedditRss(cleanPath, env, options, signal);
 
-      if (redditRssResponse) {
-        return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+        if (redditRssResponse) {
+          if (redditRssResponse.ok) {
+            return rememberSuccessfulResponse(cacheKey, redditRssResponse);
+          }
+
+          redditOwnedFailureResponse = redditRssResponse;
+        }
       }
     }
 
@@ -923,6 +938,7 @@ export async function handleRedditProxyRequest(
     }
 
     return (
+      redditOwnedFailureResponse ??
       fallbackResponse ??
       new Response(
         JSON.stringify({
