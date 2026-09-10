@@ -20,16 +20,20 @@ React browser
        └─ api/redditProxy.ts
             ├─ official Reddit OAuth API (when credentials are configured)
             └─ auto-enabled bounded scrape path otherwise:
-                 old.reddit HTML → Reddit RSS → (opt-in) public instances/mirror
+                 old.reddit HTML → Reddit RSS → (auto) public instances → (opt-in) mirror
 ```
 
 - `src/lib/redditApi.ts` defaults to `/api/reddit`. Operators can configure
   additional owned bases with `VITE_REDDIT_API_BASES`, but the browser does not
   automatically hop through public Render/Pages deployments.
-- **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path**
-  (`legacyScrapeFallbackEnabled`: explicit `ENABLE_LEGACY_SCRAPE_FALLBACK`
-  true/false wins; `REDDIT_DISABLE_SCRAPE_FALLBACK=true` hard-disables; else
-  auto when `getOfficialOAuthMode(env) === 'none'`). Anonymous www.reddit.com
+- **Without OAuth, the gateway auto-enables the old.reddit/RSS scrape path and
+  the public-instance fallback** (`legacyScrapeFallbackEnabled`: explicit
+  `ENABLE_LEGACY_SCRAPE_FALLBACK` true/false wins;
+  `REDDIT_DISABLE_SCRAPE_FALLBACK=true` hard-disables; else auto when
+  `getOfficialOAuthMode(env) === 'none'`). Public instances are attempted only
+  after RSS fails and can be disabled with `ENABLE_PUBLIC_INSTANCE_FALLBACK=false`.
+  `redlib.ducks.party` is first in the static list, but shared instances are
+  intermittent. Anonymous www.reddit.com
   JSON is WAF-blocked and public Redlib instances are largely behind
   Anubis/Cloudflare walls, so both are last resorts and the anonymous JSON
   attempt is skipped entirely in scrape mode.
@@ -117,11 +121,11 @@ Vite development loads them only in `viteRedditProxy.ts`'s Node process.
 
 ### Explicit degraded fallback mode
 
-Public instances, dynamic instance discovery, and AllOrigins are disabled by
-default. They are compatibility paths with slower, less reliable media and
-HTML-dependent parsing.
+Public instances auto-enable when OAuth is unconfigured, but all public sources
+are compatibility paths with slower, less reliable media and HTML-dependent
+parsing. Dynamic instance discovery and AllOrigins remain disabled by default.
 
-- `ENABLE_PUBLIC_INSTANCE_FALLBACK=true` enables bounded public-instance use.
+- `ENABLE_PUBLIC_INSTANCE_FALLBACK=false` opts out of public-instance use.
 - `REDDIT_PUBLIC_INSTANCE_BASES` gives operator-provided instances priority.
 - `ENABLE_PUBLIC_INSTANCE_DISCOVERY=true` allows dynamic instance-list lookup.
 - `ENABLE_MIRROR_FALLBACK=true` enables AllOrigins.

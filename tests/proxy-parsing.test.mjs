@@ -269,8 +269,12 @@ test('reports safe OAuth configuration status without exposing credentials', asy
   assert.equal(unconfigured.service, 'redalt-reddit-gateway');
   assert.equal(unconfigured.status, 'degraded');
   assert.equal(unconfigured.oauth.configured, false);
+  assert.equal(unconfigured.fallbacks.legacyScrape, true);
+  assert.equal(unconfigured.fallbacks.publicInstances, true);
   assert.equal(configured.status, 'ready');
   assert.equal(configured.oauth.mode, 'refresh-token');
+  assert.equal(configured.fallbacks.legacyScrape, false);
+  assert.equal(configured.fallbacks.publicInstances, false);
   assert.equal(configured.fallbacks.mirror, true);
   assert.doesNotMatch(JSON.stringify(configured), /fixture-client-secret|fixture-refresh-token/);
 });
@@ -904,7 +908,7 @@ test('falls back to Reddit RSS when old.reddit HTML is blocked', { concurrency: 
   );
 });
 
-test('uses public-instance fallback after old.reddit blocks the request', { concurrency: false }, async () => {
+test('auto-enables public-instance fallback after old.reddit blocks the request', { concurrency: false }, async () => {
   const publicPayload = listing(post('public-after-block', { selftext: 'Public fallback body' }));
 
   await withFixtureFetch(
@@ -922,7 +926,6 @@ test('uses public-instance fallback after old.reddit blocks the request', { conc
     async (calls) => {
       const { handleRedditProxyRequest } = await importFreshProxy();
       const response = await handleRedditProxyRequest(TEST_PATH, {
-        ENABLE_PUBLIC_INSTANCE_FALLBACK: 'true',
         REDDIT_PUBLIC_INSTANCE_BASES: TEDDIT_BASE,
       });
       const payload = await response.json();

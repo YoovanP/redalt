@@ -107,6 +107,9 @@ const MEDIA_SOURCE_URL_FIELDS = ['url', 'u', 'mp4', 'gif', 'hlsUrl', 'dashUrl', 
 const PUBLIC_INSTANCE_BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 const STATIC_PUBLIC_INSTANCES = [
+  // Known-good Redlib HTML instance that was serving public listings without a
+  // browser challenge when this list was last reviewed (2026-09-10).
+  'https://redlib.ducks.party',
   'https://redlib.perennialte.ch',
   'https://redlib.r4fo.com',
   'https://red.artemislena.eu',
@@ -1113,7 +1116,20 @@ function getProxyUserAgent(env: RedditProxyEnv | undefined, options: RedditProxy
 }
 
 function publicInstanceFallbackEnabled(env: RedditProxyEnv | undefined): boolean {
-  return env?.ENABLE_PUBLIC_INSTANCE_FALLBACK?.toLowerCase() === 'true';
+  const explicit = env?.ENABLE_PUBLIC_INSTANCE_FALLBACK?.trim().toLowerCase();
+
+  if (explicit === 'true') {
+    return true;
+  }
+
+  if (explicit === 'false') {
+    return false;
+  }
+
+  // Without OAuth, Reddit's own HTML/JSON endpoints are the first degraded
+  // path, but a small vetted public-instance list can keep the reader usable
+  // when Reddit blocks the gateway IP. Operators can still opt out explicitly.
+  return getOfficialOAuthMode(env) === 'none';
 }
 
 function publicInstanceDiscoveryEnabled(env: RedditProxyEnv | undefined): boolean {
@@ -5275,7 +5291,13 @@ async function enrichCommentThreadMediaFromOldReddit(
     return payload;
   }
 
+  if (isRedditHtmlCoolingDown() || isRedditOwnedCoolingDown()) {
+    return payload;
+  }
+
   try {
+    await paceRedditOwnedRequest(`https://old.reddit.com${detailPath}`, signal);
+
     const response = await fetchWithTimeout(
       `https://old.reddit.com${detailPath}`,
       {
