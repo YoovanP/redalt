@@ -5594,7 +5594,7 @@ async function fetchViaOldRedditHtml(
     return null;
   }
 
-  if (isRedditHtmlCoolingDown()) {
+  if (isRedditHtmlCoolingDown() || isRedditOwnedCoolingDown()) {
     return null;
   }
 
