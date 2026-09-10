@@ -852,7 +852,9 @@ export async function handleRedditProxyRequest(
         return rememberSuccessfulResponse(cacheKey, jsonFeedProxyResponse);
       }
 
-      if (signal.aborted) {
+      // feed2json may have tripped its own cooldown; rss2json has a separate
+      // budget, so it is still worth the attempt.
+      if (signal.aborted || isMirrorThrottled('rss2json')) {
         return null;
       }
 
@@ -897,6 +899,13 @@ export async function handleRedditProxyRequest(
       if (mirrorsResponse) {
         return mirrorsResponse;
       }
+    }
+
+    // The Reddit-owned path is cooling down and no mirror could answer. Return
+    // the structured retryable block signal now instead of spending the public
+    // instance budget on a request that upstream has already refused.
+    if (legacyScrapeFallbackEnabled(env) && !redditOwnedFailureResponse && isRedditOwnedCoolingDown()) {
+      return redditOwnedBlockedResponse();
     }
 
     const publicInstanceResponse = await fetchViaPublicInstances(cleanPath, env, options, mediaPref, signal);
@@ -5922,12 +5931,56 @@ function mirrorSuccessResponse(payload: unknown, instance: string, method: strin
   });
 }
 
-// Mirrors fail transiently per feed, so one round of reduced-query candidates
-// is not always enough. A short second round runs only after every mirror and
-// every candidate has failed, and stays inside the listing/detail deadline.
+// Mirrors fail transiently per feed, so one round of candidates is not always
+// enough. A short second round runs only after every candidate has failed, and
+// stops immediately when the mirror itself says it is rate-limiting us: these
+// are free anonymous services, and hammering one that is already throttled
+// both wastes the request budget and extends the throttle for every user.
+type MirrorProbeOutcome = { response: Response } | { throttled: true } | null;
+
+const MIRROR_THROTTLE_COOLDOWN_MS = 60 * 1000;
+const mirrorThrottledUntil: Record<'feed2json' | 'rss2json', number> = {
+  feed2json: 0,
+  rss2json: 0,
+};
+
+function isMirrorThrottled(mirror: 'feed2json' | 'rss2json'): boolean {
+  return mirrorThrottledUntil[mirror] > Date.now();
+}
+
+function markMirrorThrottled(mirror: 'feed2json' | 'rss2json'): void {
+  mirrorThrottledUntil[mirror] = Date.now() + MIRROR_THROTTLE_COOLDOWN_MS;
+}
+
+async function readMirrorJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+function isMirrorRateLimitMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+
+  // rss2json's anonymous throttle reads "You are converting new feeds in a
+  // very short period of time"; feed2json answers a bare 429. Match on the
+  // stable words of the message rather than one exact sentence.
+  return (
+    normalized.includes('short period') ||
+    normalized.includes('too quickly') ||
+    normalized.includes('too often') ||
+    normalized.includes('too many') ||
+    normalized.includes('rate limit') ||
+    normalized.includes('rate-limit') ||
+    normalized.includes('throttl') ||
+    normalized.includes('capacity')
+  );
+}
+
 async function fetchMirrorWithRetry(
   candidates: string[],
-  probe: (redditRssPath: string) => Promise<Response | null>,
+  probe: (redditRssPath: string) => Promise<MirrorProbeOutcome>,
   signal?: AbortSignal,
 ): Promise<Response | null> {
   for (let round = 0; round < MIRROR_ATTEMPT_ROUNDS; round += 1) {
@@ -5936,10 +5989,14 @@ async function fetchMirrorWithRetry(
         return null;
       }
 
-      const response = await probe(candidate);
+      const outcome = await probe(candidate);
 
-      if (response) {
-        return response;
+      if (outcome && 'response' in outcome) {
+        return outcome.response;
+      }
+
+      if (outcome && 'throttled' in outcome) {
+        return null;
       }
     }
 
@@ -5962,11 +6019,11 @@ async function fetchViaRss2JsonMirror(
   const rssPath = buildRssPath(upstreamPath);
   const candidates = rssPath ? buildMirrorRssCandidates(rssPath, upstreamPath) : [];
 
-  if (candidates.length === 0) {
+  if (candidates.length === 0 || isMirrorThrottled('rss2json')) {
     return null;
   }
 
-  const probe = async (redditRssPath: string): Promise<Response | null> => {
+  const probe = async (redditRssPath: string): Promise<MirrorProbeOutcome> => {
     try {
       const response = await fetchWithTimeout(
         `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(`https://www.reddit.com${redditRssPath}`)}`,
@@ -5984,19 +6041,31 @@ async function fetchViaRss2JsonMirror(
         return null;
       }
 
-      const xml = rss2JsonToRssXml(await response.json());
+      const payload = await readMirrorJson(response);
+      const message = isNonEmptyRecord(payload) ? getStringField(payload, 'message') : '';
+
+      // Anonymous conversions are throttled with `status: "error"` and a
+      // "converting new feeds in a very short period" message, not a 429.
+      if (isMirrorRateLimitMessage(message)) {
+        markMirrorThrottled('rss2json');
+        return { throttled: true };
+      }
+
+      const xml = rss2JsonToRssXml(payload);
 
       if (!xml) {
         return null;
       }
 
-      const payload = normalizeMirrorPayload(xml, upstreamPath);
+      const normalizedPayload = normalizeMirrorPayload(xml, upstreamPath);
 
-      if (!payload) {
+      if (!normalizedPayload) {
         return null;
       }
 
-      return mirrorSuccessResponse(payload, 'https://api.rss2json.com', 'rss2json', upstreamPath);
+      return {
+        response: mirrorSuccessResponse(normalizedPayload, 'https://api.rss2json.com', 'rss2json', upstreamPath),
+      };
     } catch {
       return null;
     }
@@ -6014,11 +6083,11 @@ async function fetchViaJsonFeedRssProxy(
   const rssPath = buildRssPath(upstreamPath);
   const candidates = rssPath ? buildMirrorRssCandidates(rssPath, upstreamPath) : [];
 
-  if (candidates.length === 0) {
+  if (candidates.length === 0 || isMirrorThrottled('feed2json')) {
     return null;
   }
 
-  const probe = async (redditRssPath: string): Promise<Response | null> => {
+  const probe = async (redditRssPath: string): Promise<MirrorProbeOutcome> => {
     const redditRssUrl = `https://www.reddit.com${redditRssPath}`;
     const proxyUrl = `https://feed2json.org/convert?url=${encodeURIComponent(redditRssUrl)}`;
 
@@ -6035,13 +6104,28 @@ async function fetchViaJsonFeedRssProxy(
         signal,
       );
 
+      // feed2json throttles with a bare 429 (sometimes before the JSON body),
+      // so the status alone has to end the attempt rather than burn the rest
+      // of the candidate list against a service that is refusing us.
+      if (response.status === 429) {
+        markMirrorThrottled('feed2json');
+        return { throttled: true };
+      }
+
       if (!response.ok || !isJsonContentType(response.headers.get('content-type'))) {
         return null;
       }
 
-      const payload = await response.json();
+      const payload = await readMirrorJson(response);
 
       if (isNonEmptyRecord(payload) && typeof payload.err === 'string') {
+        const error = payload.err.toLowerCase();
+
+        if (isMirrorRateLimitMessage(error) || error.includes('rate')) {
+          markMirrorThrottled('feed2json');
+          return { throttled: true };
+        }
+
         return null;
       }
 
@@ -6057,7 +6141,9 @@ async function fetchViaJsonFeedRssProxy(
         return null;
       }
 
-      return mirrorSuccessResponse(normalizedPayload, 'https://feed2json.org', 'json-feed', upstreamPath);
+      return {
+        response: mirrorSuccessResponse(normalizedPayload, 'https://feed2json.org', 'json-feed', upstreamPath),
+      };
     } catch {
       return null;
     }

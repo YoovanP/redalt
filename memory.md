@@ -51,6 +51,22 @@ React browser
   `MIRROR_REQUEST_TIMEOUT_MS` (5s) and stay inside the listing/detail deadline.
   A mirror-served search is relevance-ordered because Reddit's RSS search
   ignores the reader's sort filter; mirror listings drop pagination cursors.
+- **Both mirrors throttle the shared anonymous budget, so the candidate walk
+  must stop the moment one says so** (`fetchMirrorWithRetry` returns as soon as
+  a probe reports `throttled`). `feed2json` answers a bare 429; `rss2json`
+  answers 200 with `status: "error"` and a message like "You are converting new
+  feeds in a very short period of time" — `isMirrorRateLimitMessage` matches the
+  stable words, not one exact sentence (an early version matched "too quickly"
+  and never fired, so the cooldown silently did nothing). The offending mirror
+  is parked for `MIRROR_THROTTLE_COOLDOWN_MS` (60s) and skipped entirely while
+  cooling down; the two mirrors keep independent budgets. Measured effect:
+  mirror calls for ten listing probes dropped from 92 to 21, and listing
+  success rose from 10% to 40% at the same moment.
+- **A cached deployment can hide a dead mirror path for a while**: Vercel's
+  function instances hold `SUCCESS_RESPONSE_CACHE_TTL_MS` (10 min) and the CDN
+  `s-maxage` holds longer, so a probe can keep returning 200 from cache after
+  the mirrors have started throttling. Confirm a deployment change with a
+  cache-busting `cb=` query parameter as well as the headers.
 
 - **Self-serve app registration is closed** (Responsible Builder Policy, late
   2025): the prefs/apps form is a zombie and new client ids/secrets are not
@@ -221,7 +237,12 @@ old-reddit-html` otherwise), payload renderability, and response time.
 When the live gateway answers from `reddit-rss` (Reddit is currently
 rate-limiting the deployment IP), run `node scripts/probe-mirror-fallbacks.mjs`
 locally to verify the mirror fallback still works — it forces the Reddit-owned
-path to fail and reports which mirror served each path. Then browser-check
+path to fail and reports which mirror served each path. To compare fallback
+strategies or measure mirror health over time, run
+`node scripts/bench-mirror-fallbacks.mjs` (old vs new strategy, success rate,
+latency, and mirror request count) and
+`node scripts/probe-mirror-capacity.mjs` (rss2json keyed call, feed2json
+repeat-throttle pattern). Then browser-check
 initial feed, retry UI, rate-limit countdown, load more, detail/comments,
 explicit media repair, search, and shorts mode. A live
 end-to-end browser pass exists at `scripts/live-check.mjs` (needs the dev

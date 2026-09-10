@@ -1061,6 +1061,114 @@ test('falls back to the rss2json mirror when feed2json cannot process a feed', {
   );
 });
 
+test('stops hammering feed2json once it answers 429 and still tries the other mirror', { concurrency: false }, async () => {
+  const rss2JsonPayload = {
+    status: 'ok',
+    items: [
+      {
+        title: 'after throttle',
+        pubDate: '2026-09-10 00:00:00',
+        link: 'https://www.reddit.com/r/test/comments/throttle1/after_throttle/',
+        guid: 't3_throttle1',
+        author: '/u/erin',
+        description: '<p>Second mirror after a throttle.</p>',
+        content: '<p>Second mirror after a throttle.</p>',
+        enclosure: { link: '', type: '' },
+      },
+    ],
+  };
+
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return new Response('too many requests', { status: 429 });
+      }
+
+      if (url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')) {
+        return Response.json(rss2JsonPayload);
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const response = await handleRedditProxyRequest(TEST_PATH, {});
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-redalt-instance'), 'https://api.rss2json.com');
+      assert.equal(payload.data.children[0].data.id, 'throttle1');
+      assert.equal(
+        calls.filter(({ url }) => url.startsWith('https://feed2json.org/convert?url=')).length,
+        1,
+        'feed2json was called more than once after answering 429',
+      );
+    },
+  );
+});
+
+test('honors the rss2json throttle message and skips both mirrors while cooling down', { concurrency: false }, async () => {
+  await withFixtureFetch(
+    (url) => {
+      if (url.startsWith('https://old.reddit.com/')) {
+        return new Response('<body class="theme-beta">blocked page</body>', { status: 403 });
+      }
+
+      if (url.startsWith('https://www.reddit.com/r/test.rss')) {
+        return new Response('rate limited', { status: 429 });
+      }
+
+      if (url.startsWith('https://feed2json.org/convert?url=')) {
+        return Response.json({ version: 'https://jsonfeed.org/version/1', err: 'Error processing feed' });
+      }
+
+      if (url.startsWith('https://api.rss2json.com/v1/api.json?rss_url=')) {
+        return Response.json({
+          status: 'error',
+          message: 'You are converting new feeds in a very short period of time',
+        });
+      }
+
+      return null;
+    },
+    async (calls) => {
+      const { handleRedditProxyRequest } = await importFreshProxy();
+      const first = await handleRedditProxyRequest(TEST_PATH, {});
+      const jsonFeedCalls = calls.filter(({ url }) => url.startsWith('https://feed2json.org/convert?url=')).length;
+      const rss2JsonCalls = calls.filter(({ url }) => url.startsWith('https://api.rss2json.com/v1/api.json')).length;
+
+      // The direct RSS attempt answered 429, and no mirror can help, so the
+      // structured rate-limit response is the correct outcome.
+      assert.equal(first.status, 429);
+      assert.ok(jsonFeedCalls > 0, 'feed2json was never tried');
+
+      // Second request: the Reddit circuit is open and rss2json is in its own
+      // cooldown, so the gateway answers the structured retryable block signal
+      // without touching rss2json again.
+      const second = await handleRedditProxyRequest(`${TEST_PATH}?cb=cooling`, {});
+
+      assert.equal(second.status, 403);
+      assert.ok(
+        calls.filter(({ url }) => url.startsWith('https://feed2json.org/convert?url=')).length > jsonFeedCalls,
+        'feed2json should still be attempted on the next request',
+      );
+      assert.equal(
+        calls.filter(({ url }) => url.startsWith('https://api.rss2json.com/v1/api.json')).length,
+        rss2JsonCalls,
+        'rss2json was retried while its throttle cooldown was active',
+      );
+    },
+  );
+});
+
 test('skips Reddit-owned requests and serves the mirror while the block circuit is cooling down', { concurrency: false }, async () => {
   const jsonFeed = {
     version: 'https://jsonfeed.org/version/1',
